@@ -1,15 +1,16 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-05-26 03:16:15
+Generated on: 2026-05-26 07:43:12
 
 ```text
 usaspending-mcp-server/
 ├── .claude/
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   └── FUNDING.yml
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json

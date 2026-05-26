@@ -25,42 +25,82 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('autocompleteTool', () => {
-  it('returns NAICS codes for a keyword search', async () => {
+  it('maps naics field names correctly', async () => {
     mockAutocompleteNaics.mockResolvedValueOnce({
       results: [
-        { code: '541512', description: 'Computer Systems Design Services' },
-        { code: '541511', description: 'Custom Computer Programming Services' },
+        { naics: '513210', naics_description: 'Software Publishers', year_retired: null },
+        {
+          naics: '541512',
+          naics_description: 'Computer Systems Design Services',
+          year_retired: null,
+        },
       ],
     });
 
     const ctx = createMockContext();
-    const input = autocompleteTool.input.parse({ type: 'naics', search_text: 'computer systems' });
+    const input = autocompleteTool.input.parse({ type: 'naics', search_text: 'software' });
     const result = await autocompleteTool.handler(input, ctx);
 
     expect(result.type).toBe('naics');
-    expect(result.search_text).toBe('computer systems');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].code).toBe('541512');
-    expect(result.results[0].name).toBe('Computer Systems Design Services');
+    expect(result.results[0].code).toBe('513210');
+    expect(result.results[0].name).toBe('Software Publishers');
     expect(result.total).toBe(2);
   });
 
-  it('returns agency names for awarding_agency type', async () => {
-    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+  it('maps psc field names correctly', async () => {
+    mockAutocompletePsc.mockResolvedValueOnce({
+      results: [{ product_or_service_code: 'AC60', psc_description: 'R&D-ELECTRONICS & COMM EQ' }],
+    });
+
+    const ctx = createMockContext();
+    const input = autocompleteTool.input.parse({ type: 'psc', search_text: 'electronics' });
+    const result = await autocompleteTool.handler(input, ctx);
+
+    expect(result.results[0].code).toBe('AC60');
+    expect(result.results[0].name).toBe('R&D-ELECTRONICS & COMM EQ');
+  });
+
+  it('maps cfda field names correctly', async () => {
+    mockAutocompleteCfda.mockResolvedValueOnce({
       results: [
-        { id: 517, agency_name: 'Department of Defense' },
-        { id: 1, agency_name: 'Department of Agriculture' },
+        {
+          program_number: '10.405',
+          program_title: 'Farm Labor Housing Loans and Grants',
+          popular_name: 'Labor Housing',
+        },
       ],
     });
 
     const ctx = createMockContext();
-    const input = autocompleteTool.input.parse({
-      type: 'awarding_agency',
-      search_text: 'department',
-    });
+    const input = autocompleteTool.input.parse({ type: 'cfda', search_text: 'housing' });
     const result = await autocompleteTool.handler(input, ctx);
 
-    expect(result.results[0].id).toBe('517');
+    expect(result.results[0].code).toBe('10.405');
+    expect(result.results[0].name).toBe('Farm Labor Housing Loans and Grants');
+  });
+
+  it('maps awarding_agency nested toptier_agency.name', async () => {
+    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+      results: [
+        {
+          id: 1173,
+          toptier_flag: true,
+          toptier_agency: {
+            toptier_code: '097',
+            abbreviation: 'DOD',
+            name: 'Department of Defense',
+          },
+          subtier_agency: { abbreviation: 'DOD', name: 'Department of Defense' },
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = autocompleteTool.input.parse({ type: 'awarding_agency', search_text: 'defense' });
+    const result = await autocompleteTool.handler(input, ctx);
+
+    expect(result.results[0].id).toBe('1173');
     expect(result.results[0].name).toBe('Department of Defense');
   });
 
@@ -102,10 +142,10 @@ describe('autocompleteTool', () => {
   it('formats output with codes and names', () => {
     const output = {
       type: 'naics',
-      search_text: 'computer',
+      search_text: 'software',
       results: [
+        { code: '513210', name: 'Software Publishers' },
         { code: '541512', name: 'Computer Systems Design Services' },
-        { code: '541511', name: 'Custom Computer Programming Services' },
       ],
       total: 2,
     };
@@ -113,9 +153,9 @@ describe('autocompleteTool', () => {
     const blocks = autocompleteTool.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('naics');
-    expect(text).toContain('computer');
-    expect(text).toContain('541512');
-    expect(text).toContain('Computer Systems Design Services');
+    expect(text).toContain('software');
+    expect(text).toContain('513210');
+    expect(text).toContain('Software Publishers');
     expect(text).toContain('**Total:** 2');
   });
 });

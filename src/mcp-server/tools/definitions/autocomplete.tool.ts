@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import type { RawAgencyAutocomplete } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 
 export const autocompleteTool = tool('usaspending_autocomplete', {
@@ -83,26 +84,34 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
     type ResultItem = { code?: string; name?: string; id?: string };
     let rawResults: ResultItem[] = [];
 
-    if (input.type === 'naics' || input.type === 'psc' || input.type === 'cfda') {
-      const methodMap = {
-        naics: svc.autocompleteNaics.bind(svc),
-        psc: svc.autocompletePsc.bind(svc),
-        cfda: svc.autocompleteCfda.bind(svc),
-      };
-      const resp = await methodMap[input.type](input.search_text, input.limit, ctx);
+    if (input.type === 'naics') {
+      const resp = await svc.autocompleteNaics(input.search_text, input.limit, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
-        ...(r.code ? { code: r.code } : {}),
-        ...(r.description ? { name: r.description } : {}),
+        ...(r.naics ? { code: r.naics } : {}),
+        ...(r.naics_description ? { name: r.naics_description } : {}),
+      }));
+    } else if (input.type === 'psc') {
+      const resp = await svc.autocompletePsc(input.search_text, input.limit, ctx);
+      rawResults = (resp.results ?? []).map((r) => ({
+        ...(r.product_or_service_code ? { code: r.product_or_service_code } : {}),
+        ...(r.psc_description ? { name: r.psc_description } : {}),
+      }));
+    } else if (input.type === 'cfda') {
+      const resp = await svc.autocompleteCfda(input.search_text, input.limit, ctx);
+      rawResults = (resp.results ?? []).map((r) => ({
+        ...(r.program_number ? { code: r.program_number } : {}),
+        ...(r.program_title
+          ? { name: r.program_title }
+          : r.popular_name
+            ? { name: r.popular_name }
+            : {}),
       }));
     } else if (input.type === 'awarding_agency') {
       const resp = await svc.autocompleteAwardingAgency(input.search_text, input.limit, ctx);
-      rawResults = (resp.results ?? []).map((r) => {
-        const agencyName = r.agency_name ?? r.label;
-        return {
-          ...(r.id != null ? { id: String(r.id) } : {}),
-          ...(agencyName ? { name: agencyName } : {}),
-        };
-      });
+      rawResults = (resp.results ?? []).map((r: RawAgencyAutocomplete) => ({
+        ...(r.id != null ? { id: String(r.id) } : {}),
+        ...(r.toptier_agency?.name ? { name: r.toptier_agency.name } : {}),
+      }));
     } else {
       // recipient
       const resp = await svc.autocompleteRecipient(input.search_text, input.limit, ctx);

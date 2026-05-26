@@ -98,6 +98,24 @@ describe('searchAwardsTool', () => {
     );
   });
 
+  it('defaults award_type_codes to contracts when not provided', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ keyword: 'artificial intelligence' });
+    await searchAwardsTool.handler(input, ctx);
+
+    expect(mockSearchAwards).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ award_type_codes: ['A', 'B', 'C', 'D'] }),
+      }),
+      ctx,
+    );
+  });
+
   it('formats output with award IDs and amounts', () => {
     const output = {
       results: [

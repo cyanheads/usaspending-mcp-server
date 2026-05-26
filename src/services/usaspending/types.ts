@@ -449,49 +449,57 @@ export interface RawDisasterGeoResult {
   shape_code?: string | null;
 }
 
-/** Raw federal account response */
+/** Raw federal account response from /federal_accounts/{code}/ */
 export interface RawFederalAccount {
-  account_id?: number | null;
-  account_number?: string | null;
   account_title?: string | null;
-  agency_id?: string | null;
   agency_identifier?: string | null;
-  budget_function?: string | null;
-  budget_subfunction?: string | null;
-  description?: string | null;
+  bureau_name?: string | null;
+  bureau_slug?: string | null;
+  children?: unknown[] | null;
   federal_account_code?: string | null;
+  fiscal_year?: number | null;
+  id?: number | null;
   main_account_code?: string | null;
-  managing_agency?: string | null;
-  managing_agency_acronym?: string | null;
-}
-
-/** Raw federal account fiscal year snapshot */
-export interface RawFederalAccountSnapshot {
-  budget_authority_amount?: number | null;
-  budget_authority_appropriation?: number | null;
+  parent_agency_name?: string | null;
+  parent_agency_toptier_code?: string | null;
   total_budgetary_resources?: number | null;
-  total_obligations?: number | null;
-  total_outlays?: number | null;
-  transaction_obligated_amount?: number | null;
-  unobligated_balance?: number | null;
+  total_gross_outlay_amount?: number | null;
+  total_obligated_amount?: number | null;
 }
 
-/** Raw autocomplete result for naics/psc/cfda */
-export interface RawCodeAutocomplete {
-  code?: string | null;
-  description?: string | null;
+/** Raw NAICS autocomplete result */
+export interface RawNaicsAutocomplete {
+  naics?: string | null;
+  naics_description?: string | null;
+  year_retired?: number | null;
+}
+
+/** Raw PSC autocomplete result */
+export interface RawPscAutocomplete {
+  product_or_service_code?: string | null;
+  psc_description?: string | null;
+}
+
+/** Raw CFDA autocomplete result */
+export interface RawCfdaAutocomplete {
+  popular_name?: string | null;
+  program_number?: string | null;
+  program_title?: string | null;
 }
 
 /** Raw agency autocomplete result */
 export interface RawAgencyAutocomplete {
-  agency_name?: string | null;
-  agencyType?: string | null;
   id?: number | string | null;
-  label?: string | null;
-  subtier_agency_name?: string | null;
-  subtier_flag?: boolean | null;
+  subtier_agency?: {
+    abbreviation?: string | null;
+    name?: string | null;
+  } | null;
+  toptier_agency?: {
+    toptier_code?: string | null;
+    abbreviation?: string | null;
+    name?: string | null;
+  } | null;
   toptier_flag?: boolean | null;
-  value?: string | null;
 }
 
 /** Raw recipient autocomplete result */

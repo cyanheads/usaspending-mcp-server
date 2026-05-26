@@ -22,10 +22,10 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         'Breakdown axis: overview (top-level totals and DEF code funding), agency (by awarding agency), cfda (by assistance program), recipient (by recipient), geography (by state/county)',
       ),
     spending_type: z
-      .enum(['spending', 'loans'])
-      .default('spending')
+      .enum(['award', 'total'])
+      .default('award')
       .describe(
-        'Data type: spending (obligations and outlays) or loans (face value of loan guarantees). Applies to agency and recipient dimensions only.',
+        'Data type: award (award-level obligations and outlays) or total (includes direct non-award spending). Applies to agency and recipient dimensions only.',
       ),
     filters: z
       .object({
@@ -55,7 +55,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
   output: z.object({
     dimension: z.string().describe('Breakdown dimension returned'),
-    spending_type: z.string().describe('Data type returned (spending or loans)'),
+    spending_type: z.string().describe('Data type returned (award or total)'),
     overview: z
       .object({
         total_budget_authority: z

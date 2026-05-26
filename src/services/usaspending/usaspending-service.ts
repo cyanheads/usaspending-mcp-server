@@ -22,14 +22,15 @@ import type {
   RawAwardDetail,
   RawAwardSummary,
   RawBudgetaryResources,
-  RawCodeAutocomplete,
+  RawCfdaAutocomplete,
   RawDisasterGeoResult,
   RawDisasterOverview,
   RawDisasterResult,
   RawFederalAccount,
-  RawFederalAccountSnapshot,
   RawGeographyResult,
+  RawNaicsAutocomplete,
   RawPageMetadata,
+  RawPscAutocomplete,
   RawRecipientAutocomplete,
   RawRecipientDetail,
   RawRecipientSearchResult,
@@ -307,12 +308,12 @@ export class USASpendingService {
   }
 
   async getDisasterByAgency(
-    spendingType: 'spending' | 'loans',
+    spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
   ): Promise<{ results: RawDisasterResult[]; page_metadata: RawPageMetadata }> {
     ctx.log.debug('getDisasterByAgency', { spendingType });
-    return this.post(`disaster/agency/${spendingType}/`, body, ctx);
+    return this.post('disaster/agency/spending/', { ...body, spending_type: spendingType }, ctx);
   }
 
   async getDisasterByCfda(
@@ -324,12 +325,12 @@ export class USASpendingService {
   }
 
   async getDisasterByRecipient(
-    spendingType: 'spending' | 'loans',
+    spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
   ): Promise<{ results: RawDisasterResult[]; page_metadata: RawPageMetadata }> {
     ctx.log.debug('getDisasterByRecipient', { spendingType });
-    return this.post(`disaster/recipient/${spendingType}/`, body, ctx);
+    return this.post('disaster/recipient/spending/', { ...body, spending_type: spendingType }, ctx);
   }
 
   async getDisasterByGeography(
@@ -347,24 +348,13 @@ export class USASpendingService {
     return this.get<RawFederalAccount>(`federal_accounts/${encodeURIComponent(accountCode)}/`, ctx);
   }
 
-  async getFederalAccountSnapshot(
-    accountCode: string,
-    ctx: Context,
-  ): Promise<RawFederalAccountSnapshot> {
-    ctx.log.debug('getFederalAccountSnapshot', { accountCode });
-    return this.get<RawFederalAccountSnapshot>(
-      `federal_accounts/${encodeURIComponent(accountCode)}/fiscal_year_snapshot/`,
-      ctx,
-    );
-  }
-
   // --- Autocomplete ---
 
   async autocompleteNaics(
     searchText: string,
     limit: number,
     ctx: Context,
-  ): Promise<{ results: RawCodeAutocomplete[] }> {
+  ): Promise<{ results: RawNaicsAutocomplete[] }> {
     ctx.log.debug('autocompleteNaics', { searchText });
     return this.post('autocomplete/naics/', { search_text: searchText, limit }, ctx);
   }
@@ -373,7 +363,7 @@ export class USASpendingService {
     searchText: string,
     limit: number,
     ctx: Context,
-  ): Promise<{ results: RawCodeAutocomplete[] }> {
+  ): Promise<{ results: RawPscAutocomplete[] }> {
     ctx.log.debug('autocompletePsc', { searchText });
     return this.post('autocomplete/psc/', { search_text: searchText, limit }, ctx);
   }
@@ -382,7 +372,7 @@ export class USASpendingService {
     searchText: string,
     limit: number,
     ctx: Context,
-  ): Promise<{ results: RawCodeAutocomplete[] }> {
+  ): Promise<{ results: RawCfdaAutocomplete[] }> {
     ctx.log.debug('autocompleteCfda', { searchText });
     return this.post('autocomplete/cfda/', { search_text: searchText, limit }, ctx);
   }

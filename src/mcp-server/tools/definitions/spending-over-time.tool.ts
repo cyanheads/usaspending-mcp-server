@@ -27,7 +27,9 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
         award_type_codes: z
           .array(z.string())
           .optional()
-          .describe('Award type code filters (A/B/C/D, 02–05, etc.)'),
+          .describe(
+            'Award type code filters (A/B/C/D, 02–05, etc.). All codes must belong to a single group. When omitted, defaults to contracts (A, B, C, D).',
+          ),
         agency_name: z.string().optional().describe('Awarding agency name filter'),
         recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
         naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
@@ -35,7 +37,9 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
         time_period_end: z.string().optional().describe('End of the time window (YYYY-MM-DD)'),
       })
       .optional()
-      .describe('Optional filters to scope the time-series aggregation'),
+      .describe(
+        'Filters to scope the time-series aggregation. Defaults to contract awards when omitted.',
+      ),
     subawards: z
       .boolean()
       .default(false)
@@ -104,7 +108,13 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     ctx.log.info('usaspending_spending_over_time', { group: input.group });
     const svc = getUSASpendingService();
 
-    const filters = buildFilters(input.filters);
+    const filtersInput = {
+      ...input.filters,
+      award_type_codes: input.filters?.award_type_codes?.length
+        ? input.filters.award_type_codes
+        : ['A', 'B', 'C', 'D'],
+    };
+    const filters = buildFilters(filtersInput);
     const data = await svc.spendingOverTime(
       { group: input.group, filters, subawards: input.subawards },
       ctx,

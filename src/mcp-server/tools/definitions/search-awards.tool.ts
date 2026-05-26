@@ -43,9 +43,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe('Full-text search across award descriptions, recipient names, and place names'),
     award_type_codes: z
       .array(z.string())
-      .optional()
+      .default(['A', 'B', 'C', 'D'])
       .describe(
-        'Filter by award type codes: A/B/C/D (contracts), 02/03/04/05 (grants), 06/10 (direct payments), 07/08 (loans), IDV_A–IDV_E (IDVs)',
+        'Filter by award type codes. All codes must belong to a single group: A/B/C/D (contracts), 02/03/04/05 (grants), 06/10 (direct payments), 07/08 (loans), IDV_A–IDV_E (IDVs). Defaults to contracts. Mixing groups across categories causes a 422 error.',
       ),
     agency_name: z
       .string()
@@ -190,7 +190,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
     const filters: Record<string, unknown> = {};
     if (input.keyword) filters.keywords = [input.keyword];
-    if (input.award_type_codes?.length) filters.award_type_codes = input.award_type_codes;
+    filters.award_type_codes = input.award_type_codes;
     if (input.agency_name) {
       filters.agencies = [{ type: 'awarding', tier: 'toptier', name: input.agency_name }];
     }

@@ -62,7 +62,7 @@ describe('disasterSpendingTool', () => {
         {
           id: '517',
           code: '097',
-          name: 'Department of Defense',
+          description: 'Department of Defense',
           obligation: 200_000_000_000,
           outlay: 180_000_000_000,
           award_count: 10_000,
@@ -74,7 +74,7 @@ describe('disasterSpendingTool', () => {
     const ctx = createMockContext();
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
-      spending_type: 'spending',
+      spending_type: 'award',
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
@@ -84,6 +84,20 @@ describe('disasterSpendingTool', () => {
     expect(result.results[0].name).toBe('Department of Defense');
     expect(result.results[0].obligation).toBe(200_000_000_000);
     expect(result.page_metadata?.has_next).toBe(false);
+  });
+
+  it('passes spending_type as body field for agency dimension', async () => {
+    mockGetDisasterByAgency.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({ dimension: 'agency', spending_type: 'total' });
+    await disasterSpendingTool.handler(input, ctx);
+
+    // Service is called with 'total' as the spendingType arg (forwarded as body field in service)
+    expect(mockGetDisasterByAgency).toHaveBeenCalledWith('total', expect.any(Object), ctx);
   });
 
   it('returns geography breakdown for dimension=geography', async () => {

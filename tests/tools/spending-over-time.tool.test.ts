@@ -59,6 +59,23 @@ describe('spendingOverTimeTool', () => {
     });
   });
 
+  it('defaults award_type_codes to contracts when filters is omitted', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [{ time_period: { fiscal_year: '2024' }, aggregated_amount: 100_000_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
+    await spendingOverTimeTool.handler(input, ctx);
+
+    expect(mockSpendingOverTime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ award_type_codes: ['A', 'B', 'C', 'D'] }),
+      }),
+      ctx,
+    );
+  });
+
   it('throws when service call fails', async () => {
     mockSpendingOverTime.mockRejectedValueOnce(new Error('Service error'));
 

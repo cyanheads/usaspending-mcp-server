@@ -1,21 +1,27 @@
 #!/usr/bin/env node
 /**
  * @fileoverview usaspending-mcp-server MCP server entry point.
+ * Provides access to USAspending.gov federal award, recipient, agency, and spending data.
  * @module index
  */
 
 import { createApp } from '@cyanheads/mcp-ts-core';
-import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
-import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
-import { echoAppUiResource } from './mcp-server/resources/definitions/echo-app-ui.app-resource.js';
-import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
-import { echoAppTool } from './mcp-server/tools/definitions/echo-app.app-tool.js';
+import { getServerConfig } from './config/server-config.js';
+import { allToolDefinitions } from './mcp-server/tools/definitions/index.js';
+import { initUSASpendingService } from './services/usaspending/usaspending-service.js';
 
 await createApp({
-  tools: [echoTool, echoAppTool],
-  resources: [echoResource, echoAppUiResource],
-  prompts: [echoPrompt],
-  // instructions: 'Server-level orientation forwarded to the model on every initialize.\n' +
-  //   '- Use shortcut `X` for the most common case\n' +
-  //   '- Tools require auth via the `inventory:read` scope',
+  tools: [...allToolDefinitions],
+  resources: [],
+  prompts: [],
+  instructions:
+    'USAspending.gov MCP server — federal award, recipient, agency, and spending data from the US Treasury DATA Act platform.\n' +
+    '- Start with usaspending_list_agencies or usaspending_autocomplete to discover agency codes and NAICS/PSC codes\n' +
+    '- Use usaspending_search_awards to find awards, then usaspending_get_award for full details\n' +
+    '- Chain recipient_id from usaspending_get_award into usaspending_get_recipient for entity profiles\n' +
+    '- Search window: 2007-10-01 onward. DoD contracts have a 90-day publication lag.',
+  setup(core) {
+    const serverConfig = getServerConfig();
+    initUSASpendingService(core.config, core.storage, serverConfig);
+  },
 });

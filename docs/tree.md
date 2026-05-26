@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-05-26 00:19:22
+Generated on: 2026-05-26 03:16:15
 
 ```text
 usaspending-mcp-server/
@@ -104,26 +104,48 @@ usaspending-mcp-server/
 │   └── tool-defs-analysis/
 │       └── SKILL.md
 ├── src/
+│   ├── config/
+│   │   └── server-config.ts
 │   ├── mcp-server/
-│   │   ├── prompts/
-│   │   │   └── definitions/
-│   │   │       └── echo.prompt.ts
-│   │   ├── resources/
-│   │   │   └── definitions/
-│   │   │       ├── echo-app-ui.app-resource.ts
-│   │   │       └── echo.resource.ts
 │   │   └── tools/
 │   │       └── definitions/
-│   │           ├── echo-app.app-tool.ts
-│   │           └── echo.tool.ts
+│   │           ├── autocomplete.tool.ts
+│   │           ├── disaster-spending.tool.ts
+│   │           ├── filters.ts
+│   │           ├── get-agency.tool.ts
+│   │           ├── get-award-subawards.tool.ts
+│   │           ├── get-award-transactions.tool.ts
+│   │           ├── get-award.tool.ts
+│   │           ├── get-federal-account.tool.ts
+│   │           ├── get-recipient.tool.ts
+│   │           ├── index.ts
+│   │           ├── list-agencies.tool.ts
+│   │           ├── search-awards.tool.ts
+│   │           ├── search-recipients.tool.ts
+│   │           ├── spending-by-category.tool.ts
+│   │           ├── spending-by-geography.tool.ts
+│   │           └── spending-over-time.tool.ts
+│   ├── services/
+│   │   └── usaspending/
+│   │       ├── types.ts
+│   │       └── usaspending-service.ts
 │   └── index.ts
 ├── tests/
-│   ├── prompts/
-│   │   └── echo.prompt.test.ts
-│   ├── resources/
-│   │   └── echo.resource.test.ts
 │   └── tools/
-│       └── echo.tool.test.ts
+│       ├── autocomplete.tool.test.ts
+│       ├── disaster-spending.tool.test.ts
+│       ├── get-agency.tool.test.ts
+│       ├── get-award-subawards.tool.test.ts
+│       ├── get-award-transactions.tool.test.ts
+│       ├── get-award.tool.test.ts
+│       ├── get-federal-account.tool.test.ts
+│       ├── get-recipient.tool.test.ts
+│       ├── list-agencies.tool.test.ts
+│       ├── search-awards.tool.test.ts
+│       ├── search-recipients.tool.test.ts
+│       ├── spending-by-category.tool.test.ts
+│       ├── spending-by-geography.tool.test.ts
+│       └── spending-over-time.tool.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

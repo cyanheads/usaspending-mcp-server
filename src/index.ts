@@ -14,6 +14,7 @@ await createApp({
   tools: [...allToolDefinitions],
   resources: [],
   prompts: [],
+  landing: { requireAuth: false },
   instructions:
     'USAspending.gov MCP server — federal award, recipient, agency, and spending data from the US Treasury DATA Act platform.\n' +
     '- Start with usaspending_list_agencies or usaspending_autocomplete to discover agency codes and NAICS/PSC codes\n' +

@@ -1,0 +1,25 @@
+{
+  "name": "@cyanheads/usaspending-mcp-server",
+  "version": "0.1.4",
+  "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP.",
+  "author": {
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
+  },
+  "homepage": "https://github.com/cyanheads/usaspending-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/usaspending-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "federal-spending", "usaspending", "government-contracts"],
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "@cyanheads/usaspending-mcp-server",
+    "shortDescription": "Federal award, recipient, agency, and spending data from USAspending.gov.",
+    "longDescription": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via the MCP protocol. Supports searching awards, getting award details, recipient profiles, agency data, and spending analytics.",
+    "developerName": "cyanheads",
+    "category": "data",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/cyanheads/usaspending-mcp-server#readme",
+    "defaultPrompt": []
+  }
+}

@@ -6,14 +6,20 @@
     "url": "https://github.com/cyanheads/usaspending-mcp-server",
     "source": "github"
   },
-  "version": "0.1.3",
+  "version": "0.1.4",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://usaspending.caseyjhand.com/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/usaspending-mcp-server",
       "runtimeHint": "node",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "packageArguments": [
         {
           "type": "positional",
@@ -42,7 +48,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/usaspending-mcp-server",
       "runtimeHint": "node",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "packageArguments": [
         {
           "type": "positional",

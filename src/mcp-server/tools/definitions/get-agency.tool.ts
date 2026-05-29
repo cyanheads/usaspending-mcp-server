@@ -87,7 +87,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     },
     {
       reason: 'missing_input',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Neither toptier_code nor agency_slug was provided.',
       recovery:
         'Provide either a toptier_code (e.g., 097) or agency_slug (e.g., department-of-defense).',

@@ -1,9 +1,15 @@
 {
   "manifest_version": "0.3",
   "name": "usaspending-mcp-server",
-  "version": "0.1.2",
-  "description": "",
-  "author": { "name": "" },
+  "version": "0.1.4",
+  "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov.",
+  "author": { "name": "cyanheads" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cyanheads/usaspending-mcp-server"
+  },
+  "homepage": "https://github.com/cyanheads/usaspending-mcp-server#readme",
+  "license": "Apache-2.0",
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",

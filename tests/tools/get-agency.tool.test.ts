@@ -96,7 +96,7 @@ describe('getAgencyTool', () => {
     const ctx = createMockContext({ errors: getAgencyTool.errors });
     const input = getAgencyTool.input.parse({});
     await expect(getAgencyTool.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'missing_input' },
     });
   });

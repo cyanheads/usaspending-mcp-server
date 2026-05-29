@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: usaspending-mcp-server
+abstract: "Model Context Protocol (MCP) server for USAspending.gov, providing access to federal award, recipient, agency, and spending analytics data."
+type: software
+authors:
+  - family-names: Hand
+    given-names: Casey
+    orcid: "https://orcid.org/0009-0009-3726-568X"
+repository-code: "https://github.com/cyanheads/usaspending-mcp-server"
+license: Apache-2.0
+keywords:
+  - mcp
+  - model-context-protocol
+  - usaspending
+  - federal-spending
+  - government-data
+  - data-act

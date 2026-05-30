@@ -141,6 +141,116 @@ describe('searchAwardsTool', () => {
     );
   });
 
+  it('passes recipient_name filter as recipient_search_text to service', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ recipient_name: 'Lockheed' });
+    await searchAwardsTool.handler(input, ctx);
+
+    expect(mockSearchAwards).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ recipient_search_text: ['Lockheed'] }),
+      }),
+      ctx,
+    );
+  });
+
+  it('passes naics_code filter as naics_codes.require to service', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ naics_code: '541512' });
+    await searchAwardsTool.handler(input, ctx);
+
+    expect(mockSearchAwards).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ naics_codes: { require: ['541512'] } }),
+      }),
+      ctx,
+    );
+  });
+
+  it('passes location_filter as place_of_performance_locations to service', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({
+      location_filter: { country: 'USA', state: 'WA' },
+    });
+    await searchAwardsTool.handler(input, ctx);
+
+    expect(mockSearchAwards).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({
+          place_of_performance_locations: [{ country: 'USA', state: 'WA' }],
+        }),
+      }),
+      ctx,
+    );
+  });
+
+  it('notice with no filters mentions no specific filter label', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ limit: 5 });
+    const result = await searchAwardsTool.handler(input, ctx);
+
+    expect(result.results).toHaveLength(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toContain('No awards matched');
+  });
+
+  it('formats output with no place_of_performance when fields are absent', () => {
+    const output = {
+      results: [
+        {
+          award_id: 'PIID-SPARSE',
+          generated_internal_id: 'CONT_AWD_SPARSE',
+          recipient_name: 'Sparse Corp',
+          award_amount: 100_000,
+          // no place_of_performance fields
+        },
+      ],
+      page_metadata: { has_next: false, page: 1, total: 1, limit: 10 },
+    };
+
+    const blocks = searchAwardsTool.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('PIID-SPARSE');
+    expect(text).toContain('100,000');
+    expect(text).not.toContain('Place of Performance:');
+  });
+
+  it('formats output with award type from Contract Award Type when Award Type absent', () => {
+    const output = {
+      results: [
+        {
+          generated_internal_id: 'IDV_AWD_001',
+          award_type: 'IDV - GWAC',
+        },
+      ],
+      page_metadata: { has_next: false, page: 1, total: 1, limit: 10 },
+    };
+
+    const blocks = searchAwardsTool.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('IDV - GWAC');
+  });
+
   it('formats output with award IDs and amounts', () => {
     const output = {
       results: [

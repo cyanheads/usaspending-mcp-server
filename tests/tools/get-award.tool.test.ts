@@ -122,6 +122,78 @@ describe('getAwardTool', () => {
     expect(result.piid).toBeUndefined();
   });
 
+  it('handles IDV award with parent_award data', async () => {
+    mockGetAward.mockResolvedValueOnce({
+      generated_unique_award_id: 'IDV_AWD_GWAC_001',
+      piid: 'GS35F0001P',
+      type: 'IDV_B',
+      type_description: 'IDV - GWAC',
+      category: 'idv',
+      total_obligation: 500_000_000,
+      parent_award: {
+        piid: 'PARENT-GWAC',
+        generated_unique_award_id: 'IDV_PARENT_001',
+        agency_name: 'GSA',
+        idv_type_description: 'GWAC',
+      },
+    });
+
+    const ctx = createMockContext();
+    const input = getAwardTool.input.parse({ award_id: 'IDV_AWD_GWAC_001' });
+    const result = await getAwardTool.handler(input, ctx);
+
+    expect(result.type).toBe('IDV_B');
+    expect(result.category).toBe('idv');
+    expect(result.parent_award?.award_id).toBe('PARENT-GWAC');
+    expect(result.parent_award?.generated_unique_award_id).toBe('IDV_PARENT_001');
+    expect(result.parent_award?.agency_name).toBe('GSA');
+    expect(result.parent_award?.type_description).toBe('GWAC');
+  });
+
+  it('handles loan award with face_value and cfda', async () => {
+    mockGetAward.mockResolvedValueOnce({
+      generated_unique_award_id: 'ASST_AWD_LOAN_001',
+      fain: 'LOAN001',
+      type: '07',
+      type_description: 'Direct Loan',
+      category: 'loans',
+      total_obligation: 250_000,
+      latest_transaction_assistance_data: {
+        cfda_number: '59.012',
+        cfda_title: 'Small Business Loans',
+      },
+    });
+
+    const ctx = createMockContext();
+    const input = getAwardTool.input.parse({ award_id: 'ASST_AWD_LOAN_001' });
+    const result = await getAwardTool.handler(input, ctx);
+
+    expect(result.fain).toBe('LOAN001');
+    expect(result.type).toBe('07');
+    expect(result.cfda?.number).toBe('59.012');
+    expect(result.cfda?.title).toBe('Small Business Loans');
+    expect(result.naics).toBeUndefined();
+  });
+
+  it('uses recipient_id field when recipient_hash is absent', async () => {
+    mockGetAward.mockResolvedValueOnce({
+      generated_unique_award_id: 'CONT_AWD_REC_ID',
+      piid: 'PIID-REC',
+      type: 'D',
+      recipient: {
+        recipient_name: 'Test Corp',
+        recipient_id: 'explicit-hash-P',
+        // no recipient_hash
+      },
+    });
+
+    const ctx = createMockContext();
+    const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_REC_ID' });
+    const result = await getAwardTool.handler(input, ctx);
+
+    expect(result.recipient?.recipient_id).toBe('explicit-hash-P');
+  });
+
   it('formats output with recipient, agency, and amount fields', () => {
     const output = {
       generated_unique_award_id: 'CONT_AWD_GEN',

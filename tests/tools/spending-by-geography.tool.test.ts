@@ -107,6 +107,25 @@ describe('spendingByGeographyTool', () => {
     expect(result.results[0].aggregated_amount).toBe(4_500_000_000);
   });
 
+  it('forwards subawards=true to service', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: '53', display_name: 'Washington', aggregated_amount: 1_000_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingByGeographyTool.input.parse({
+      scope: 'place_of_performance',
+      geo_layer: 'state',
+      subawards: true,
+    });
+    await spendingByGeographyTool.handler(input, ctx);
+
+    expect(mockSpendingByGeography).toHaveBeenCalledWith(
+      expect.objectContaining({ subawards: true }),
+      ctx,
+    );
+  });
+
   it('formats output with area names and spending amounts', () => {
     const output = {
       scope: 'place_of_performance',

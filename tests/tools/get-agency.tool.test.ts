@@ -124,6 +124,35 @@ describe('getAgencyTool', () => {
     });
   });
 
+  it('handles sub-agency service failure by falling back to empty list', async () => {
+    mockGetAgency.mockResolvedValueOnce(agencyFixture);
+    mockGetAgencySubAgencies.mockRejectedValueOnce(new Error('Sub-agencies service down'));
+
+    const ctx = createMockContext();
+    const input = getAgencyTool.input.parse({ toptier_code: '097' });
+    const result = await getAgencyTool.handler(input, ctx);
+
+    // Handler catches sub-agency failure and returns empty list rather than throwing
+    expect(result.name).toBe('Department of Defense');
+    expect(result.sub_agencies).toBeUndefined();
+  });
+
+  it('returns agency without sub-agencies when results are empty', async () => {
+    mockGetAgency.mockResolvedValueOnce({
+      ...agencyFixture,
+      def_codes: undefined,
+    });
+    mockGetAgencySubAgencies.mockResolvedValueOnce({ results: [] });
+
+    const ctx = createMockContext();
+    const input = getAgencyTool.input.parse({ toptier_code: '097' });
+    const result = await getAgencyTool.handler(input, ctx);
+
+    expect(result.name).toBe('Department of Defense');
+    expect(result.sub_agencies).toBeUndefined();
+    expect(result.def_codes).toBeUndefined();
+  });
+
   it('formats output with agency details and sub-agency breakdown', () => {
     const output = {
       name: 'Department of Defense',

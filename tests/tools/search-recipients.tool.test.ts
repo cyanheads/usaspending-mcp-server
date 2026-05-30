@@ -79,6 +79,27 @@ describe('searchRecipientsTool', () => {
     await expect(searchRecipientsTool.handler(input, ctx)).rejects.toThrow();
   });
 
+  it('handles sparse recipient — missing uei and location', async () => {
+    mockSearchRecipients.mockResolvedValueOnce([
+      {
+        id: 'sparse-id-P',
+        name: 'Minimal Corp',
+        recipient_level: 'P',
+        amount: 10_000,
+        // no uei, duns, or location
+      },
+    ]);
+
+    const ctx = createMockContext();
+    const input = searchRecipientsTool.input.parse({ keyword: 'minimal' });
+    const result = await searchRecipientsTool.handler(input, ctx);
+
+    expect(result.results[0].id).toBe('sparse-id-P');
+    expect(result.results[0].name).toBe('Minimal Corp');
+    expect(result.results[0].uei).toBeUndefined();
+    expect(result.results[0].location).toBeUndefined();
+  });
+
   it('formats output with recipient IDs and amounts', () => {
     const output = {
       results: [

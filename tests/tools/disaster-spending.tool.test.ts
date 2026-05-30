@@ -157,6 +157,103 @@ describe('disasterSpendingTool', () => {
     expect(text).toContain('CARES Act');
   });
 
+  it('returns CFDA breakdown for dimension=cfda', async () => {
+    mockGetDisasterByCfda.mockResolvedValueOnce({
+      results: [
+        {
+          id: '301',
+          code: '10.001',
+          name: 'Agriculture Research',
+          description: null,
+          obligation: 50_000_000,
+          outlay: 45_000_000,
+          award_count: 120,
+          face_value_of_loan: 0,
+        },
+      ],
+      page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({ dimension: 'cfda', spending_type: 'award' });
+    const result = await disasterSpendingTool.handler(input, ctx);
+
+    expect(result.dimension).toBe('cfda');
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].id).toBe('301');
+    expect(result.results[0].code).toBe('10.001');
+    expect(result.results[0].name).toBe('Agriculture Research');
+    expect(result.results[0].obligation).toBe(50_000_000);
+  });
+
+  it('returns recipient breakdown with face_value_of_loan field', async () => {
+    mockGetDisasterByRecipient.mockResolvedValueOnce({
+      results: [
+        {
+          id: '501',
+          code: null,
+          name: 'Small Biz Corp',
+          obligation: 0,
+          outlay: 0,
+          award_count: 1,
+          face_value_of_loan: 350_000,
+        },
+      ],
+      page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'recipient',
+      spending_type: 'award',
+    });
+    const result = await disasterSpendingTool.handler(input, ctx);
+
+    expect(result.dimension).toBe('recipient');
+    expect(result.results[0].face_value_of_loan).toBe(350_000);
+    expect(result.results[0].name).toBe('Small Biz Corp');
+  });
+
+  it('passes def_codes filter in filter body', async () => {
+    mockGetDisasterByAgency.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      filters: { def_codes: ['L', 'M'] },
+    });
+    await disasterSpendingTool.handler(input, ctx);
+
+    expect(mockGetDisasterByAgency).toHaveBeenCalledWith(
+      'award',
+      expect.objectContaining({ filter: { def_codes: ['L', 'M'] } }),
+      ctx,
+    );
+  });
+
+  it('uses county geo_layer filter for geography dimension', async () => {
+    mockGetDisasterByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: '53033', display_name: 'King County', aggregated_amount: 5_000_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'geography',
+      filters: { geo_layer: 'county' },
+    });
+    const result = await disasterSpendingTool.handler(input, ctx);
+
+    expect(result.results[0].shape_code).toBe('53033');
+    expect(result.results[0].display_name).toBe('King County');
+    expect(mockGetDisasterByGeography).toHaveBeenCalledWith(
+      expect.objectContaining({ geo_layer: 'county' }),
+      ctx,
+    );
+  });
+
   it('formats agency breakdown with all row fields', () => {
     const output = {
       dimension: 'agency',

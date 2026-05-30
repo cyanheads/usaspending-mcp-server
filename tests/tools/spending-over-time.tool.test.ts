@@ -105,6 +105,63 @@ describe('spendingOverTimeTool', () => {
     expect(result.results[0].time_period.fiscal_year).toBe('2023');
   });
 
+  it('normalizes calendar_month field to month in time_period', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [
+        {
+          time_period: { fiscal_year: '2024', calendar_year: '2024', calendar_month: '3' },
+          aggregated_amount: 50_000_000,
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'month' });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+
+    expect(result.group).toBe('month');
+    // calendar_month should be normalized to month field
+    expect(result.results[0].time_period.month).toBe('3');
+    expect(result.results[0].time_period.fiscal_year).toBe('2024');
+  });
+
+  it('maps all award breakdown fields (loans, direct_payments, other)', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [
+        {
+          time_period: { fiscal_year: '2023' },
+          aggregated_amount: 600_000_000,
+          Loan_Obligations: 200_000_000,
+          'Direct Payment_Obligations': 150_000_000,
+          Other_Obligations: 50_000_000,
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+
+    expect(result.results[0].loans).toBe(200_000_000);
+    expect(result.results[0].direct_payments).toBe(150_000_000);
+    expect(result.results[0].other).toBe(50_000_000);
+  });
+
+  it('subawards=true is forwarded to service', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [{ time_period: { fiscal_year: '2023' }, aggregated_amount: 100_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year', subawards: true });
+    await spendingOverTimeTool.handler(input, ctx);
+
+    expect(mockSpendingOverTime).toHaveBeenCalledWith(
+      expect.objectContaining({ subawards: true }),
+      ctx,
+    );
+  });
+
   it('formats output with time periods and amounts', () => {
     const output = {
       group: 'fiscal_year',

@@ -3,7 +3,7 @@
  * @module tests/tools/list-agencies.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { listAgenciesTool } from '@/mcp-server/tools/definitions/list-agencies.tool.js';
 
@@ -48,6 +48,8 @@ describe('listAgenciesTool', () => {
     expect(result.results[0].agency_slug).toBe('department-of-agriculture');
     expect(result.results[0].budget_authority_amount).toBe(150_000_000_000);
     expect(result.total).toBe(2);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.agency_count).toBe(2);
   });
 
   it('returns empty results when no agencies are found', async () => {

@@ -3,7 +3,7 @@
  * @module tests/tools/search-awards.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 
@@ -54,7 +54,31 @@ describe('searchAwardsTool', () => {
     expect(result.page_metadata.limit).toBe(10);
   });
 
-  it('returns a message hint when no results found', async () => {
+  it('populates enrichment with pagination context', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [
+        {
+          'Award ID': 'CONT_AWD_TEST',
+          generated_internal_id: 'CONT_AWD_TEST_ID',
+          'Recipient Name': 'Acme Corp',
+          'Award Amount': 1_000_000,
+        },
+      ],
+      page_metadata: { hasNext: true, page: 1, total: 42, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ keyword: 'IT services', limit: 10 });
+    await searchAwardsTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.total).toBe(42);
+    expect(enrichment.page).toBe(1);
+    expect(enrichment.has_next).toBe(true);
+    expect(enrichment.notice).toBeUndefined();
+  });
+
+  it('populates enrichment notice when no results found', async () => {
     mockSearchAwards.mockResolvedValueOnce({
       results: [],
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
@@ -65,11 +89,12 @@ describe('searchAwardsTool', () => {
     const result = await searchAwardsTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(0);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('nonexistent_xyz_123');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(enrichment.notice).toContain('nonexistent_xyz_123');
   });
 
-  it('throws no_match via ctx.fail on API error', async () => {
+  it('propagates service rejection when API call fails', async () => {
     mockSearchAwards.mockRejectedValueOnce(new Error('Service unavailable'));
 
     const ctx = createMockContext({ errors: searchAwardsTool.errors });

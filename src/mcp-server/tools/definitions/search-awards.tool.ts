@@ -155,22 +155,27 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         limit: z.number().describe('Results per page'),
       })
       .describe('Pagination metadata'),
-    message: z
+  }),
+
+  // Agent-facing search context: pagination totals and an optional recovery notice
+  // for empty pages. Populated via ctx.enrich() so it reaches both structuredContent
+  // and content[] without a format() entry.
+  enrichment: {
+    total: z
+      .number()
+      .optional()
+      .describe('Total number of matching awards across all pages (when available)'),
+    page: z.number().describe('Current page number returned'),
+    has_next: z.boolean().describe('Whether there are more pages of results'),
+    notice: z
       .string()
       .optional()
       .describe(
         'Recovery hint when results are empty — echoes applied filters and suggests how to broaden. Absent when results are present.',
       ),
-  }),
+  },
 
   errors: [
-    {
-      reason: 'no_match',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No awards matched the search criteria.',
-      recovery:
-        'Broaden filters, remove award type constraints, or widen the date range and try again.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -276,6 +281,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       limit: input.limit,
     };
 
+    ctx.enrich({
+      total: page_metadata.total,
+      page: page_metadata.page,
+      has_next: page_metadata.has_next,
+    });
+
     if (results.length === 0) {
       const filterParts: string[] = [];
       if (input.keyword) filterParts.push(`keyword="${input.keyword}"`);
@@ -283,11 +294,11 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       if (input.award_type_codes?.length) {
         filterParts.push(`types=${input.award_type_codes.join(',')}`);
       }
-      const message =
+      const notice =
         filterParts.length > 0
           ? `No awards matched: ${filterParts.join(', ')}. Try removing filters or broadening the date range.`
           : 'No awards matched your search. Try a different keyword or remove filters.';
-      return { results, page_metadata, message };
+      ctx.enrich.notice(notice);
     }
 
     return { results, page_metadata };
@@ -295,7 +306,6 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
   format: (result) => {
     const lines: string[] = ['## Federal Award Search Results'];
-    if (result.message) lines.push(`\n> ${result.message}`);
     lines.push(
       `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page}${result.page_metadata.total !== undefined ? ` of ~${result.page_metadata.total}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
     );

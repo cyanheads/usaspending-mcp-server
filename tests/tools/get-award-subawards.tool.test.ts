@@ -3,7 +3,7 @@
  * @module tests/tools/get-award-subawards.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getAwardSubawardsTool } from '@/mcp-server/tools/definitions/get-award-subawards.tool.js';
 
@@ -46,6 +46,10 @@ describe('getAwardSubawardsTool', () => {
     expect(result.results[0].recipient_name).toBe('SubCo LLC');
     expect(result.results[0].place_of_performance?.city).toBe('Portland');
     expect(result.page_metadata.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.prime_award_id).toBe('CONT_AWD_PRIME_001');
+    expect(enrichment.subaward_total).toBe(1);
+    expect(enrichment.has_next_page).toBe(false);
   });
 
   it('returns empty results for an award with no subawards', async () => {

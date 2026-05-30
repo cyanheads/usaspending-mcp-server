@@ -71,21 +71,25 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
         limit: z.number().describe('Items per page'),
       })
       .describe('Pagination metadata'),
-    message: z
+  }),
+
+  // Agent-facing context: pagination totals and a recovery notice for empty pages.
+  enrichment: {
+    total: z
+      .number()
+      .optional()
+      .describe('Total number of items in this category (when available)'),
+    page: z.number().describe('Current page returned'),
+    has_next: z.boolean().describe('Whether there are more pages'),
+    notice: z
       .string()
       .optional()
       .describe(
         'Recovery hint when results are empty — suggests how to broaden filters. Absent when results are present.',
       ),
-  }),
+  },
 
   errors: [
-    {
-      reason: 'no_data',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No spending data matched the filters for the selected category.',
-      recovery: 'Broaden filters, try a different category dimension, or widen the time period.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -125,13 +129,16 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       limit: input.limit,
     };
 
+    ctx.enrich({
+      total: page_metadata.total,
+      page: page_metadata.page,
+      has_next: page_metadata.has_next,
+    });
+
     if (results.length === 0) {
-      return {
-        category: input.category,
-        results,
-        page_metadata,
-        message: `No ${input.category} data matched the filters. Try broadening filters or selecting a different category.`,
-      };
+      ctx.enrich.notice(
+        `No ${input.category} data matched the filters. Try broadening filters or selecting a different category.`,
+      );
     }
 
     return { category: input.category, results, page_metadata };
@@ -142,7 +149,6 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       `## Spending by Category: ${result.category}`,
       `**Page:** ${result.page_metadata.page}${result.page_metadata.total !== undefined ? ` of ~${result.page_metadata.total}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
     ];
-    if (result.message) lines.push(`\n> ${result.message}`);
     if (result.results.length > 0) {
       lines.push('');
       lines.push('| Rank | ID | Name | Code | Obligation |');

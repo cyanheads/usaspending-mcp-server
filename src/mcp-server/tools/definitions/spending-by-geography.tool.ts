@@ -95,6 +95,17 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
     total: z.number().describe('Number of geographic areas returned'),
   }),
 
+  // Agent-facing context: scope, layer, and count for orientation.
+  enrichment: {
+    applied_scope: z
+      .string()
+      .describe('Location scope applied: place_of_performance or recipient_location'),
+    applied_geo_layer: z
+      .string()
+      .describe('Geographic granularity applied: state, county, or district'),
+    area_count: z.number().describe('Number of geographic areas returned'),
+  },
+
   errors: [
     {
       reason: 'no_data',
@@ -148,6 +159,11 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       });
     }
 
+    ctx.enrich({
+      applied_scope: input.scope,
+      applied_geo_layer: input.geo_layer,
+      area_count: results.length,
+    });
     return {
       scope: input.scope,
       geo_layer: input.geo_layer,

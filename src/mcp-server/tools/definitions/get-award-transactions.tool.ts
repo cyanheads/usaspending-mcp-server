@@ -69,6 +69,17 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .describe('Pagination metadata'),
   }),
 
+  // Agent-facing context: pagination state for the transaction listing.
+  enrichment: {
+    queried_award_id: z.string().describe('Award ID whose transactions were listed'),
+    transaction_total: z
+      .number()
+      .optional()
+      .describe('Total transaction count across all pages (when available)'),
+    current_page: z.number().describe('Current page returned'),
+    has_next_page: z.boolean().describe('Whether there are more pages of transactions'),
+  },
+
   errors: [
     {
       reason: 'award_not_found',
@@ -120,12 +131,20 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
     }));
 
     const pageMeta = data.page_metadata ?? {};
+    const hasNext = pageMeta.hasNext ?? false;
+    const currentPage = pageMeta.page ?? input.page;
+    ctx.enrich({
+      queried_award_id: input.award_id,
+      ...(typeof pageMeta.total === 'number' ? { transaction_total: pageMeta.total } : {}),
+      current_page: currentPage,
+      has_next_page: hasNext,
+    });
     return {
       award_id: input.award_id,
       results,
       page_metadata: {
-        has_next: pageMeta.hasNext ?? false,
-        page: pageMeta.page ?? input.page,
+        has_next: hasNext,
+        page: currentPage,
         ...(typeof pageMeta.total === 'number' ? { total: pageMeta.total } : {}),
         limit: input.limit,
       },

@@ -88,6 +88,12 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     total_periods: z.number().describe('Number of time periods returned'),
   }),
 
+  // Agent-facing context: time grouping and period count.
+  enrichment: {
+    time_group: z.string().describe('Time grouping applied: fiscal_year, quarter, or month'),
+    period_count: z.number().describe('Number of time periods returned'),
+  },
+
   errors: [
     {
       reason: 'no_data',
@@ -152,6 +158,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       });
     }
 
+    ctx.enrich({ time_group: input.group, period_count: results.length });
     return { group: input.group, results, total_periods: results.length };
   },
 

@@ -68,6 +68,17 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       .describe('Pagination metadata'),
   }),
 
+  // Agent-facing context: pagination state for the subaward listing.
+  enrichment: {
+    prime_award_id: z.string().describe('Prime award ID whose subawards were listed'),
+    subaward_total: z
+      .number()
+      .optional()
+      .describe('Total subaward count across all pages (when available)'),
+    current_page: z.number().describe('Current page returned'),
+    has_next_page: z.boolean().describe('Whether there are more pages of subawards'),
+  },
+
   errors: [
     {
       reason: 'award_not_found',
@@ -127,12 +138,20 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
     }));
 
     const pageMeta = data.page_metadata ?? {};
+    const hasNext = pageMeta.hasNext ?? false;
+    const currentPage = pageMeta.page ?? input.page;
+    ctx.enrich({
+      prime_award_id: input.award_id,
+      ...(typeof pageMeta.total === 'number' ? { subaward_total: pageMeta.total } : {}),
+      current_page: currentPage,
+      has_next_page: hasNext,
+    });
     return {
       award_id: input.award_id,
       results,
       page_metadata: {
-        has_next: pageMeta.hasNext ?? false,
-        page: pageMeta.page ?? input.page,
+        has_next: hasNext,
+        page: currentPage,
         ...(typeof pageMeta.total === 'number' ? { total: pageMeta.total } : {}),
         limit: input.limit,
       },

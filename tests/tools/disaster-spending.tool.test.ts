@@ -3,7 +3,7 @@
  * @module tests/tools/disaster-spending.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
 
@@ -54,6 +54,8 @@ describe('disasterSpendingTool', () => {
     expect(result.overview?.award_obligations).toBe(1_800_000_000_000);
     expect(result.overview?.funding_by_def_code).toHaveLength(2);
     expect(result.results).toHaveLength(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.applied_dimension).toBe('overview');
   });
 
   it('returns agency breakdown for dimension=agency', async () => {
@@ -84,6 +86,10 @@ describe('disasterSpendingTool', () => {
     expect(result.results[0].name).toBe('Department of Defense');
     expect(result.results[0].obligation).toBe(200_000_000_000);
     expect(result.page_metadata?.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.applied_dimension).toBe('agency');
+    expect(enrichment.result_total).toBe(1);
+    expect(enrichment.has_next_page).toBe(false);
   });
 
   it('passes spending_type as body field for agency dimension', async () => {

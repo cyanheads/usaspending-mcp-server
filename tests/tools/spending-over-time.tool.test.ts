@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 
@@ -43,6 +43,9 @@ describe('spendingOverTimeTool', () => {
     expect(result.results[0].aggregated_amount).toBe(500_000_000_000);
     expect(result.results[0].contracts).toBe(300_000_000_000);
     expect(result.total_periods).toBe(2);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.time_group).toBe('fiscal_year');
+    expect(enrichment.period_count).toBe(2);
   });
 
   it('throws no_data when API returns empty results', async () => {

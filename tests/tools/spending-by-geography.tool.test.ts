@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
 
@@ -51,6 +51,10 @@ describe('spendingByGeographyTool', () => {
     expect(result.results[0].display_name).toBe('Washington');
     expect(result.results[0].aggregated_amount).toBe(4_500_000_000);
     expect(result.total).toBe(2);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.applied_scope).toBe('place_of_performance');
+    expect(enrichment.applied_geo_layer).toBe('state');
+    expect(enrichment.area_count).toBe(2);
   });
 
   it('throws no_data when API returns empty results', async () => {

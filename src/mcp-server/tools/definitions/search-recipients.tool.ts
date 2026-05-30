@@ -67,21 +67,21 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       )
       .describe('Matching recipients'),
     total: z.number().describe('Number of results returned'),
-    message: z
+  }),
+
+  // Agent-facing search context: result count and an optional recovery notice
+  // for empty searches. Populated via ctx.enrich() so it reaches both surfaces.
+  enrichment: {
+    recipient_count: z.number().describe('Number of matching recipients returned'),
+    notice: z
       .string()
       .optional()
       .describe(
         'Recovery hint when results are empty — suggests how to broaden the search. Absent when results are present.',
       ),
-  }),
+  },
 
   errors: [
-    {
-      reason: 'no_match',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No recipients matched the keyword.',
-      recovery: 'Try a partial name, different spelling, or search by UEI instead of name.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -122,12 +122,12 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
         : {}),
     }));
 
+    ctx.enrich({ recipient_count: results.length });
+
     if (results.length === 0) {
-      return {
-        results,
-        total: 0,
-        message: `No recipients matched "${input.keyword}". Try a partial name, different spelling, or use a UEI number directly.`,
-      };
+      ctx.enrich.notice(
+        `No recipients matched "${input.keyword}". Try a partial name, different spelling, or use a UEI number directly.`,
+      );
     }
 
     return { results, total: results.length };
@@ -135,7 +135,6 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
 
   format: (result) => {
     const lines: string[] = [`## Recipient Search Results (${result.total})`];
-    if (result.message) lines.push(`\n> ${result.message}`);
     for (const r of result.results) {
       lines.push('');
       lines.push(`### ${r.name ?? r.id ?? 'Unknown'}`);

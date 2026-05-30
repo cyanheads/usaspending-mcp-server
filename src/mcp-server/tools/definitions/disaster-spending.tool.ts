@@ -53,6 +53,17 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
+  // Agent-facing context: the dimension applied and pagination for non-overview dimensions.
+  enrichment: {
+    applied_dimension: z.string().describe('Breakdown dimension applied'),
+    result_total: z
+      .number()
+      .optional()
+      .describe('Total items for paginated dimensions (when available)'),
+    current_page: z.number().optional().describe('Current page (non-overview dimensions)'),
+    has_next_page: z.boolean().optional().describe('Whether there are more pages'),
+  },
+
   output: z.object({
     dimension: z.string().describe('Breakdown dimension returned'),
     spending_type: z.string().describe('Data type returned (award or total)'),
@@ -164,6 +175,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         ...(f.public_law ? { public_law: f.public_law } : {}),
       }));
       const spending = data.spending ?? {};
+      ctx.enrich({ applied_dimension: 'overview' });
       return {
         dimension: 'overview',
         spending_type: 'spending',
@@ -224,6 +236,12 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         population: typeof r.population === 'number' ? r.population : undefined,
         per_capita: typeof r.per_capita === 'number' ? r.per_capita : undefined,
       }));
+      ctx.enrich({
+        applied_dimension: 'geography',
+        result_total: geoResults.length,
+        current_page: 1,
+        has_next_page: false,
+      });
       return {
         dimension: 'geography',
         spending_type: input.spending_type,
@@ -250,13 +268,21 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }));
 
     const pageMeta = rawResults.page_metadata ?? {};
+    const hasNext = pageMeta.hasNext ?? false;
+    const currentPage = pageMeta.page ?? input.page;
+    ctx.enrich({
+      applied_dimension: input.dimension,
+      ...(typeof pageMeta.total === 'number' ? { result_total: pageMeta.total } : {}),
+      current_page: currentPage,
+      has_next_page: hasNext,
+    });
     return {
       dimension: input.dimension,
       spending_type: input.spending_type,
       results,
       page_metadata: {
-        has_next: pageMeta.hasNext ?? false,
-        page: pageMeta.page ?? input.page,
+        has_next: hasNext,
+        page: currentPage,
         ...(typeof pageMeta.total === 'number' ? { total: pageMeta.total } : {}),
         limit: input.limit,
       },

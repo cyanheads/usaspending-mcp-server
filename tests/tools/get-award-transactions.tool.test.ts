@@ -3,7 +3,7 @@
  * @module tests/tools/get-award-transactions.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getAwardTransactionsTool } from '@/mcp-server/tools/definitions/get-award-transactions.tool.js';
 
@@ -44,6 +44,10 @@ describe('getAwardTransactionsTool', () => {
     expect(result.results[0].modification_number).toBe('M0001');
     expect(result.results[0].federal_action_obligation).toBe(250_000);
     expect(result.page_metadata.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.queried_award_id).toBe('CONT_AWD_TEST');
+    expect(enrichment.transaction_total).toBe(1);
+    expect(enrichment.has_next_page).toBe(false);
   });
 
   it('returns empty results for an award with no transactions', async () => {

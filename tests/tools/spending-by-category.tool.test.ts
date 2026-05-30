@@ -3,7 +3,7 @@
  * @module tests/tools/spending-by-category.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
 
@@ -40,7 +40,7 @@ describe('spendingByCategoryTool', () => {
     expect(result.page_metadata.has_next).toBe(false);
   });
 
-  it('returns a message hint when no results found', async () => {
+  it('populates enrichment notice when no results found', async () => {
     mockSpendingByCategory.mockResolvedValueOnce({
       results: [],
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
@@ -51,8 +51,27 @@ describe('spendingByCategoryTool', () => {
     const result = await spendingByCategoryTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(0);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('psc');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(enrichment.notice).toContain('psc');
+  });
+
+  it('populates enrichment with pagination context', async () => {
+    mockSpendingByCategory.mockResolvedValueOnce({
+      results: [
+        { id: '541512', code: '541512', name: 'Computer Systems Design', amount: 2_000_000_000 },
+      ],
+      page_metadata: { hasNext: true, page: 1, total: 50, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = spendingByCategoryTool.input.parse({ category: 'naics', limit: 10 });
+    await spendingByCategoryTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.total).toBe(50);
+    expect(enrichment.page).toBe(1);
+    expect(enrichment.has_next).toBe(true);
   });
 
   it('throws when service call fails', async () => {

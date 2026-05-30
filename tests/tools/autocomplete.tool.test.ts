@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { autocompleteTool } from '@/mcp-server/tools/definitions/autocomplete.tool.js';
 
@@ -46,6 +46,10 @@ describe('autocompleteTool', () => {
     expect(result.results[0].code).toBe('513210');
     expect(result.results[0].name).toBe('Software Publishers');
     expect(result.total).toBe(2);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.lookup_type).toBe('naics');
+    expect(enrichment.query).toBe('software');
+    expect(enrichment.result_count).toBe(2);
   });
 
   it('maps psc field names correctly', async () => {

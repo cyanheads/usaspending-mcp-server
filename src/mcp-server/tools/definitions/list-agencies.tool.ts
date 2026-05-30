@@ -60,6 +60,11 @@ export const listAgenciesTool = tool('usaspending_list_agencies', {
     total: z.number().describe('Total number of agencies returned'),
   }),
 
+  // Agent-facing list context: total agency count for orientation.
+  enrichment: {
+    agency_count: z.number().describe('Total number of top-tier federal agencies returned'),
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -85,6 +90,7 @@ export const listAgenciesTool = tool('usaspending_list_agencies', {
       ...(typeof a.obligated_amount === 'number' ? { obligated_amount: a.obligated_amount } : {}),
       ...(typeof a.outlay_amount === 'number' ? { outlay_amount: a.outlay_amount } : {}),
     }));
+    ctx.enrich({ agency_count: results.length });
     return { results, total: results.length };
   },
 

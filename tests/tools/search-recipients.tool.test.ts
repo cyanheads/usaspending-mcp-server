@@ -3,7 +3,7 @@
  * @module tests/tools/search-recipients.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { searchRecipientsTool } from '@/mcp-server/tools/definitions/search-recipients.tool.js';
 
@@ -39,10 +39,12 @@ describe('searchRecipientsTool', () => {
     expect(result.results[0].amount).toBe(5_000_000);
     expect(result.results[0].location?.city_name).toBe('Seattle');
     expect(result.total).toBe(1);
-    expect(result.message).toBeUndefined();
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.recipient_count).toBe(1);
+    expect(enrichment.notice).toBeUndefined();
   });
 
-  it('returns a message hint when no results found', async () => {
+  it('populates enrichment notice when no results found', async () => {
     mockSearchRecipients.mockResolvedValueOnce([]);
 
     const ctx = createMockContext();
@@ -51,8 +53,9 @@ describe('searchRecipientsTool', () => {
 
     expect(result.results).toHaveLength(0);
     expect(result.total).toBe(0);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('NoSuchCompanyXYZ');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(enrichment.notice).toContain('NoSuchCompanyXYZ');
   });
 
   it('passes award_type filter through to service', async () => {

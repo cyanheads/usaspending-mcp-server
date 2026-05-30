@@ -61,6 +61,13 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
     total: z.number().describe('Number of results returned'),
   }),
 
+  // Agent-facing context: echoed query parameters and result count.
+  enrichment: {
+    lookup_type: z.string().describe('Lookup table that was searched'),
+    query: z.string().describe('Search text sent to the autocomplete API'),
+    result_count: z.number().describe('Number of matching results returned'),
+  },
+
   errors: [
     {
       reason: 'no_match',
@@ -129,6 +136,11 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       });
     }
 
+    ctx.enrich({
+      lookup_type: input.type,
+      query: input.search_text,
+      result_count: rawResults.length,
+    });
     return {
       type: input.type,
       search_text: input.search_text,

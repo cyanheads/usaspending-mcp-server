@@ -158,7 +158,7 @@ Fetch aggregated spending grouped by time period.
 Fetch disaster and emergency supplemental spending consolidated from nine+ API endpoints.
 
 - `dimension` enum selects the breakdown axis: `overview`, `agency`, `cfda`, `recipient`, or `geography`
-- `spending_type` selects between grant/contract obligations (`spending`) and loan face values (`loans`)
+- `spending_type` selects between award-level obligations (`award`) and total spending including direct non-award spending (`total`)
 - Filter by `def_codes` to isolate a specific emergency appropriation (e.g., COVID-19 = `L`, `M`, `N`, `O`, `P`, `U`)
 - Returns obligation, outlay, and award count per row
 

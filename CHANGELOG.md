@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-06-04
+
+Fix POST timeout (fetchWithTimeout for all POST calls), fix def_codes validation for disaster_spending non-overview dimensions, convert empty-result throws to structured responses with ctx.enrich.notice()
+
 ## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-06-02
 
 @cyanheads/mcp-ts-core ^0.9.21: per-request log context fix, secret-stripping in error messages, withRetry fail-fast; re-synced skills (8 updated + api-mirror + orchestrations); new devcheck/release/skill-version scripts

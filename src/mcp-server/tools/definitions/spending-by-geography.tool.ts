@@ -95,7 +95,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
     total: z.number().describe('Number of geographic areas returned'),
   }),
 
-  // Agent-facing context: scope, layer, and count for orientation.
+  // Agent-facing context: scope, layer, count, and an optional recovery notice for empty results.
   enrichment: {
     applied_scope: z
       .string()
@@ -104,15 +104,15 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       .string()
       .describe('Geographic granularity applied: state, county, or district'),
     area_count: z.number().describe('Number of geographic areas returned'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery hint when results are empty — suggests how to broaden filters. Absent when results are present.',
+      ),
   },
 
   errors: [
-    {
-      reason: 'no_data',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No spending data matched the filters for the selected geography.',
-      recovery: 'Broaden filters, try a different scope or geo_layer, or widen the time period.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -151,19 +151,19 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       ...(typeof r.award_count === 'number' ? { award_count: r.award_count } : {}),
     }));
 
-    if (results.length === 0) {
-      throw ctx.fail('no_data', 'No spending data matched the filters for the selected geography', {
-        recovery: {
-          hint: 'Try broader filters, a different scope (place_of_performance vs recipient_location), or remove the time period constraint.',
-        },
-      });
-    }
-
     ctx.enrich({
       applied_scope: input.scope,
       applied_geo_layer: input.geo_layer,
       area_count: results.length,
     });
+
+    if (results.length === 0) {
+      ctx.enrich.notice(
+        'No spending data matched the filters for the selected geography. ' +
+          'Try broader filters, a different scope (place_of_performance vs recipient_location), or remove the time period constraint.',
+      );
+    }
+
     return {
       scope: input.scope,
       geo_layer: input.geo_layer,

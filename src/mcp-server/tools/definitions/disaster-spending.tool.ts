@@ -5,7 +5,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { RawDisasterResult, RawPageMetadata } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 
@@ -33,7 +33,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           .array(z.string())
           .optional()
           .describe(
-            'DEF codes to filter by (e.g., ["L", "M", "N", "O", "P"] for COVID-19). Omit to include all emergency funding.',
+            'DEF codes to filter by (e.g., ["L", "M", "N", "O", "P"] for COVID-19). Required for all dimensions except overview — the upstream API returns HTTP 422 when omitted for agency, cfda, recipient, and geography breakdowns. DEF codes appear in usaspending_get_agency def_codes fields.',
           ),
         award_type_codes: z.array(z.string()).optional().describe('Award type code filters'),
         geo_layer: z
@@ -42,7 +42,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           .describe('Geographic layer for geography dimension (state or county)'),
       })
       .optional()
-      .describe('Optional filters — def_codes narrows to a specific emergency appropriation'),
+      .describe(
+        'Filters — def_codes is required for all non-overview dimensions (agency, cfda, recipient, geography)',
+      ),
     limit: z
       .number()
       .int()
@@ -157,6 +159,17 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       dimension: input.dimension,
       spending_type: input.spending_type,
     });
+
+    if (input.dimension !== 'overview' && !input.filters?.def_codes?.length) {
+      throw validationError(
+        `def_codes is required when dimension is "${input.dimension}". ` +
+          'The USAspending API returns HTTP 422 when def_codes is omitted for non-overview dimensions. ' +
+          'Provide at least one DEF code (e.g., ["L", "M", "N", "O", "P"] for COVID-19). ' +
+          'DEF codes are listed in the usaspending_get_agency def_codes fields.',
+        { dimension: input.dimension, missing_field: 'filters.def_codes' },
+      );
+    }
+
     const svc = getUSASpendingService();
 
     const baseBody: Record<string, unknown> = {};

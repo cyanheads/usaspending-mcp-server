@@ -88,19 +88,19 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     total_periods: z.number().describe('Number of time periods returned'),
   }),
 
-  // Agent-facing context: time grouping and period count.
+  // Agent-facing context: time grouping, period count, and optional recovery notice for empty results.
   enrichment: {
     time_group: z.string().describe('Time grouping applied: fiscal_year, quarter, or month'),
     period_count: z.number().describe('Number of time periods returned'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery hint when no periods are returned — suggests broadening filters. Absent when results are present.',
+      ),
   },
 
   errors: [
-    {
-      reason: 'no_data',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No spending data found for the selected time grouping and filters.',
-      recovery: 'Broaden the time period filter or remove other filters to get more data points.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -150,15 +150,14 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       };
     });
 
+    ctx.enrich({ time_group: input.group, period_count: results.length });
+
     if (results.length === 0) {
-      throw ctx.fail('no_data', 'No spending data found for the selected filters', {
-        recovery: {
-          hint: 'Try a broader time period or remove keyword/agency filters to get more data points.',
-        },
-      });
+      ctx.enrich.notice(
+        'No spending data periods returned. Try a broader time period or remove keyword/agency filters to get more data points.',
+      );
     }
 
-    ctx.enrich({ time_group: input.group, period_count: results.length });
     return { group: input.group, results, total_periods: results.length };
   },
 

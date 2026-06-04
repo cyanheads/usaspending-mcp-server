@@ -464,6 +464,7 @@ describe('disasterSpendingTool — cfda and recipient dimensions', () => {
     const input = disasterSpendingTool.input.parse({
       dimension: 'cfda',
       spending_type: 'award',
+      filters: { def_codes: ['L', 'M'] },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
     expect(result.dimension).toBe('cfda');
@@ -475,6 +476,7 @@ describe('disasterSpendingTool — cfda and recipient dimensions', () => {
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'total',
+      filters: { def_codes: ['N'] },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
     expect(result.dimension).toBe('recipient');
@@ -627,7 +629,7 @@ describe('disasterSpendingTool — def_codes filter propagation', () => {
     const ctx = createMockContext();
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
-      filters: { geo_layer: 'county' },
+      filters: { def_codes: ['L'], geo_layer: 'county' },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
     expect(result.dimension).toBe('geography');

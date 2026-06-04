@@ -3,7 +3,6 @@
  * @module tests/tools/spending-by-geography.tool.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
@@ -57,19 +56,24 @@ describe('spendingByGeographyTool', () => {
     expect(enrichment.area_count).toBe(2);
   });
 
-  it('throws no_data when API returns empty results', async () => {
+  it('returns structured empty response with notice when API returns no results', async () => {
     mockSpendingByGeography.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
+    const ctx = createMockContext();
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',
       filters: { keywords: ['nonexistent_xyz'] },
     });
-    await expect(spendingByGeographyTool.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_data' },
-    });
+    const result = await spendingByGeographyTool.handler(input, ctx);
+
+    expect(result.results).toHaveLength(0);
+    expect(result.total).toBe(0);
+    expect(result.scope).toBe('place_of_performance');
+    expect(result.geo_layer).toBe('state');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.area_count).toBe(0);
+    expect(enrichment.notice).toContain('No spending data matched');
   });
 
   it('throws when service call fails', async () => {

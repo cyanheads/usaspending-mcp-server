@@ -77,6 +77,7 @@ describe('disasterSpendingTool', () => {
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
       spending_type: 'award',
+      filters: { def_codes: ['L', 'M'] },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
@@ -99,7 +100,11 @@ describe('disasterSpendingTool', () => {
     });
 
     const ctx = createMockContext();
-    const input = disasterSpendingTool.input.parse({ dimension: 'agency', spending_type: 'total' });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      spending_type: 'total',
+      filters: { def_codes: ['L'] },
+    });
     await disasterSpendingTool.handler(input, ctx);
 
     // Service is called with 'total' as the spendingType arg (forwarded as body field in service)
@@ -115,7 +120,10 @@ describe('disasterSpendingTool', () => {
     });
 
     const ctx = createMockContext();
-    const input = disasterSpendingTool.input.parse({ dimension: 'geography' });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'geography',
+      filters: { def_codes: ['L', 'M'] },
+    });
     const result = await disasterSpendingTool.handler(input, ctx);
 
     expect(result.dimension).toBe('geography');
@@ -124,11 +132,22 @@ describe('disasterSpendingTool', () => {
     expect(result.results[0].display_name).toBe('Washington');
   });
 
-  it('throws when service call fails', async () => {
+  it('throws ValidationError when def_codes is omitted for non-overview dimension', async () => {
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({ dimension: 'agency' });
+    await expect(disasterSpendingTool.handler(input, ctx)).rejects.toMatchObject({
+      message: expect.stringContaining('def_codes is required'),
+    });
+  });
+
+  it('throws when service call fails (with def_codes present)', async () => {
     mockGetDisasterByAgency.mockRejectedValueOnce(new Error('Service error'));
 
     const ctx = createMockContext({ errors: disasterSpendingTool.errors });
-    const input = disasterSpendingTool.input.parse({ dimension: 'agency' });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      filters: { def_codes: ['L'] },
+    });
     await expect(disasterSpendingTool.handler(input, ctx)).rejects.toThrow();
   });
 
@@ -175,7 +194,11 @@ describe('disasterSpendingTool', () => {
     });
 
     const ctx = createMockContext();
-    const input = disasterSpendingTool.input.parse({ dimension: 'cfda', spending_type: 'award' });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'cfda',
+      spending_type: 'award',
+      filters: { def_codes: ['L', 'M'] },
+    });
     const result = await disasterSpendingTool.handler(input, ctx);
 
     expect(result.dimension).toBe('cfda');
@@ -206,6 +229,7 @@ describe('disasterSpendingTool', () => {
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'award',
+      filters: { def_codes: ['N'] },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
@@ -242,7 +266,7 @@ describe('disasterSpendingTool', () => {
     const ctx = createMockContext();
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
-      filters: { geo_layer: 'county' },
+      filters: { def_codes: ['L'], geo_layer: 'county' },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 

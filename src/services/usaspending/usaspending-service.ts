@@ -83,15 +83,20 @@ export class USASpendingService {
     const url = `${this.baseUrl}${path}`;
     return withRetry(
       async () => {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
+        const response = await fetchWithTimeout(
+          url,
+          this.timeoutMs,
+          ctx as unknown as RequestContext,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify(body),
+            signal: ctx.signal,
           },
-          body: JSON.stringify(body),
-          signal: ctx.signal,
-        });
+        );
         if (!response.ok) {
           throw await httpErrorFromResponse(response, {
             service: 'USAspending',

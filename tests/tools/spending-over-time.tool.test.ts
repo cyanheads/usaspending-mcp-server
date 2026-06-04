@@ -3,7 +3,6 @@
  * @module tests/tools/spending-over-time.tool.test
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
@@ -48,18 +47,22 @@ describe('spendingOverTimeTool', () => {
     expect(enrichment.period_count).toBe(2);
   });
 
-  it('throws no_data when API returns empty results', async () => {
+  it('returns structured empty response with notice when API returns no periods', async () => {
     mockSpendingOverTime.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
+    const ctx = createMockContext();
     const input = spendingOverTimeTool.input.parse({
       group: 'quarter',
       filters: { keywords: ['nonexistent_xyz_123'] },
     });
-    await expect(spendingOverTimeTool.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_data' },
-    });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+
+    expect(result.results).toHaveLength(0);
+    expect(result.total_periods).toBe(0);
+    expect(result.group).toBe('quarter');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.period_count).toBe(0);
+    expect(enrichment.notice).toContain('No spending data periods returned');
   });
 
   it('defaults award_type_codes to contracts when filters is omitted', async () => {

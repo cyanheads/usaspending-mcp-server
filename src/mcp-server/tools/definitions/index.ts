@@ -10,9 +10,11 @@ export { getAwardTool } from './get-award.tool.js';
 export { getAwardSubawardsTool } from './get-award-subawards.tool.js';
 export { getAwardTransactionsTool } from './get-award-transactions.tool.js';
 export { getFederalAccountTool } from './get-federal-account.tool.js';
+export { getIdvAwardsTool } from './get-idv-awards.tool.js';
 export { getRecipientTool } from './get-recipient.tool.js';
 export { listAgenciesTool } from './list-agencies.tool.js';
 export { searchAwardsTool } from './search-awards.tool.js';
+export { searchFederalAccountsTool } from './search-federal-accounts.tool.js';
 export { searchRecipientsTool } from './search-recipients.tool.js';
 export { spendingByCategoryTool } from './spending-by-category.tool.js';
 export { spendingByGeographyTool } from './spending-by-geography.tool.js';
@@ -25,9 +27,11 @@ import { getAwardTool } from './get-award.tool.js';
 import { getAwardSubawardsTool } from './get-award-subawards.tool.js';
 import { getAwardTransactionsTool } from './get-award-transactions.tool.js';
 import { getFederalAccountTool } from './get-federal-account.tool.js';
+import { getIdvAwardsTool } from './get-idv-awards.tool.js';
 import { getRecipientTool } from './get-recipient.tool.js';
 import { listAgenciesTool } from './list-agencies.tool.js';
 import { searchAwardsTool } from './search-awards.tool.js';
+import { searchFederalAccountsTool } from './search-federal-accounts.tool.js';
 import { searchRecipientsTool } from './search-recipients.tool.js';
 import { spendingByCategoryTool } from './spending-by-category.tool.js';
 import { spendingByGeographyTool } from './spending-by-geography.tool.js';
@@ -40,6 +44,7 @@ export const allToolDefinitions = [
   getAwardTool,
   getAwardTransactionsTool,
   getAwardSubawardsTool,
+  getIdvAwardsTool,
   searchRecipientsTool,
   getRecipientTool,
   getAgencyTool,
@@ -48,4 +53,5 @@ export const allToolDefinitions = [
   spendingOverTimeTool,
   disasterSpendingTool,
   getFederalAccountTool,
+  searchFederalAccountsTool,
 ] as const;

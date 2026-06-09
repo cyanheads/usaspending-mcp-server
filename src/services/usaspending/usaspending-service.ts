@@ -27,7 +27,9 @@ import type {
   RawDisasterOverview,
   RawDisasterResult,
   RawFederalAccount,
+  RawFederalAccountSearchResponse,
   RawGeographyResult,
+  RawIdvAwardsResponse,
   RawNaicsAutocomplete,
   RawPageMetadata,
   RawPscAutocomplete,
@@ -351,6 +353,35 @@ export class USASpendingService {
   async getFederalAccount(accountCode: string, ctx: Context): Promise<RawFederalAccount> {
     ctx.log.debug('getFederalAccount', { accountCode });
     return this.get<RawFederalAccount>(`federal_accounts/${encodeURIComponent(accountCode)}/`, ctx);
+  }
+
+  async searchFederalAccounts(
+    body: Record<string, unknown>,
+    ctx: Context,
+  ): Promise<RawFederalAccountSearchResponse> {
+    ctx.log.debug('searchFederalAccounts', {
+      keyword: body.keyword,
+      page: body.page,
+      limit: body.limit,
+    });
+    return this.post<RawFederalAccountSearchResponse>('federal_accounts/', body, ctx);
+  }
+
+  // --- IDV awards ---
+
+  async getIdvAwards(
+    params: {
+      award_id: string;
+      type: string;
+      sort: string;
+      order: string;
+      limit: number;
+      page: number;
+    },
+    ctx: Context,
+  ): Promise<RawIdvAwardsResponse> {
+    ctx.log.debug('getIdvAwards', { awardId: params.award_id, type: params.type });
+    return this.post<RawIdvAwardsResponse>('idvs/awards/', params, ctx);
   }
 
   // --- Autocomplete ---

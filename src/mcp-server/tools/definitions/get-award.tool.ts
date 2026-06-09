@@ -10,7 +10,7 @@ import { getUSASpendingService } from '@/services/usaspending/usaspending-servic
 export const getAwardTool = tool('usaspending_get_award', {
   title: 'Get Award Details',
   description:
-    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient info, agency hierarchy, period of performance, place of performance, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count. Use generated_internal_id values from usaspending_search_awards as input. Recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters.',
+    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient info, agency hierarchy, period of performance, place of performance, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count. Use generated_internal_id values from usaspending_search_awards as input. Recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({

@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/usaspending-mcp-server</h1>
   <p><b>Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP. STDIO or Streamable HTTP.</b>
-  <div>14 Tools</div>
+  <div>16 Tools</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.7-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,12 +29,13 @@
 
 ## Tools
 
-14 tools covering the full USAspending.gov API surface — award discovery and detail, recipient and agency profiles, spending analytics (by geography, category, and time), disaster/emergency spending, and federal account data:
+16 tools covering the full USAspending.gov API surface — award discovery and detail, recipient and agency profiles, spending analytics (by geography, category, and time), disaster/emergency spending, and federal account data:
 
 | Tool | Description |
 |:---|:---|
 | `usaspending_search_awards` | Search federal awards by keyword, recipient, agency, award type, NAICS code, location, or date range. Returns ranked award summaries with recipient names, amounts, agencies, and award IDs for chaining. |
 | `usaspending_get_award` | Fetch full details of a federal award by its generated ID. Returns contract or assistance data, parent IDV info, subaward count, and funding account linkages. |
+| `usaspending_get_idv_awards` | List child contracts and task/delivery orders placed under an IDV award. Each row includes a `generated_unique_award_id` for chaining into `usaspending_get_award`. |
 | `usaspending_get_award_transactions` | List individual transactions (modifications, amendments) on an award. Reveals spending history and obligation changes over time. |
 | `usaspending_get_award_subawards` | List subaward contracts or grants under a prime award. Reveals the sub-contractor or sub-grantee layer — who actually does the work. |
 | `usaspending_search_recipients` | Search for organizations receiving federal funds by name or UEI. Returns recipient IDs, total award amounts, and business type classifications. |
@@ -45,6 +46,7 @@
 | `usaspending_spending_over_time` | Fetch aggregated spending by fiscal year, fiscal quarter, or calendar month. Filter by award type, agency, recipient, or keyword to trace trends in a specific area. |
 | `usaspending_disaster_spending` | Fetch disaster and emergency supplemental spending (COVID-19, hurricanes, etc.) broken down by agency, CFDA program, recipient, or geography. Filter by DEF codes to isolate a specific appropriation. |
 | `usaspending_get_federal_account` | Fetch a federal account's budget data: total obligations, outlays, program activities, and object class breakdown. Account codes appear in award funding details. |
+| `usaspending_search_federal_accounts` | List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers for chaining into `usaspending_get_federal_account`. |
 | `usaspending_list_agencies` | List all top-tier federal agencies with toptier codes, budget authority amounts, and obligation totals. Entry point for agency navigation. |
 | `usaspending_autocomplete` | Look up valid code values for filter fields: NAICS, PSC, CFDA, recipient names, or agency names. Use before filtering to discover the right code from a description. |
 
@@ -71,6 +73,18 @@ Fetch complete details for a single federal award by its generated ID.
 - Includes NAICS code and product/service code from the latest transaction
 - Returns `account_obligations_by_defc` linking the award to specific disaster/emergency appropriations
 - Award IDs use the `generated_unique_award_id` format (e.g., `CONT_AWD_FA862118F6251_9700_...`)
+
+---
+
+### `usaspending_get_idv_awards`
+
+List child contracts and orders placed under an IDV (Indefinite Delivery Vehicle) award.
+
+- `award_id` must be the `generated_unique_award_id` of the parent IDV — from `usaspending_search_awards` (`generated_internal_id` field) or from `usaspending_get_award`
+- `type` selects what to list: `child_awards` (task/delivery orders), `child_idvs` (sub-IDVs), or `grandchild_awards`
+- Each row returns `generated_unique_award_id` for chaining into `usaspending_get_award` for full detail
+- Pagination via `limit` and `page`; note: no `total` count is available from this endpoint
+- An invalid `award_id` or an IDV with no children of the requested type returns an empty result set
 
 ---
 
@@ -158,7 +172,7 @@ Fetch aggregated spending grouped by time period.
 Fetch disaster and emergency supplemental spending consolidated from nine+ API endpoints.
 
 - `dimension` enum selects the breakdown axis: `overview`, `agency`, `cfda`, `recipient`, or `geography`
-- `spending_type` selects between grant/contract obligations (`spending`) and loan face values (`loans`)
+- `spending_type` selects between award-level obligations and outlays (`award`) and total spending including direct non-award amounts (`total`, agency and recipient dimensions only)
 - Filter by `def_codes` to isolate a specific emergency appropriation (e.g., COVID-19 = `L`, `M`, `N`, `O`, `P`, `U`)
 - Returns obligation, outlay, and award count per row
 
@@ -172,6 +186,18 @@ Fetch budget data for a federal account identified by its account code.
 - Includes fiscal year snapshot with total obligations and outlays
 - Program activity and object class breakdown shows how funds are categorized
 - Account codes appear in `account_obligations_by_defc` from `usaspending_get_award`
+
+---
+
+### `usaspending_search_federal_accounts`
+
+List and keyword-search federal accounts by agency or title keyword.
+
+- `keyword` filters by account name/title (e.g., `"defense"`, `"transportation"`)
+- `agency_identifier` filters to a specific agency by 3-digit code (e.g., `"097"` for DoD) — use `usaspending_list_agencies` to look up codes
+- `sort_field` enum: `account_name`, `account_number`, `budgetary_resources` (default), `managing_agency`
+- Returns `account_number` (format `"097-8097"`) for chaining into `usaspending_get_federal_account` for full budget detail
+- Pagination via `limit` and `page`; `count` in `page_metadata` is the total matches
 
 ---
 

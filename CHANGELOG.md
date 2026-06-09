@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-06-08 · ⚠️ Breaking
+
+Two new tools (usaspending_search_federal_accounts, usaspending_get_idv_awards), applied-filter enrichment echoes on search and analytics tools, empty-result notices on subawards/transactions, naics_codes array input (breaking rename from naics_code)
+
 ## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-06-04
 
 Fix POST timeout (fetchWithTimeout for all POST calls), fix def_codes validation for disaster_spending non-overview dimensions, convert empty-result throws to structured responses with ctx.enrich.notice()

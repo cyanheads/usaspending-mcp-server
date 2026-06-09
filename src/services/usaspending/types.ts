@@ -467,6 +467,60 @@ export interface RawFederalAccount {
   total_obligated_amount?: number | null;
 }
 
+/** Raw search result row from POST /federal_accounts/ */
+export interface RawFederalAccountSearchRow {
+  account_id?: number | null;
+  account_name?: string | null;
+  account_number?: string | null;
+  agency_identifier?: string | null;
+  budgetary_resources?: number | null;
+  managing_agency?: string | null;
+  managing_agency_acronym?: string | null;
+}
+
+/** Raw paginated response from POST /federal_accounts/ */
+export interface RawFederalAccountSearchResponse {
+  count?: number | null;
+  fy?: string | null;
+  hasNext?: boolean | null;
+  hasPrevious?: boolean | null;
+  keyword?: string | null;
+  limit?: number | null;
+  next?: number | null;
+  page?: number | null;
+  previous?: number | null;
+  results?: RawFederalAccountSearchRow[] | null;
+}
+
+/** Raw child award row from POST /idvs/awards/ */
+export interface RawIdvChildAward {
+  award_id?: number | null;
+  award_type?: string | null;
+  awarding_agency?: string | null;
+  awarding_agency_id?: number | null;
+  awarding_agency_slug?: string | null;
+  description?: string | null;
+  funding_agency?: string | null;
+  funding_agency_id?: number | null;
+  funding_agency_slug?: string | null;
+  generated_unique_award_id?: string | null;
+  last_date_to_order?: string | null;
+  obligated_amount?: number | null;
+  period_of_performance_current_end_date?: string | null;
+  period_of_performance_start_date?: string | null;
+  piid?: string | null;
+}
+
+/** Raw paginated response from POST /idvs/awards/ */
+export interface RawIdvAwardsResponse {
+  hasNext?: boolean | null;
+  hasPrevious?: boolean | null;
+  next?: number | null;
+  page?: number | null;
+  previous?: number | null;
+  results?: RawIdvChildAward[] | null;
+}
+
 /** Raw NAICS autocomplete result */
 export interface RawNaicsAutocomplete {
   naics?: string | null;

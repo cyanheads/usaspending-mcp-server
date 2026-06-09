@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-06-04 07:48:45
+Generated on: 2026-06-09 00:38:13
 
 ```text
 usaspending-mcp-server/
@@ -21,6 +21,7 @@ usaspending-mcp-server/
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -134,10 +135,12 @@ usaspending-mcp-server/
 │   │           ├── get-award-transactions.tool.ts
 │   │           ├── get-award.tool.ts
 │   │           ├── get-federal-account.tool.ts
+│   │           ├── get-idv-awards.tool.ts
 │   │           ├── get-recipient.tool.ts
 │   │           ├── index.ts
 │   │           ├── list-agencies.tool.ts
 │   │           ├── search-awards.tool.ts
+│   │           ├── search-federal-accounts.tool.ts
 │   │           ├── search-recipients.tool.ts
 │   │           ├── spending-by-category.tool.ts
 │   │           ├── spending-by-geography.tool.ts
@@ -158,9 +161,11 @@ usaspending-mcp-server/
 │   │   ├── get-award-transactions.tool.test.ts
 │   │   ├── get-award.tool.test.ts
 │   │   ├── get-federal-account.tool.test.ts
+│   │   ├── get-idv-awards.tool.test.ts
 │   │   ├── get-recipient.tool.test.ts
 │   │   ├── list-agencies.tool.test.ts
 │   │   ├── search-awards.tool.test.ts
+│   │   ├── search-federal-accounts.tool.test.ts
 │   │   ├── search-recipients.tool.test.ts
 │   │   ├── spending-by-category.tool.test.ts
 │   │   ├── spending-by-geography.tool.test.ts

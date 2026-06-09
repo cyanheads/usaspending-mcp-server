@@ -78,6 +78,12 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .describe('Total transaction count across all pages (when available)'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of transactions'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Guidance when no transactions were returned — suggests checking transactions_count from usaspending_get_award first. Absent when results are present.',
+      ),
   },
 
   errors: [
@@ -139,6 +145,13 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       current_page: currentPage,
       has_next_page: hasNext,
     });
+
+    if (results.length === 0) {
+      ctx.enrich.notice(
+        `No transactions found for award ${input.award_id}. Check transactions_count from usaspending_get_award to confirm transaction history exists.`,
+      );
+    }
+
     return {
       award_id: input.award_id,
       results,

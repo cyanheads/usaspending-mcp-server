@@ -48,6 +48,7 @@ describe('getAwardTransactionsTool', () => {
     expect(enrichment.queried_award_id).toBe('CONT_AWD_TEST');
     expect(enrichment.transaction_total).toBe(1);
     expect(enrichment.has_next_page).toBe(false);
+    expect(enrichment.notice).toBeUndefined();
   });
 
   it('returns empty results for an award with no transactions', async () => {
@@ -62,6 +63,10 @@ describe('getAwardTransactionsTool', () => {
 
     expect(result.results).toHaveLength(0);
     expect(result.page_metadata.total).toBe(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(enrichment.notice).toContain('transactions_count');
+    expect(enrichment.notice).toContain('CONT_AWD_EMPTY');
   });
 
   it('throws when service call fails', async () => {

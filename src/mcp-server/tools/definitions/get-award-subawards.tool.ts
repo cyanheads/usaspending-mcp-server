@@ -77,6 +77,12 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       .describe('Total subaward count across all pages (when available)'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of subawards'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Guidance when no subawards were returned — suggests checking subaward_count from usaspending_get_award first. Absent when results are present.',
+      ),
   },
 
   errors: [
@@ -146,6 +152,13 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       current_page: currentPage,
       has_next_page: hasNext,
     });
+
+    if (results.length === 0) {
+      ctx.enrich.notice(
+        `No subawards found for award ${input.award_id}. Check subaward_count from usaspending_get_award to confirm sub-records exist before querying.`,
+      );
+    }
+
     return {
       award_id: input.award_id,
       results,

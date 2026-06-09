@@ -59,11 +59,11 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe(
         'Filter by recipient name (partial match). Use usaspending_search_recipients for precise recipient_id filtering.',
       ),
-    naics_code: z
-      .string()
+    naics_codes: z
+      .array(z.string())
       .optional()
       .describe(
-        'Filter by NAICS industry code (e.g., "541512"). Use usaspending_autocomplete type=naics to look up codes.',
+        'Filter by NAICS industry codes (e.g., ["541512"]). Use usaspending_autocomplete type=naics to look up codes.',
       ),
     time_period: z
       .object({
@@ -167,6 +167,17 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe('Total number of matching awards across all pages (when available)'),
     page: z.number().describe('Current page number returned'),
     has_next: z.boolean().describe('Whether there are more pages of results'),
+    applied_keyword: z.string().optional().describe('Keyword filter applied to this search'),
+    applied_agency_name: z.string().optional().describe('Awarding agency name filter applied'),
+    applied_naics_codes: z
+      .string()
+      .optional()
+      .describe('NAICS codes filter applied (comma-separated)'),
+    applied_time_period_start: z
+      .string()
+      .optional()
+      .describe('Start date filter applied (YYYY-MM-DD)'),
+    applied_time_period_end: z.string().optional().describe('End date filter applied (YYYY-MM-DD)'),
     notice: z
       .string()
       .optional()
@@ -200,8 +211,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       filters.agencies = [{ type: 'awarding', tier: 'toptier', name: input.agency_name }];
     }
     if (input.recipient_name) filters.recipient_search_text = [input.recipient_name];
-    if (input.naics_code) {
-      filters.naics_codes = { require: [input.naics_code] };
+    if (input.naics_codes?.length) {
+      filters.naics_codes = { require: input.naics_codes };
     }
     if (input.time_period?.start_date && input.time_period?.end_date) {
       filters.time_period = [
@@ -285,6 +296,15 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       total: page_metadata.total,
       page: page_metadata.page,
       has_next: page_metadata.has_next,
+      ...(input.keyword ? { applied_keyword: input.keyword } : {}),
+      ...(input.agency_name ? { applied_agency_name: input.agency_name } : {}),
+      ...(input.naics_codes?.length ? { applied_naics_codes: input.naics_codes.join(', ') } : {}),
+      ...(input.time_period?.start_date
+        ? { applied_time_period_start: input.time_period.start_date }
+        : {}),
+      ...(input.time_period?.end_date
+        ? { applied_time_period_end: input.time_period.end_date }
+        : {}),
     });
 
     if (results.length === 0) {

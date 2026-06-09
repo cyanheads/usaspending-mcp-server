@@ -108,6 +108,10 @@ describe('spendingByCategoryTool', () => {
       }),
       ctx,
     );
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.applied_time_period_start).toBe('2023-01-01');
+    expect(enrichment.applied_time_period_end).toBe('2023-12-31');
   });
 
   it('formats output with category codes and amounts', () => {

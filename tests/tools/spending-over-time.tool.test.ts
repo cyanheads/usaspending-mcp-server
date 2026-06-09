@@ -63,6 +63,7 @@ describe('spendingOverTimeTool', () => {
     const enrichment = getEnrichment(ctx);
     expect(enrichment.period_count).toBe(0);
     expect(enrichment.notice).toContain('No spending data periods returned');
+    expect(enrichment.applied_keywords).toBe('nonexistent_xyz_123');
   });
 
   it('defaults award_type_codes to contracts when filters is omitted', async () => {

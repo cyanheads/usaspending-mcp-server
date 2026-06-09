@@ -81,6 +81,17 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       .describe('Total number of items in this category (when available)'),
     page: z.number().describe('Current page returned'),
     has_next: z.boolean().describe('Whether there are more pages'),
+    applied_keywords: z.string().optional().describe('Keyword filters applied (comma-separated)'),
+    applied_agency_name: z.string().optional().describe('Awarding agency name filter applied'),
+    applied_naics_codes: z
+      .string()
+      .optional()
+      .describe('NAICS code filters applied (comma-separated)'),
+    applied_time_period_start: z
+      .string()
+      .optional()
+      .describe('Start date filter applied (YYYY-MM-DD)'),
+    applied_time_period_end: z.string().optional().describe('End date filter applied (YYYY-MM-DD)'),
     notice: z
       .string()
       .optional()
@@ -133,6 +144,19 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       total: page_metadata.total,
       page: page_metadata.page,
       has_next: page_metadata.has_next,
+      ...(input.filters?.keywords?.length
+        ? { applied_keywords: input.filters.keywords.join(', ') }
+        : {}),
+      ...(input.filters?.agency_name ? { applied_agency_name: input.filters.agency_name } : {}),
+      ...(input.filters?.naics_codes?.length
+        ? { applied_naics_codes: input.filters.naics_codes.join(', ') }
+        : {}),
+      ...(input.filters?.time_period_start
+        ? { applied_time_period_start: input.filters.time_period_start }
+        : {}),
+      ...(input.filters?.time_period_end
+        ? { applied_time_period_end: input.filters.time_period_end }
+        : {}),
     });
 
     if (results.length === 0) {

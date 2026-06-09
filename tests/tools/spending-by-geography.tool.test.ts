@@ -74,6 +74,7 @@ describe('spendingByGeographyTool', () => {
     const enrichment = getEnrichment(ctx);
     expect(enrichment.area_count).toBe(0);
     expect(enrichment.notice).toContain('No spending data matched');
+    expect(enrichment.applied_keywords).toBe('nonexistent_xyz');
   });
 
   it('throws when service call fails', async () => {

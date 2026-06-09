@@ -159,19 +159,19 @@ describe('searchAwardsTool', () => {
     );
   });
 
-  it('passes naics_code filter as naics_codes.require to service', async () => {
+  it('passes naics_codes filter as naics_codes.require to service', async () => {
     mockSearchAwards.mockResolvedValueOnce({
       results: [],
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
     const ctx = createMockContext();
-    const input = searchAwardsTool.input.parse({ naics_code: '541512' });
+    const input = searchAwardsTool.input.parse({ naics_codes: ['541512', '541511'] });
     await searchAwardsTool.handler(input, ctx);
 
     expect(mockSearchAwards).toHaveBeenCalledWith(
       expect.objectContaining({
-        filters: expect.objectContaining({ naics_codes: { require: ['541512'] } }),
+        filters: expect.objectContaining({ naics_codes: { require: ['541512', '541511'] } }),
       }),
       ctx,
     );
@@ -281,5 +281,44 @@ describe('searchAwardsTool', () => {
     expect(text).toContain('Test Corp');
     expect(text).toContain('500,000');
     expect(text).toContain('**Page:** 1');
+  });
+
+  it('echoes applied filter values in enrichment', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [{ generated_internal_id: 'CONT_AWD_X' }],
+      page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({
+      keyword: 'cyber',
+      agency_name: 'Department of Defense',
+      naics_codes: ['541512', '541511'],
+      time_period: { start_date: '2023-01-01', end_date: '2023-12-31' },
+    });
+    await searchAwardsTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.applied_keyword).toBe('cyber');
+    expect(enrichment.applied_agency_name).toBe('Department of Defense');
+    expect(enrichment.applied_naics_codes).toBe('541512, 541511');
+    expect(enrichment.applied_time_period_start).toBe('2023-01-01');
+    expect(enrichment.applied_time_period_end).toBe('2023-12-31');
+  });
+
+  it('omits applied filter echoes from enrichment when no filters are set', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [{ generated_internal_id: 'CONT_AWD_Y' }],
+      page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ limit: 5 });
+    await searchAwardsTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.applied_keyword).toBeUndefined();
+    expect(enrichment.applied_agency_name).toBeUndefined();
+    expect(enrichment.applied_naics_codes).toBeUndefined();
   });
 });

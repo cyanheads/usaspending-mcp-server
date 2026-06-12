@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "usaspending-mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov.",
   "author": { "name": "cyanheads" },
   "repository": {

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-06-12
+
+@cyanheads/mcp-ts-core ^0.10.6 adoption: enrichment totals emit via ctx.enrich.total() under the canonical totalCount field, truncation disclosed on no-total endpoints via ctx.enrich.truncated(); Dockerfile HEALTHCHECK + version label; synced skills
+
 ## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-06-08 · ⚠️ Breaking
 
 Two new tools (usaspending_search_federal_accounts, usaspending_get_idv_awards), applied-filter enrichment echoes on search and analytics tools, empty-result notices on subawards/transactions, naics_codes array input (breaking rename from naics_code)

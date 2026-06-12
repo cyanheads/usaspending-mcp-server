@@ -89,7 +89,7 @@ describe('disasterSpendingTool', () => {
     expect(result.page_metadata?.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.applied_dimension).toBe('agency');
-    expect(enrichment.result_total).toBe(1);
+    expect(enrichment.totalCount).toBe(1);
     expect(enrichment.has_next_page).toBe(false);
   });
 

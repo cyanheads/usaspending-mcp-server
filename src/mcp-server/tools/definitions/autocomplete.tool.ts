@@ -61,11 +61,15 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
     total: z.number().describe('Number of results returned'),
   }),
 
-  // Agent-facing context: echoed query parameters and result count.
+  // Agent-facing context: echoed query parameters and result count. The autocomplete
+  // endpoint returns no total, so a hit-the-cap signal discloses truncation.
   enrichment: {
     lookup_type: z.string().describe('Lookup table that was searched'),
     query: z.string().describe('Search text sent to the autocomplete API'),
     result_count: z.number().describe('Number of matching results returned'),
+    truncated: z.boolean().optional().describe('True when results were capped at the limit.'),
+    shown: z.number().optional().describe('Number of results returned.'),
+    cap: z.number().optional().describe('The limit that was applied.'),
   },
 
   errors: [
@@ -141,6 +145,14 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       query: input.search_text,
       result_count: rawResults.length,
     });
+    if (rawResults.length >= input.limit) {
+      ctx.enrich.truncated({
+        shown: rawResults.length,
+        cap: input.limit,
+        guidance:
+          'More matches may exist. Raise limit (max 50) or use a more specific search term.',
+      });
+    }
     return {
       type: input.type,
       search_text: input.search_text,

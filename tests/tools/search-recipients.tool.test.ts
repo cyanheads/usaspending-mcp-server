@@ -44,6 +44,22 @@ describe('searchRecipientsTool', () => {
     expect(enrichment.notice).toBeUndefined();
   });
 
+  it('discloses truncation when results fill the limit', async () => {
+    mockSearchRecipients.mockResolvedValueOnce(
+      Array.from({ length: 3 }, (_, i) => ({ id: `id-${i}-R`, name: `Recipient ${i}` })),
+    );
+
+    const ctx = createMockContext();
+    const input = searchRecipientsTool.input.parse({ keyword: 'corp', limit: 3 });
+    await searchRecipientsTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.shown).toBe(3);
+    expect(enrichment.cap).toBe(3);
+    expect(enrichment.notice).toBeDefined();
+  });
+
   it('populates enrichment notice when no results found', async () => {
     mockSearchRecipients.mockResolvedValueOnce([]);
 

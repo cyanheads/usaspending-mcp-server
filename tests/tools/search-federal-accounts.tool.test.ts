@@ -47,7 +47,7 @@ describe('searchFederalAccountsTool', () => {
     expect(result.page_metadata.has_next).toBe(true);
 
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.total).toBe(42);
+    expect(enrichment.totalCount).toBe(42);
     expect(enrichment.page).toBe(1);
     expect(enrichment.has_next).toBe(true);
   });

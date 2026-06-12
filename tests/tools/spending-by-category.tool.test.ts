@@ -69,7 +69,7 @@ describe('spendingByCategoryTool', () => {
     await spendingByCategoryTool.handler(input, ctx);
 
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.total).toBe(50);
+    expect(enrichment.totalCount).toBe(50);
     expect(enrichment.page).toBe(1);
     expect(enrichment.has_next).toBe(true);
   });

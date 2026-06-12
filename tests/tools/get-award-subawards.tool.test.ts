@@ -48,7 +48,7 @@ describe('getAwardSubawardsTool', () => {
     expect(result.page_metadata.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.prime_award_id).toBe('CONT_AWD_PRIME_001');
-    expect(enrichment.subaward_total).toBe(1);
+    expect(enrichment.totalCount).toBe(1);
     expect(enrichment.has_next_page).toBe(false);
     expect(enrichment.notice).toBeUndefined();
   });

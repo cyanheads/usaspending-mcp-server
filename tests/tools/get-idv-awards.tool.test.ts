@@ -62,6 +62,27 @@ describe('getIdvAwardsTool', () => {
     expect(enrichment.current_page).toBe(1);
   });
 
+  it('discloses truncation when a full page has more results', async () => {
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page: 1,
+      hasNext: true,
+      hasPrevious: false,
+      results: Array.from({ length: 2 }, (_, i) => ({
+        generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
+      })),
+    });
+
+    const ctx = createMockContext();
+    const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_FULLPAGE_000', limit: 2 });
+    await getIdvAwardsTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.shown).toBe(2);
+    expect(enrichment.cap).toBe(2);
+    expect(enrichment.notice).toBeDefined();
+  });
+
   it('populates empty-results notice for IDV with no children of requested type', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
       page: 1,

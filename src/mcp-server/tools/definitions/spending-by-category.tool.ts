@@ -75,7 +75,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
 
   // Agent-facing context: pagination totals and a recovery notice for empty pages.
   enrichment: {
-    total: z
+    totalCount: z
       .number()
       .optional()
       .describe('Total number of items in this category (when available)'),
@@ -140,8 +140,8 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       limit: input.limit,
     };
 
+    if (typeof page_metadata.total === 'number') ctx.enrich.total(page_metadata.total);
     ctx.enrich({
-      total: page_metadata.total,
       page: page_metadata.page,
       has_next: page_metadata.has_next,
       ...(input.filters?.keywords?.length

@@ -52,6 +52,24 @@ describe('autocompleteTool', () => {
     expect(enrichment.result_count).toBe(2);
   });
 
+  it('discloses truncation when results fill the limit', async () => {
+    mockAutocompleteNaics.mockResolvedValueOnce({
+      results: Array.from({ length: 5 }, (_, i) => ({
+        naics: `5135${i}0`,
+        naics_description: `Industry ${i}`,
+      })),
+    });
+
+    const ctx = createMockContext();
+    const input = autocompleteTool.input.parse({ type: 'naics', search_text: 'soft', limit: 5 });
+    await autocompleteTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.shown).toBe(5);
+    expect(enrichment.cap).toBe(5);
+  });
+
   it('maps psc field names correctly', async () => {
     mockAutocompletePsc.mockResolvedValueOnce({
       results: [{ product_or_service_code: 'AC60', psc_description: 'R&D-ELECTRONICS & COMM EQ' }],

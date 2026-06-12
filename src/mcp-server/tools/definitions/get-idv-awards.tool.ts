@@ -89,10 +89,18 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
   }),
 
   // Agent-facing context: pagination state and an optional notice for empty results.
+  // This endpoint returns no total count, so truncation is disclosed via the page-full
+  // signal (truncated/shown/cap) rather than a total.
   enrichment: {
     parent_award_id: z.string().describe('Parent IDV award ID whose children were listed'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of child awards'),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when more child awards remain beyond this page.'),
+    shown: z.number().optional().describe('Number of child awards returned on this page.'),
+    cap: z.number().optional().describe('The per-page limit that was applied.'),
     notice: z
       .string()
       .optional()
@@ -176,6 +184,12 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         `No child awards of type "${input.type}" found for IDV "${input.award_id}". ` +
           `Verify the award_id is a valid IDV and try type="child_idvs" if looking for sub-IDVs.`,
       );
+    } else if (hasNext && results.length >= input.limit) {
+      ctx.enrich.truncated({
+        shown: results.length,
+        cap: input.limit,
+        guidance: 'More child awards remain. Request the next page or raise limit (max 100).',
+      });
     }
 
     return {

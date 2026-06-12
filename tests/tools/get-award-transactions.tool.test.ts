@@ -46,7 +46,7 @@ describe('getAwardTransactionsTool', () => {
     expect(result.page_metadata.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.queried_award_id).toBe('CONT_AWD_TEST');
-    expect(enrichment.transaction_total).toBe(1);
+    expect(enrichment.totalCount).toBe(1);
     expect(enrichment.has_next_page).toBe(false);
     expect(enrichment.notice).toBeUndefined();
   });

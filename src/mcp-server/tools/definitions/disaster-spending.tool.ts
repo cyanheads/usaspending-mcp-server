@@ -58,7 +58,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   // Agent-facing context: the dimension applied and pagination for non-overview dimensions.
   enrichment: {
     applied_dimension: z.string().describe('Breakdown dimension applied'),
-    result_total: z
+    totalCount: z
       .number()
       .optional()
       .describe('Total items for paginated dimensions (when available)'),
@@ -249,9 +249,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         population: typeof r.population === 'number' ? r.population : undefined,
         per_capita: typeof r.per_capita === 'number' ? r.per_capita : undefined,
       }));
+      ctx.enrich.total(geoResults.length);
       ctx.enrich({
         applied_dimension: 'geography',
-        result_total: geoResults.length,
         current_page: 1,
         has_next_page: false,
       });
@@ -283,9 +283,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     const pageMeta = rawResults.page_metadata ?? {};
     const hasNext = pageMeta.hasNext ?? false;
     const currentPage = pageMeta.page ?? input.page;
+    if (typeof pageMeta.total === 'number') ctx.enrich.total(pageMeta.total);
     ctx.enrich({
       applied_dimension: input.dimension,
-      ...(typeof pageMeta.total === 'number' ? { result_total: pageMeta.total } : {}),
       current_page: currentPage,
       has_next_page: hasNext,
     });

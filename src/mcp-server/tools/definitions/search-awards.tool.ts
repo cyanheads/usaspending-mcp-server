@@ -161,7 +161,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   // for empty pages. Populated via ctx.enrich() so it reaches both structuredContent
   // and content[] without a format() entry.
   enrichment: {
-    total: z
+    totalCount: z
       .number()
       .optional()
       .describe('Total number of matching awards across all pages (when available)'),
@@ -292,8 +292,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       limit: input.limit,
     };
 
+    if (typeof page_metadata.total === 'number') ctx.enrich.total(page_metadata.total);
     ctx.enrich({
-      total: page_metadata.total,
       page: page_metadata.page,
       has_next: page_metadata.has_next,
       ...(input.keyword ? { applied_keyword: input.keyword } : {}),

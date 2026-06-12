@@ -81,7 +81,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
   // Agent-facing context: total match count, current page, and an optional
   // recovery notice for empty results.
   enrichment: {
-    total: z
+    totalCount: z
       .number()
       .optional()
       .describe('Total number of matching accounts across all pages (when available)'),
@@ -145,8 +145,8 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
     const currentPage = typeof data.page === 'number' ? data.page : input.page;
     const hasNext = data.hasNext ?? false;
 
+    if (total !== undefined) ctx.enrich.total(total);
     ctx.enrich({
-      ...(total !== undefined ? { total } : {}),
       page: currentPage,
       has_next: hasNext,
     });

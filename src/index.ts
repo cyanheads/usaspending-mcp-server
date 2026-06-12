@@ -11,6 +11,8 @@ import { allToolDefinitions } from './mcp-server/tools/definitions/index.js';
 import { initUSASpendingService } from './services/usaspending/usaspending-service.js';
 
 await createApp({
+  name: 'usaspending-mcp-server',
+  title: 'usaspending-mcp-server',
   tools: [...allToolDefinitions],
   resources: [],
   prompts: [],

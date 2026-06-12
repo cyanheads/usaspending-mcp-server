@@ -71,8 +71,12 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
 
   // Agent-facing search context: result count and an optional recovery notice
   // for empty searches. Populated via ctx.enrich() so it reaches both surfaces.
+  // The recipient endpoint returns no total, so a hit-the-cap signal discloses truncation.
   enrichment: {
     recipient_count: z.number().describe('Number of matching recipients returned'),
+    truncated: z.boolean().optional().describe('True when results were capped at the limit.'),
+    shown: z.number().optional().describe('Number of recipients returned.'),
+    cap: z.number().optional().describe('The limit that was applied.'),
     notice: z
       .string()
       .optional()
@@ -128,6 +132,12 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       ctx.enrich.notice(
         `No recipients matched "${input.keyword}". Try a partial name, different spelling, or use a UEI number directly.`,
       );
+    } else if (results.length >= input.limit) {
+      ctx.enrich.truncated({
+        shown: results.length,
+        cap: input.limit,
+        guidance: 'More recipients may match. Raise limit (max 100) or refine the keyword.',
+      });
     }
 
     return { results, total: results.length };

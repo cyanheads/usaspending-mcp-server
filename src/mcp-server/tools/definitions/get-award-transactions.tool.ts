@@ -72,7 +72,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
   // Agent-facing context: pagination state for the transaction listing.
   enrichment: {
     queried_award_id: z.string().describe('Award ID whose transactions were listed'),
-    transaction_total: z
+    totalCount: z
       .number()
       .optional()
       .describe('Total transaction count across all pages (when available)'),
@@ -139,9 +139,9 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
     const pageMeta = data.page_metadata ?? {};
     const hasNext = pageMeta.hasNext ?? false;
     const currentPage = pageMeta.page ?? input.page;
+    if (typeof pageMeta.total === 'number') ctx.enrich.total(pageMeta.total);
     ctx.enrich({
       queried_award_id: input.award_id,
-      ...(typeof pageMeta.total === 'number' ? { transaction_total: pageMeta.total } : {}),
       current_page: currentPage,
       has_next_page: hasNext,
     });

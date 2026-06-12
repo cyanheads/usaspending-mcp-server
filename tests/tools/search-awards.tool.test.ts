@@ -72,7 +72,7 @@ describe('searchAwardsTool', () => {
     await searchAwardsTool.handler(input, ctx);
 
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.total).toBe(42);
+    expect(enrichment.totalCount).toBe(42);
     expect(enrichment.page).toBe(1);
     expect(enrichment.has_next).toBe(true);
     expect(enrichment.notice).toBeUndefined();

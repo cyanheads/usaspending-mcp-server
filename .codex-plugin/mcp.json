@@ -1,5 +1,5 @@
 {
-  "@cyanheads/usaspending-mcp-server": {
+  "usaspending-mcp-server": {
     "command": "npx",
     "args": ["-y", "@cyanheads/usaspending-mcp-server"],
     "env": {

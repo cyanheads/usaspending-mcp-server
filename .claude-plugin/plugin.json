@@ -1,5 +1,5 @@
 {
-  "name": "@cyanheads/usaspending-mcp-server",
+  "name": "usaspending-mcp-server",
   "version": "0.2.1",
   "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP.",
   "author": {
@@ -9,7 +9,7 @@
   "repository": "https://github.com/cyanheads/usaspending-mcp-server",
   "license": "Apache-2.0",
   "mcpServers": {
-    "@cyanheads/usaspending-mcp-server": {
+    "usaspending-mcp-server": {
       "command": "npx",
       "args": ["-y", "@cyanheads/usaspending-mcp-server"],
       "env": {

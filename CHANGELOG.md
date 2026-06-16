@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-06-15
+
+release:github npm script runs under bun run instead of tsx (an undeclared dependency), fixing the broken GitHub Release step
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-06-12
 
 @cyanheads/mcp-ts-core ^0.10.6 adoption: enrichment totals emit via ctx.enrich.total() under the canonical totalCount field, truncation disclosed on no-total endpoints via ctx.enrich.truncated(); Dockerfile HEALTHCHECK + version label; synced skills

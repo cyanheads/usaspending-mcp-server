@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-06-20
+
+@cyanheads/mcp-ts-core ^0.10.9 maintenance: new check-dependency-specifiers devcheck step (floating latest/* specifier guard), plugin-manifest packaging checks gated by packaging.pluginManifests, fresh-scaffold + worktree-deletion devcheck guards, re-synced skills
+
 ## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-06-15
 
 release:github npm script runs under bun run instead of tsx (an undeclared dependency), fixing the broken GitHub Release step

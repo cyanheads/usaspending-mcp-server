@@ -18,13 +18,13 @@ describe('spendingOverTimeTool', () => {
     mockSpendingOverTime.mockResolvedValueOnce({
       results: [
         {
-          time_period: { fiscal_year: '2022', calendar_year: '2021' },
+          time_period: { fiscal_year: '2022' },
           aggregated_amount: 500_000_000_000,
           Contract_Obligations: 300_000_000_000,
           Grant_Obligations: 100_000_000_000,
         },
         {
-          time_period: { fiscal_year: '2023', calendar_year: '2022' },
+          time_period: { fiscal_year: '2023' },
           aggregated_amount: 550_000_000_000,
           Contract_Obligations: 330_000_000_000,
           Grant_Obligations: 110_000_000_000,
@@ -92,10 +92,11 @@ describe('spendingOverTimeTool', () => {
   });
 
   it('handles quarter-level grouping with time_period fields', async () => {
+    // Upstream returns {fiscal_year, quarter} for group=quarter — never calendar_year.
     mockSpendingOverTime.mockResolvedValueOnce({
       results: [
         {
-          time_period: { fiscal_year: '2023', quarter: '1', calendar_year: '2022' },
+          time_period: { fiscal_year: '2023', quarter: '1' },
           aggregated_amount: 150_000_000_000,
         },
       ],
@@ -109,13 +110,13 @@ describe('spendingOverTimeTool', () => {
     expect(result.results[0].time_period.fiscal_year).toBe('2023');
   });
 
-  it('normalizes calendar_month field to month in time_period', async () => {
+  it('passes the fiscal-month ordinal through unconverted', async () => {
+    // The live shape for group=month: FY2025 months 1–3 are Oct–Dec 2024. The
+    // ordinal is passed through as-is rather than converted to a calendar month.
     mockSpendingOverTime.mockResolvedValueOnce({
       results: [
-        {
-          time_period: { fiscal_year: '2024', calendar_year: '2024', calendar_month: '3' },
-          aggregated_amount: 50_000_000,
-        },
+        { time_period: { fiscal_year: '2025', month: '1' }, aggregated_amount: 50_000_000 },
+        { time_period: { fiscal_year: '2025', month: '2' }, aggregated_amount: 60_000_000 },
       ],
     });
 
@@ -124,9 +125,26 @@ describe('spendingOverTimeTool', () => {
     const result = await spendingOverTimeTool.handler(input, ctx);
 
     expect(result.group).toBe('month');
-    // calendar_month should be normalized to month field
-    expect(result.results[0].time_period.month).toBe('3');
-    expect(result.results[0].time_period.fiscal_year).toBe('2024');
+    expect(result.results[0].time_period.month).toBe('1');
+    expect(result.results[0].time_period.fiscal_year).toBe('2025');
+    expect(result.results[1].time_period.month).toBe('2');
+  });
+
+  it('emits no calendar_year on any exposed group mode', async () => {
+    // calendar_year is unreachable: upstream only populates it under group=calendar_year,
+    // which this tool's input enum does not expose. Guards against it creeping back in.
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [
+        { time_period: { fiscal_year: '2025', month: '1' }, aggregated_amount: 50_000_000 },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'month' });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+
+    expect(result.results[0].time_period).toStrictEqual({ fiscal_year: '2025', month: '1' });
+    expect(result.results[0].time_period).not.toHaveProperty('calendar_year');
   });
 
   it('maps all award breakdown fields (loans, direct_payments, other)', async () => {
@@ -171,7 +189,7 @@ describe('spendingOverTimeTool', () => {
       group: 'fiscal_year',
       results: [
         {
-          time_period: { fiscal_year: '2022', calendar_year: '2021' },
+          time_period: { fiscal_year: '2022' },
           aggregated_amount: 500_000_000_000,
           contracts: 300_000_000_000,
           grants: 100_000_000_000,
@@ -189,5 +207,51 @@ describe('spendingOverTimeTool', () => {
     expect(text).toContain('2022');
     expect(text).toContain('500,000,000,000');
     expect(text).toContain('300,000,000,000');
+  });
+
+  it('renders no always-empty calendar-year column', () => {
+    const output = {
+      group: 'fiscal_year',
+      results: [{ time_period: { fiscal_year: '2022' }, aggregated_amount: 500_000_000_000 }],
+      total_periods: 1,
+    };
+
+    const text = (spendingOverTimeTool.format!(output)[0] as { text: string }).text;
+    expect(text).not.toContain('Cal Year');
+    // The FY row has no month, so the fiscal-month legend must stay out of it.
+    expect(text).not.toContain('FM');
+  });
+
+  it('renders month rows as fiscal months with a legend', () => {
+    const output = {
+      group: 'month',
+      results: [
+        { time_period: { fiscal_year: '2025', month: '1' }, aggregated_amount: 50_000_000 },
+        { time_period: { fiscal_year: '2025', month: '2' }, aggregated_amount: 60_000_000 },
+      ],
+      total_periods: 2,
+    };
+
+    const text = (spendingOverTimeTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('2025 FM1');
+    expect(text).toContain('2025 FM2');
+    expect(text).toContain('FM1 = October');
+    // The old rendering presented the ordinal as a bare calendar month.
+    expect(text).not.toContain('| 2025 M1 |');
+  });
+
+  it('renders quarter rows unaffected by the fiscal-month change', () => {
+    const output = {
+      group: 'quarter',
+      results: [
+        { time_period: { fiscal_year: '2023', quarter: '1' }, aggregated_amount: 150_000_000 },
+      ],
+      total_periods: 1,
+    };
+
+    const text = (spendingOverTimeTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('2023 Q1');
+    expect(text).toContain('150,000,000');
+    expect(text).not.toContain('FM');
   });
 });

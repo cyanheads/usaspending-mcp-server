@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool to fetch aggregated federal spending over time by fiscal year,
- * quarter, or calendar month.
+ * fiscal quarter, or fiscal month.
  * @module mcp-server/tools/definitions/spending-over-time.tool
  */
 
@@ -12,14 +12,14 @@ import { buildFilters } from './filters.js';
 export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   title: 'Spending Over Time',
   description:
-    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or calendar month. Filter by award type, agency, recipient, keyword, or NAICS code to trace spending trends in a specific area. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, loans, other).',
+    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, or NAICS code to trace spending trends in a specific area. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, loans, other).',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     group: z
       .enum(['fiscal_year', 'quarter', 'month'])
       .describe(
-        'Time grouping: fiscal_year (annual US govt FY: Oct–Sep), quarter (fiscal quarter), or month (calendar month)',
+        'Time grouping: fiscal_year (annual US govt FY: Oct–Sep), quarter (fiscal quarter), or month (fiscal month — an ordinal within the fiscal year, where 1 = October)',
       ),
     filters: z
       .object({
@@ -56,10 +56,16 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
               .object({
                 fiscal_year: z.string().optional().describe('Fiscal year (e.g., 2024)'),
                 quarter: z.string().optional().describe('Fiscal quarter (1–4)'),
-                month: z.string().optional().describe('Calendar month (1–12)'),
-                calendar_year: z.string().optional().describe('Calendar year'),
+                month: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Fiscal month: an ordinal within fiscal_year, 1–12, where 1 = October and 12 = September. Fiscal month 1 of FY2025 is October 2024 — not January.',
+                  ),
               })
-              .describe('Time period for this row'),
+              .describe(
+                'Time period for this row. Populated per the requested grouping: fiscal_year alone, fiscal_year + quarter, or fiscal_year + month.',
+              ),
             aggregated_amount: z
               .number()
               .optional()
@@ -139,13 +145,11 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
 
     const results = (data.results ?? []).map((r) => {
       const tp = r.time_period ?? {};
-      const month = tp.month ?? tp.calendar_month;
       return {
         time_period: {
           ...(tp.fiscal_year ? { fiscal_year: tp.fiscal_year } : {}),
           ...(tp.quarter ? { quarter: tp.quarter } : {}),
-          ...(month ? { month } : {}),
-          ...(tp.calendar_year ? { calendar_year: tp.calendar_year } : {}),
+          ...(tp.month ? { month: tp.month } : {}),
         },
         ...(typeof r.aggregated_amount === 'number'
           ? { aggregated_amount: r.aggregated_amount }
@@ -193,18 +197,29 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     const lines: string[] = [
       `## Spending Over Time (${result.group})`,
       `**Periods:** ${result.total_periods}`,
-      '',
-      '| Period | Fiscal Year | Cal Year | Total | Contracts | Grants | Direct Pmts | Loans | Other |',
-      '|:-------|:------------|:---------|:------|:----------|:-------|:------------|:------|:------|',
     ];
+
+    // Explain the FM token only when rows actually carry one, so the legend and
+    // the rendering can never disagree.
+    if (result.results.some((r) => r.time_period.month)) {
+      lines.push(
+        '',
+        '_FM = fiscal month: an ordinal within the fiscal year, where FM1 = October and FM12 = September._',
+      );
+    }
+
+    lines.push(
+      '',
+      '| Period | Fiscal Year | Total | Contracts | Grants | Direct Pmts | Loans | Other |',
+      '|:-------|:------------|:------|:----------|:-------|:------------|:------|:------|',
+    );
 
     for (const r of result.results) {
       const tp = r.time_period;
       let period = tp.fiscal_year ?? '';
       if (tp.quarter) period += ` Q${tp.quarter}`;
-      if (tp.month) period += ` M${tp.month}`;
+      if (tp.month) period += ` FM${tp.month}`;
       const fy = tp.fiscal_year ?? 'N/A';
-      const cy = tp.calendar_year ?? 'N/A';
       const amt =
         r.aggregated_amount !== undefined ? `$${r.aggregated_amount.toLocaleString()}` : 'N/A';
       const c = r.contracts !== undefined ? `$${r.contracts.toLocaleString()}` : 'N/A';
@@ -212,7 +227,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       const dp = r.direct_payments !== undefined ? `$${r.direct_payments.toLocaleString()}` : 'N/A';
       const l = r.loans !== undefined ? `$${r.loans.toLocaleString()}` : 'N/A';
       const o = r.other !== undefined ? `$${r.other.toLocaleString()}` : 'N/A';
-      lines.push(`| ${period} | ${fy} | ${cy} | ${amt} | ${c} | ${g} | ${dp} | ${l} | ${o} |`);
+      lines.push(`| ${period} | ${fy} | ${amt} | ${c} | ${g} | ${dp} | ${l} | ${o} |`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

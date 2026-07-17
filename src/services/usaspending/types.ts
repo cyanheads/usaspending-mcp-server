@@ -402,12 +402,18 @@ export interface RawSpendingOverTimeResult {
   Grant_Obligations?: number | null;
   Loan_Obligations?: number | null;
   Other_Obligations?: number | null;
+  /**
+   * Upstream returns exactly one shape per `group` mode, never a mix:
+   * `fiscal_year` → `{fiscal_year}`, `quarter` → `{fiscal_year, quarter}`,
+   * `month` → `{fiscal_year, month}` where `month` is a fiscal-year ordinal
+   * (1 = October). The only calendar-native mode, `calendar_year`, returns
+   * `{calendar_year}` alone with no month breakdown, and this server's `group`
+   * input does not expose it.
+   */
   time_period?: {
     fiscal_year?: string | null;
     quarter?: string | null;
     month?: string | null;
-    calendar_month?: string | null;
-    calendar_year?: string | null;
   } | null;
 }
 

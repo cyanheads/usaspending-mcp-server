@@ -38,6 +38,14 @@ const AWARD_SEARCH_FIELDS = [
  */
 const MAX_PAGE_OFFSET = 50_000;
 
+/**
+ * Earliest action date search/spending_by_award/ will accept. A start_date before
+ * this floor makes the endpoint return a raw HTML 500 with no explanation — unlike
+ * the sibling analytics endpoints, which reject the same input with a graceful 422
+ * naming the floor. Guarded client-side so the caller gets the boundary instead.
+ */
+const EARLIEST_SEARCH_DATE = '2007-10-01';
+
 export const searchAwardsTool = tool('usaspending_search_awards', {
   title: 'Search Federal Awards',
   description:
@@ -265,7 +273,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .array(z.string())
       .optional()
       .describe(
-        'Notices the USAspending API returned for this request — e.g. a supplied filter that was ignored because this endpoint does not support it, or the 2007-10-01 date-floor note. Present whenever the API returns any messages.',
+        'Notices the USAspending API returned with this response — e.g. a supplied filter it ignored because this endpoint does not support it. Every successful response also carries a standing advisory that search covers 2007-10-01 onward; that advisory is boilerplate, not a verdict on the dates requested. Present whenever the API returns any messages.',
       ),
     applied_keyword: z.string().optional().describe('Keyword filter applied to this search'),
     applied_agency_name: z.string().optional().describe('Awarding agency name filter applied'),
@@ -310,6 +318,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       retryable: false,
       recovery:
         'Continue past 50,000 results with keyset pagination: pass last_record_sort_value and last_record_unique_id from the most recent page_metadata instead of page.',
+    },
+    {
+      reason: 'date_before_earliest',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The resolved start date precedes the 2007-10-01 earliest date this endpoint can search.',
+      retryable: false,
+      recovery:
+        'Re-request with a start date of 2007-10-01 or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.',
     },
   ],
 
@@ -366,6 +382,22 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       f?.naics_codes && f.naics_codes.length > 0 ? f.naics_codes : input.naics_codes;
     const startDate = f?.time_period_start || input.time_period?.start_date;
     const endDate = f?.time_period_end || input.time_period?.end_date;
+
+    // A start_date before the floor makes this endpoint answer with a raw HTML 500,
+    // so fail fast with the boundary instead. Guarding here covers both input paths:
+    // the flat time_period and the nested filters.time_period_start resolve into
+    // startDate above. ISO 8601 dates compare correctly as strings.
+    if (startDate && startDate < EARLIEST_SEARCH_DATE) {
+      throw ctx.fail(
+        'date_before_earliest',
+        `Start date ${startDate} precedes ${EARLIEST_SEARCH_DATE}, the earliest date this endpoint can search.`,
+        {
+          recovery: {
+            hint: `Re-request with a start date of ${EARLIEST_SEARCH_DATE} or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.`,
+          },
+        },
+      );
+    }
 
     const filters: Record<string, unknown> = {};
     if (keywords?.length) filters.keywords = keywords;

@@ -3,6 +3,7 @@
  * @module tests/tools/search-awards.tool.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
@@ -577,6 +578,66 @@ describe('searchAwardsTool', () => {
     });
     const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ page: 25000, limit: 2 });
+    await searchAwardsTool.handler(input, ctx);
+    expect(mockSearchAwards).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a pre-2007-10-01 flat time_period before calling the API (#38)', async () => {
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+    const input = searchAwardsTool.input.parse({
+      time_period: { start_date: '2005-01-01', end_date: '2006-01-01' },
+      limit: 1,
+    });
+
+    // Upstream answers this with a raw HTML 500; the guard must pre-empt it with
+    // the declared reason and an actionable recovery hint.
+    await expect(searchAwardsTool.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: {
+        reason: 'date_before_earliest',
+        recovery: { hint: expect.stringContaining('2007-10-01') },
+      },
+    });
+    expect(mockSearchAwards).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pre-2007-10-01 nested filters.time_period_start too (#38)', async () => {
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+    const input = searchAwardsTool.input.parse({
+      filters: { time_period_start: '2005-01-01', time_period_end: '2006-01-01' },
+      limit: 1,
+    });
+
+    await expect(searchAwardsTool.handler(input, ctx)).rejects.toMatchObject({
+      data: { reason: 'date_before_earliest' },
+    });
+    expect(mockSearchAwards).not.toHaveBeenCalled();
+  });
+
+  it('rejects a range that merely starts before the floor (#38)', async () => {
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+    const input = searchAwardsTool.input.parse({
+      time_period: { start_date: '2007-09-30', end_date: '2007-12-01' },
+      limit: 1,
+    });
+
+    await expect(searchAwardsTool.handler(input, ctx)).rejects.toMatchObject({
+      data: { reason: 'date_before_earliest' },
+    });
+    expect(mockSearchAwards).not.toHaveBeenCalled();
+  });
+
+  it('allows a start date exactly on the 2007-10-01 floor (#38)', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1, limit: 1 },
+    });
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+    const input = searchAwardsTool.input.parse({
+      time_period: { start_date: '2007-10-01', end_date: '2007-12-01' },
+      limit: 1,
+    });
+
     await searchAwardsTool.handler(input, ctx);
     expect(mockSearchAwards).toHaveBeenCalledTimes(1);
   });

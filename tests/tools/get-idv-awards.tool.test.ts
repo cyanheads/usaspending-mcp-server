@@ -83,6 +83,47 @@ describe('getIdvAwardsTool', () => {
     expect(enrichment.notice).toBeDefined();
   });
 
+  it('discloses continuation on a full page even when upstream hasNext is false', async () => {
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page: 1,
+      hasNext: false, // upstream (possibly stale) reports no more
+      hasPrevious: false,
+      results: Array.from({ length: 2 }, (_, i) => ({
+        generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
+      })),
+    });
+
+    const ctx = createMockContext();
+    const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_STALE_000', limit: 2 });
+    const result = await getIdvAwardsTool.handler(input, ctx);
+
+    // A full page must disclose possible continuation despite hasNext:false
+    expect(result.page_metadata.has_next).toBe(true);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.has_next_page).toBe(true);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.shown).toBe(2);
+    expect(enrichment.cap).toBe(2);
+  });
+
+  it('does not disclose continuation on a short final page', async () => {
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page: 2,
+      hasNext: false,
+      hasPrevious: true,
+      results: [{ generated_unique_award_id: 'CONT_AWD_LAST_001' }],
+    });
+
+    const ctx = createMockContext();
+    const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_END_000', limit: 2, page: 2 });
+    const result = await getIdvAwardsTool.handler(input, ctx);
+
+    expect(result.page_metadata.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.has_next_page).toBe(false);
+    expect(enrichment.truncated).toBeUndefined();
+  });
+
   it('populates empty-results notice for IDV with no children of requested type', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
       page: 1,

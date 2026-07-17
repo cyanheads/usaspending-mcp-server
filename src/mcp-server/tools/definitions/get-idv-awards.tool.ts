@@ -80,7 +80,11 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       .describe('Child awards placed under this IDV'),
     page_metadata: z
       .object({
-        has_next: z.boolean().describe('Whether there are more pages of results'),
+        has_next: z
+          .boolean()
+          .describe(
+            'Whether more child awards may remain — true on a full page even when the upstream flag reports none (this endpoint returns no total). A short or empty page marks the end.',
+          ),
         has_previous: z.boolean().describe('Whether there are previous pages'),
         page: z.number().describe('Current page number'),
         limit: z.number().describe('Results per page'),
@@ -94,11 +98,15 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
   enrichment: {
     parent_award_id: z.string().describe('Parent IDV award ID whose children were listed'),
     current_page: z.number().describe('Current page returned'),
-    has_next_page: z.boolean().describe('Whether there are more pages of child awards'),
+    has_next_page: z
+      .boolean()
+      .describe(
+        'Whether more pages of child awards may remain — set on a full page even when the upstream flag reports none.',
+      ),
     truncated: z
       .boolean()
       .optional()
-      .describe('True when more child awards remain beyond this page.'),
+      .describe('True when this page was full and more child awards may remain beyond it.'),
     shown: z.number().optional().describe('Number of child awards returned on this page.'),
     cap: z.number().optional().describe('The per-page limit that was applied.'),
     notice: z
@@ -169,9 +177,14 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       };
     });
 
-    const hasNext = data.hasNext ?? false;
+    const rawHasNext = data.hasNext ?? false;
     const hasPrevious = data.hasPrevious ?? false;
     const currentPage = typeof data.page === 'number' ? data.page : input.page;
+    // idvs/awards page_metadata omits a total and can report a stale hasNext, so a full
+    // page must disclose possible continuation even when upstream hasNext is false. A
+    // short or empty page marks the end.
+    const pageIsFull = results.length >= input.limit;
+    const hasNext = rawHasNext || pageIsFull;
 
     ctx.enrich({
       parent_award_id: input.award_id,
@@ -184,11 +197,12 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         `No child awards of type "${input.type}" found for IDV "${input.award_id}". ` +
           `Verify the award_id is a valid IDV and try type="child_idvs" if looking for sub-IDVs.`,
       );
-    } else if (hasNext && results.length >= input.limit) {
+    } else if (pageIsFull) {
       ctx.enrich.truncated({
         shown: results.length,
         cap: input.limit,
-        guidance: 'More child awards remain. Request the next page or raise limit (max 100).',
+        guidance:
+          'A full page may have more child awards. Request the next page to continue; an empty or short page marks the end. Raise limit up to 100 for fewer round-trips.',
       });
     }
 

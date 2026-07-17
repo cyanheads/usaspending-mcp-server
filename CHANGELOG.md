@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.4](changelog/0.2.x/0.2.4.md) — 2026-07-16
+
+Three usaspending_disaster_spending fixes — geography returns real obligation amounts plus population/per-capita (#18), breakdown pagination advances pages (#19), and the unreachable no_data contract is removed (#35) — atop @cyanheads/mcp-ts-core ^0.10.14 adoption with Socket install-time scanning.
+
 ## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-06-20
 
 @cyanheads/mcp-ts-core ^0.10.9 maintenance: new check-dependency-specifiers devcheck step (floating latest/* specifier guard), plugin-manifest packaging checks gated by packaging.pluginManifests, fresh-scaffold + worktree-deletion devcheck guards, re-synced skills

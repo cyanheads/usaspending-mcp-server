@@ -176,4 +176,16 @@ describe('searchRecipientsTool', () => {
     expect(text).toContain('ACMEAAAAAAAA');
     expect(text).toContain('Page:');
   });
+
+  it('renders the item total as a labeled count, not a page count (issue #34)', () => {
+    // total=200 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
+    const output = {
+      results: [{ id: 'abc123-P', name: 'Acme Corporation', amount: 1_234 }],
+      page_metadata: { total: 200, page: 1, has_next: true, limit: 2 },
+    };
+
+    const text = (searchRecipientsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Total items:** ~200');
+    expect(text).not.toContain(' of ~');
+  });
 });

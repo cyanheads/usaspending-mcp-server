@@ -521,4 +521,18 @@ describe('disasterSpendingTool', () => {
     expect(text).toContain('4,225'); // per_capita rendered
     expect(text).toContain('167,052,572,147'); // aggregated_amount (from `amount`)
   });
+
+  it('renders the item total as a labeled count, not a page count (issue #34)', () => {
+    // total=38 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
+    const output = {
+      dimension: 'agency',
+      spending_type: 'award',
+      results: [{ id: '517', code: '097', name: 'Department of Defense', obligation: 1_000 }],
+      page_metadata: { has_next: true, page: 1, total: 38, limit: 2 },
+    };
+
+    const text = (disasterSpendingTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Total items:** ~38');
+    expect(text).not.toContain(' of ~');
+  });
 });

@@ -133,4 +133,17 @@ describe('getAwardTransactionsTool', () => {
     expect(text).toContain('100,000');
     expect(text).toContain('2023-06-01');
   });
+
+  it('renders the item total as a labeled count, not a page count (issue #34)', () => {
+    // total=48 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
+    const output = {
+      award_id: 'CONT_AWD_TEST',
+      results: [{ id: 42, modification_number: 'M0002', action_date: '2023-06-01' }],
+      page_metadata: { has_next: true, page: 1, total: 48, limit: 8 },
+    };
+
+    const text = (getAwardTransactionsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Total items:** ~48');
+    expect(text).not.toContain(' of ~');
+  });
 });

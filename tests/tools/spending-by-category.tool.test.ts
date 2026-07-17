@@ -135,4 +135,17 @@ describe('spendingByCategoryTool', () => {
     expect(text).toContain('2,000,000,000');
     expect(text).toContain('Computer Systems Design Services');
   });
+
+  it('renders the item total as a labeled count, not a page count (issue #34)', () => {
+    // total=50 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
+    const output = {
+      category: 'naics',
+      results: [{ id: '541512', code: '541512', name: 'Computer Systems Design', amount: 1_234 }],
+      page_metadata: { has_next: true, page: 1, total: 50, limit: 5 },
+    };
+
+    const text = (spendingByCategoryTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Total items:** ~50');
+    expect(text).not.toContain(' of ~');
+  });
 });

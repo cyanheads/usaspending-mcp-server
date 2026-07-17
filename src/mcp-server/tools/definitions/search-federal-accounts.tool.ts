@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatPaginationLine } from './pagination.js';
 
 export const searchFederalAccountsTool = tool('usaspending_search_federal_accounts', {
   title: 'Search Federal Accounts',
@@ -176,9 +177,13 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
 
   format: (result) => {
     const lines: string[] = ['## Federal Account Search Results'];
-    lines.push(
-      `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page}${result.page_metadata.count !== undefined ? ` of ~${result.page_metadata.count}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
-    );
+    const paginationLine = formatPaginationLine({
+      page: result.page_metadata.page,
+      limit: result.page_metadata.limit,
+      has_next: result.page_metadata.has_next,
+      total: result.page_metadata.count,
+    });
+    lines.push(`\n**Results:** ${result.results.length} | ${paginationLine}`);
     for (const a of result.results) {
       lines.push('');
       lines.push(`### ${a.account_name ?? a.account_number ?? 'Unknown'}`);

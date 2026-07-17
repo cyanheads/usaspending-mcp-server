@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { buildFilters } from './filters.js';
+import { formatPaginationLine } from './pagination.js';
 
 export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
   title: 'Spending by Category',
@@ -171,7 +172,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
   format: (result) => {
     const lines: string[] = [
       `## Spending by Category: ${result.category}`,
-      `**Page:** ${result.page_metadata.page}${result.page_metadata.total !== undefined ? ` of ~${result.page_metadata.total}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
+      formatPaginationLine(result.page_metadata),
     ];
     if (result.results.length > 0) {
       lines.push('');

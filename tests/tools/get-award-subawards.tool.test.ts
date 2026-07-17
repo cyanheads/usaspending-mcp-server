@@ -125,4 +125,17 @@ describe('getAwardSubawardsTool', () => {
     expect(text).toContain('50,000');
     expect(text).toContain('SubCo LLC');
   });
+
+  it('renders the item total as a labeled count, not a page count (issue #34)', () => {
+    // total=45 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
+    const output = {
+      award_id: 'CONT_AWD_PRIME',
+      results: [{ id: 1, subaward_number: 'SUB-001', recipient_name: 'SubCo LLC' }],
+      page_metadata: { has_next: true, page: 1, total: 45, limit: 5 },
+    };
+
+    const text = (getAwardSubawardsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Total items:** ~45');
+    expect(text).not.toContain(' of ~');
+  });
 });

@@ -130,4 +130,16 @@ describe('searchFederalAccountsTool', () => {
     expect(text).toContain('DOD');
     expect(text).toContain('257');
   });
+
+  it('renders the item total as a labeled count, not a page count (issue #34)', () => {
+    // count=200 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
+    const output = {
+      results: [{ account_number: '012-3456', account_name: 'Sparse Fund' }],
+      page_metadata: { count: 200, page: 1, has_next: true, limit: 2 },
+    };
+
+    const text = (searchFederalAccountsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Total items:** ~200');
+    expect(text).not.toContain(' of ~');
+  });
 });

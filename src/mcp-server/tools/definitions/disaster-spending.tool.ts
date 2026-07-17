@@ -8,6 +8,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { RawDisasterResult, RawPageMetadata } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatPaginationLine } from './pagination.js';
 
 export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   title: 'Disaster and Emergency Spending',
@@ -351,10 +352,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }
 
     if (result.page_metadata) {
-      const pm = result.page_metadata;
-      lines.push(
-        `**Page:** ${pm.page}${pm.total !== undefined ? ` of ~${pm.total}` : ''} | **Per page:** ${pm.limit} | **Has next:** ${pm.has_next ? 'Yes' : 'No'}`,
-      );
+      lines.push(formatPaginationLine(result.page_metadata));
     }
 
     if (result.results.length === 0) {

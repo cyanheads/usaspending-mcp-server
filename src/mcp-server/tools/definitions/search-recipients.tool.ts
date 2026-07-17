@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatPaginationLine } from './pagination.js';
 
 export const searchRecipientsTool = tool('usaspending_search_recipients', {
   title: 'Search Award Recipients',
@@ -162,7 +163,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
   format: (result) => {
     const lines: string[] = ['## Recipient Search Results'];
     lines.push(
-      `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page}${result.page_metadata.total !== undefined ? ` of ~${result.page_metadata.total.toLocaleString()}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
+      `\n**Results:** ${result.results.length} | ${formatPaginationLine(result.page_metadata)}`,
     );
     for (const r of result.results) {
       lines.push('');

@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatPaginationLine } from './pagination.js';
 
 export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
   title: 'Get Award Subawards',
@@ -174,7 +175,7 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
   format: (result) => {
     const lines: string[] = [
       `## Subawards for Award: ${result.award_id}`,
-      `**Page:** ${result.page_metadata.page}${result.page_metadata.total !== undefined ? ` of ~${result.page_metadata.total} total` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
+      formatPaginationLine(result.page_metadata),
     ];
     for (const s of result.results) {
       lines.push('');

@@ -4,7 +4,7 @@
  */
 
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
 
 const mockGetDisasterOverview = vi.fn();
@@ -24,6 +24,12 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('disasterSpendingTool', () => {
+  // Mocks are module-level; clear call history between tests so per-test call
+  // indexing (mock.calls[0], mock.calls[1]) reflects only the current test.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('returns overview data for dimension=overview', async () => {
     mockGetDisasterOverview.mockResolvedValueOnce({
       total_budget_authority: 2_000_000_000_000,
@@ -111,25 +117,73 @@ describe('disasterSpendingTool', () => {
     expect(mockGetDisasterByAgency).toHaveBeenCalledWith('total', expect.any(Object), ctx);
   });
 
-  it('returns geography breakdown for dimension=geography', async () => {
+  it('returns geography breakdown mapping the real amount field (issue #18)', async () => {
+    // The disaster geography endpoint returns `amount` (not `aggregated_amount`) plus
+    // population, per_capita, and award_count. Shape confirmed live against the v2 API.
     mockGetDisasterByGeography.mockResolvedValueOnce({
+      geo_layer: 'state',
+      scope: 'place_of_performance',
+      spending_type: 'obligation',
       results: [
-        { shape_code: '53', display_name: 'Washington', aggregated_amount: 2_000_000_000 },
-        { shape_code: '06', display_name: 'California', aggregated_amount: 15_000_000_000 },
+        {
+          shape_code: 'CA',
+          display_name: 'California',
+          amount: 167_052_572_147.29,
+          population: 39_538_223,
+          per_capita: 4225.09,
+          award_count: 2_655_932,
+        },
+        {
+          shape_code: 'WA',
+          display_name: 'Washington',
+          amount: 20_000_000_000,
+          population: 7_705_281,
+          per_capita: 2595.6,
+          award_count: 500_000,
+        },
       ],
     });
 
     const ctx = createMockContext();
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
-      filters: { def_codes: ['L', 'M'] },
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
     expect(result.dimension).toBe('geography');
+    expect(result.spending_type).toBe('obligation');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].shape_code).toBe('53');
-    expect(result.results[0].display_name).toBe('Washington');
+    // `amount` is surfaced as aggregated_amount; the phantom aggregated_amount is gone.
+    expect(result.results[0].aggregated_amount).toBe(167_052_572_147.29);
+    expect(result.results[0].population).toBe(39_538_223);
+    expect(result.results[0].per_capita).toBe(4225.09);
+    expect(result.results[0].award_count).toBe(2_655_932);
+    expect(result.results[0].shape_code).toBe('CA');
+    expect(result.results[0].display_name).toBe('California');
+
+    // Without spending_type in the body the endpoint returns HTTP 422 — assert it is sent.
+    const geoBody = mockGetDisasterByGeography.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(geoBody.spending_type).toBe('obligation');
+    expect(geoBody.scope).toBe('place_of_performance');
+    expect(geoBody.geo_layer).toBe('state');
+  });
+
+  it('ignores the phantom aggregated_amount field on geography rows (issue #18)', async () => {
+    // A row carrying only the old (non-existent) aggregated_amount must not populate output —
+    // the mapping reads `amount`, so a missing `amount` yields no value.
+    mockGetDisasterByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: 'CA', display_name: 'California', aggregated_amount: 999 }],
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'geography',
+      filters: { def_codes: ['L'] },
+    });
+    const result = await disasterSpendingTool.handler(input, ctx);
+
+    expect(result.results[0].aggregated_amount).toBeUndefined();
   });
 
   it('throws ValidationError when def_codes is omitted for non-overview dimension', async () => {
@@ -258,9 +312,18 @@ describe('disasterSpendingTool', () => {
     );
   });
 
-  it('uses county geo_layer filter for geography dimension', async () => {
+  it('uses county geo_layer filter and sends obligation spending_type (issue #18)', async () => {
     mockGetDisasterByGeography.mockResolvedValueOnce({
-      results: [{ shape_code: '53033', display_name: 'King County', aggregated_amount: 5_000_000 }],
+      results: [
+        {
+          shape_code: '06037',
+          display_name: 'Los Angeles',
+          amount: 40_408_945_418.74,
+          population: 10_014_009,
+          per_capita: 4035.24,
+          award_count: 970_642,
+        },
+      ],
     });
 
     const ctx = createMockContext();
@@ -270,10 +333,11 @@ describe('disasterSpendingTool', () => {
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
-    expect(result.results[0].shape_code).toBe('53033');
-    expect(result.results[0].display_name).toBe('King County');
+    expect(result.results[0].shape_code).toBe('06037');
+    expect(result.results[0].display_name).toBe('Los Angeles');
+    expect(result.results[0].aggregated_amount).toBe(40_408_945_418.74);
     expect(mockGetDisasterByGeography).toHaveBeenCalledWith(
-      expect.objectContaining({ geo_layer: 'county' }),
+      expect.objectContaining({ geo_layer: 'county', spending_type: 'obligation' }),
       ctx,
     );
   });
@@ -305,5 +369,156 @@ describe('disasterSpendingTool', () => {
     expect(text).toContain('097');
     expect(text).toContain('200,000,000,000');
     expect(text).toContain('Page:');
+  });
+
+  it('nests pagination under a pagination key for agency (issue #19)', async () => {
+    mockGetDisasterByAgency.mockResolvedValueOnce({
+      results: [{ id: '882', obligation: 1_000, outlay: 900, award_count: 3 }],
+      page_metadata: { hasNext: true, page: 2, total: 38, limit: 2 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      spending_type: 'award',
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
+      limit: 2,
+      page: 2,
+    });
+    await disasterSpendingTool.handler(input, ctx);
+
+    // Top-level {limit,page} are ignored upstream; the fix nests them under `pagination`.
+    const body = mockGetDisasterByAgency.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body.pagination).toEqual({ page: 2, limit: 2 });
+    expect(body.limit).toBeUndefined();
+    expect(body.page).toBeUndefined();
+  });
+
+  it('nests pagination under a pagination key for cfda (issue #19)', async () => {
+    mockGetDisasterByCfda.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: true, page: 3, total: 387, limit: 5 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'cfda',
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
+      limit: 5,
+      page: 3,
+    });
+    await disasterSpendingTool.handler(input, ctx);
+
+    const body = mockGetDisasterByCfda.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body.pagination).toEqual({ page: 3, limit: 5 });
+    expect(body.limit).toBeUndefined();
+    expect(body.page).toBeUndefined();
+  });
+
+  it('nests pagination under a pagination key for recipient (issue #19)', async () => {
+    mockGetDisasterByRecipient.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: true, page: 1, total: 10_000, limit: 2 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'recipient',
+      spending_type: 'award',
+      filters: { def_codes: ['N'] },
+      limit: 2,
+      page: 1,
+    });
+    await disasterSpendingTool.handler(input, ctx);
+
+    const body = mockGetDisasterByRecipient.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body.pagination).toEqual({ page: 1, limit: 2 });
+    expect(body.limit).toBeUndefined();
+    expect(body.page).toBeUndefined();
+  });
+
+  it('advances to distinct rows when the page changes (issue #19)', async () => {
+    // Live API confirmed page 1 and page 2 return different row ids; assert the page number
+    // flows through to the nested pagination body so upstream can advance.
+    mockGetDisasterByAgency
+      .mockResolvedValueOnce({
+        results: [{ id: '882' }, { id: '95' }],
+        page_metadata: { hasNext: true, page: 1, total: 38, limit: 2 },
+      })
+      .mockResolvedValueOnce({
+        results: [{ id: '1132' }, { id: '11' }],
+        page_metadata: { hasNext: true, page: 2, total: 38, limit: 2 },
+      });
+
+    const base = {
+      dimension: 'agency' as const,
+      spending_type: 'award' as const,
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
+      limit: 2,
+    };
+    const page1 = await disasterSpendingTool.handler(
+      disasterSpendingTool.input.parse({ ...base, page: 1 }),
+      createMockContext(),
+    );
+    const page2 = await disasterSpendingTool.handler(
+      disasterSpendingTool.input.parse({ ...base, page: 2 }),
+      createMockContext(),
+    );
+
+    const call1Body = mockGetDisasterByAgency.mock.calls[0]?.[1] as Record<string, unknown>;
+    const call2Body = mockGetDisasterByAgency.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(call1Body.pagination).toEqual({ page: 1, limit: 2 });
+    expect(call2Body.pagination).toEqual({ page: 2, limit: 2 });
+    const ids1 = page1.results.map((r) => r.id);
+    const ids2 = page2.results.map((r) => r.id);
+    expect(ids1).toEqual(['882', '95']);
+    expect(ids2).toEqual(['1132', '11']);
+    expect(ids1).not.toEqual(ids2);
+  });
+
+  it('does not declare the unreachable no_data error contract (issue #35)', () => {
+    const reasons = (disasterSpendingTool.errors ?? []).map((e) => e.reason);
+    expect(reasons).not.toContain('no_data');
+    // The valid, reachable contract stays.
+    expect(reasons).toContain('api_unavailable');
+  });
+
+  it('empty-results message does not tell callers to remove required DEF codes (issue #35)', () => {
+    const output = {
+      dimension: 'agency',
+      spending_type: 'award',
+      results: [],
+      page_metadata: { has_next: false, page: 1, total: 0, limit: 10 },
+    };
+
+    const blocks = disasterSpendingTool.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).not.toMatch(/remov(e|ing) DEF/i);
+    expect(text.toLowerCase()).toContain('no data found');
+  });
+
+  it('formats geography rows with population and per_capita columns (issue #18)', () => {
+    const output = {
+      dimension: 'geography',
+      spending_type: 'obligation',
+      results: [
+        {
+          shape_code: 'CA',
+          display_name: 'California',
+          aggregated_amount: 167_052_572_147,
+          population: 39_538_223,
+          per_capita: 4225,
+          award_count: 2_655_932,
+        },
+      ],
+      page_metadata: { has_next: false, page: 1, total: 1, limit: 1 },
+    };
+
+    const blocks = disasterSpendingTool.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('California');
+    expect(text).toContain('39,538,223'); // population rendered
+    expect(text).toContain('4,225'); // per_capita rendered
+    expect(text).toContain('167,052,572,147'); // aggregated_amount (from `amount`)
   });
 });

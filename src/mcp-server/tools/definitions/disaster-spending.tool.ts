@@ -25,7 +25,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .enum(['award', 'total'])
       .default('award')
       .describe(
-        'Data type: award (award-level obligations and outlays) or total (includes direct non-award spending). Applies to agency and recipient dimensions only.',
+        'Data type for the agency and recipient dimensions: award (award-level obligations and outlays) or total (includes direct non-award spending). Ignored for cfda and overview; the geography dimension is not user-controllable and always reports obligation-based amounts.',
       ),
     filters: z
       .object({
@@ -51,7 +51,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .min(1)
       .max(100)
       .default(10)
-      .describe('Maximum results per page (1–100, not used for overview dimension)'),
+      .describe(
+        'Maximum results per page (1–100). Applies to the agency, cfda, and recipient dimensions; ignored for overview and geography, which are not paginated.',
+      ),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -68,7 +70,11 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
   output: z.object({
     dimension: z.string().describe('Breakdown dimension returned'),
-    spending_type: z.string().describe('Data type returned (award or total)'),
+    spending_type: z
+      .string()
+      .describe(
+        'Data type returned — award/total for agency, cfda, and recipient; obligation for geography; spending for overview',
+      ),
     overview: z
       .object({
         total_budget_authority: z
@@ -119,7 +125,15 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
             aggregated_amount: z
               .number()
               .optional()
-              .describe('Aggregated amount in USD (geography dimension)'),
+              .describe('Obligation-based spending amount in USD (geography dimension)'),
+            population: z
+              .number()
+              .optional()
+              .describe('Population of the geographic area (geography dimension)'),
+            per_capita: z
+              .number()
+              .optional()
+              .describe('Obligation-based spending per capita in USD (geography dimension)'),
           })
           .describe(
             'Disaster spending breakdown entry by dimension (agency, CFDA, recipient, or geography)',
@@ -138,13 +152,6 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   }),
 
   errors: [
-    {
-      reason: 'no_data',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No disaster spending data found for the specified filters.',
-      recovery:
-        'Remove DEF code filters to include all emergency funds, or try a different dimension.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -220,7 +227,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       };
     }
 
-    const paginationBody = { ...baseBody, limit: input.limit, page: input.page };
+    // Disaster breakdown endpoints require pagination nested under a `pagination` key;
+    // top-level limit/page are silently ignored (upstream always returns its default page).
+    const paginationBody = { ...baseBody, pagination: { page: input.page, limit: input.limit } };
 
     let rawResults: { results: RawDisasterResult[]; page_metadata: RawPageMetadata };
 
@@ -234,20 +243,26 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       const data = await svc.getDisasterByRecipient(input.spending_type, paginationBody, ctx);
       rawResults = { results: data.results ?? [], page_metadata: data.page_metadata ?? {} };
     } else {
-      // geography
+      // geography — this endpoint requires a spending_type from a vocabulary distinct from
+      // the breakdown dimensions (obligation | outlay | face_value_of_loan); omitting it
+      // returns HTTP 422. It reports totals across the whole result set in a single page
+      // (no pagination). Default to obligation — total obligated dollars, the comparable
+      // default measure — and report that as the effective spending_type.
+      const geoSpendingType = 'obligation';
       const geoBody = {
         ...baseBody,
         geo_layer: input.filters?.geo_layer ?? 'state',
         scope: 'place_of_performance',
+        spending_type: geoSpendingType,
       };
       const data = await svc.getDisasterByGeography(geoBody, ctx);
       const geoResults = (data.results ?? []).map((r) => ({
-        shape_code: r.shape_code ?? undefined,
-        display_name: r.display_name ?? undefined,
-        aggregated_amount:
-          typeof r.aggregated_amount === 'number' ? r.aggregated_amount : undefined,
-        population: typeof r.population === 'number' ? r.population : undefined,
-        per_capita: typeof r.per_capita === 'number' ? r.per_capita : undefined,
+        ...(r.shape_code ? { shape_code: r.shape_code } : {}),
+        ...(r.display_name ? { display_name: r.display_name } : {}),
+        ...(typeof r.amount === 'number' ? { aggregated_amount: r.amount } : {}),
+        ...(typeof r.award_count === 'number' ? { award_count: r.award_count } : {}),
+        ...(typeof r.population === 'number' ? { population: r.population } : {}),
+        ...(typeof r.per_capita === 'number' ? { per_capita: r.per_capita } : {}),
       }));
       ctx.enrich.total(geoResults.length);
       ctx.enrich({
@@ -257,13 +272,13 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       });
       return {
         dimension: 'geography',
-        spending_type: input.spending_type,
+        spending_type: geoSpendingType,
         results: geoResults,
         page_metadata: {
           has_next: false,
           page: 1,
           total: geoResults.length,
-          limit: input.limit,
+          limit: geoResults.length,
         },
       };
     }
@@ -345,16 +360,16 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     if (result.results.length === 0) {
       if (!result.overview) {
         lines.push(
-          '\n> No data found. Try removing DEF code filters or selecting a different dimension.',
+          '\n> No data found for the specified DEF codes and dimension. Try different DEF codes or another breakdown dimension — def_codes is required for all non-overview dimensions and cannot be removed.',
         );
       }
     } else {
       lines.push('');
       lines.push(
-        '| Name/Display | ID | Code | Shape | Obligation | Outlay | Aggregated | Loans | Awards |',
+        '| Name/Display | ID | Code | Shape | Obligation | Outlay | Aggregated | Population | Per Capita | Loans | Awards |',
       );
       lines.push(
-        '|:-------------|:---|:-----|:------|:-----------|:-------|:-----------|:------|:-------|',
+        '|:-------------|:---|:-----|:------|:-----------|:-------|:-----------|:-----------|:-----------|:------|:-------|',
       );
       for (const r of result.results) {
         const label =
@@ -368,11 +383,13 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         const outlay = r.outlay !== undefined ? `$${r.outlay.toLocaleString()}` : 'N/A';
         const agg =
           r.aggregated_amount !== undefined ? `$${r.aggregated_amount.toLocaleString()}` : 'N/A';
+        const population = r.population !== undefined ? r.population.toLocaleString() : 'N/A';
+        const perCapita = r.per_capita !== undefined ? `$${r.per_capita.toLocaleString()}` : 'N/A';
         const loans =
           r.face_value_of_loan !== undefined ? `$${r.face_value_of_loan.toLocaleString()}` : 'N/A';
         const awards = r.award_count !== undefined ? String(r.award_count) : 'N/A';
         lines.push(
-          `| ${label} | ${id} | ${code} | ${shape} | ${oblig} | ${outlay} | ${agg} | ${loans} | ${awards} |`,
+          `| ${label} | ${id} | ${code} | ${shape} | ${oblig} | ${outlay} | ${agg} | ${population} | ${perCapita} | ${loans} | ${awards} |`,
         );
       }
     }

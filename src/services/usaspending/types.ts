@@ -442,7 +442,8 @@ export interface RawDisasterResult {
 
 /** Raw disaster geography result */
 export interface RawDisasterGeoResult {
-  aggregated_amount?: number | null;
+  amount?: number | null;
+  award_count?: number | null;
   display_name?: string | null;
   per_capita?: number | null;
   population?: number | null;

@@ -140,11 +140,17 @@ export class USASpendingService {
       sort: string;
       order?: string;
       limit: number;
-      page: number;
+      page?: number;
+      last_record_sort_value?: string;
+      last_record_unique_id?: number;
       subawards?: boolean;
     },
     ctx: Context,
-  ): Promise<{ results: RawAwardSummary[]; page_metadata: RawPageMetadata }> {
+  ): Promise<{
+    results: RawAwardSummary[];
+    page_metadata: RawPageMetadata;
+    messages?: string[];
+  }> {
     ctx.log.debug('searchAwards', { sort: params.sort, limit: params.limit, page: params.page });
     return this.post('search/spending_by_award/', params, ctx);
   }

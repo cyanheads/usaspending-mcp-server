@@ -169,7 +169,7 @@ Key filter fields for `usaspending_search_awards`, `usaspending_spending_by_cate
 | `time_period` | `{start_date, end_date}[]` | ISO 8601 dates; earliest 2007-10-01 via search API |
 | `agencies` | `{type, tier, name}[]` | `type`: `awarding` or `funding`; `tier`: `toptier` or `subtier` |
 | `recipient_search_text` | `string[]` | Recipient name search within filter |
-| `recipient_id` | `string` | Exact recipient hash ID |
+| `recipient_id` | `string` | Exact recipient hash ID. Not honored by `usaspending_search_awards` — `spending_by_award` silently ignores it (returns it in the response `messages` as unused); filter by recipient name via `recipient_search_text` there |
 | `naics_codes` | `{require, exclude}` | NAICS code arrays |
 | `psc_codes` | `{require, exclude}` | PSC code arrays |
 | `place_of_performance_locations` | `{country, state, county, city}[]` | Place of performance filter |
@@ -177,7 +177,7 @@ Key filter fields for `usaspending_search_awards`, `usaspending_spending_by_cate
 
 ### Pagination
 
-Search and list endpoints return `page_metadata.hasNext`, `page_metadata.page`, and `page_metadata.total`. Use `limit` (max 100) and `page` parameters. After-cursor pagination is also available for large result sets via `last_record_unique_id` + `last_record_sort_value` for keyset pagination.
+Search and list endpoints return `page_metadata.hasNext` and `page_metadata.page`. Use `limit` (max 100) and `page` parameters. `usaspending_search_awards` (`spending_by_award`) returns no total count; its `page_metadata` instead carries `last_record_unique_id` + `last_record_sort_value` on every page. Page-number paging caps at a 50,000-result offset (`page` × `limit`); past that boundary, continue with keyset (after-cursor) pagination by passing those two cursor values back — page is omitted when the cursor is supplied.
 
 ### Spending level parameter
 

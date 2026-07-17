@@ -42,6 +42,16 @@ export interface RawAwardSummary {
 export interface RawPageMetadata {
   hasNext?: boolean;
   hasPrevious?: boolean;
+  /**
+   * Keyset-pagination cursor (spending_by_award). A real sort token on interior pages;
+   * the literal string "None" on the final page (hasNext: false).
+   */
+  last_record_sort_value?: string | null;
+  /**
+   * Keyset-pagination cursor (spending_by_award). Numeric on interior pages; null on the
+   * final page (hasNext: false).
+   */
+  last_record_unique_id?: number | null;
   limit?: number;
   page?: number;
   total?: number;

@@ -1,6 +1,6 @@
 {
   "name": "usaspending-mcp-server",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP.",
   "author": {
     "name": "cyanheads",

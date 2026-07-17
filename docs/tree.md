@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-07-17 11:09:12
+Generated on: 2026-07-17 11:46:06
 
 ```text
 usaspending-mcp-server/
@@ -23,6 +23,7 @@ usaspending-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -138,9 +139,11 @@ usaspending-mcp-server/
 │   │           ├── disaster-spending.tool.ts
 │   │           ├── filters.ts
 │   │           ├── get-agency.tool.ts
+│   │           ├── get-award-federal-accounts.tool.ts
 │   │           ├── get-award-subawards.tool.ts
 │   │           ├── get-award-transactions.tool.ts
 │   │           ├── get-award.tool.ts
+│   │           ├── get-federal-account-breakdown.tool.ts
 │   │           ├── get-federal-account.tool.ts
 │   │           ├── get-idv-awards.tool.ts
 │   │           ├── get-recipient.tool.ts
@@ -167,9 +170,11 @@ usaspending-mcp-server/
 │   │   ├── autocomplete.tool.test.ts
 │   │   ├── disaster-spending.tool.test.ts
 │   │   ├── get-agency.tool.test.ts
+│   │   ├── get-award-federal-accounts.tool.test.ts
 │   │   ├── get-award-subawards.tool.test.ts
 │   │   ├── get-award-transactions.tool.test.ts
 │   │   ├── get-award.tool.test.ts
+│   │   ├── get-federal-account-breakdown.tool.test.ts
 │   │   ├── get-federal-account.tool.test.ts
 │   │   ├── get-idv-awards.tool.test.ts
 │   │   ├── get-recipient.tool.test.ts

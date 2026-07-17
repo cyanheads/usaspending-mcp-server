@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-07-17
+
+Federal account drill-down: usaspending_get_award_federal_accounts links an award to the accounts that funded it, usaspending_get_federal_account_breakdown adds the program-activity and object-class axes, and usaspending_get_federal_account now maps its per-Treasury-Account-Symbol children.
+
 ## [0.2.9](changelog/0.2.x/0.2.9.md) — 2026-07-17
 
 Declared not-found contracts now fire on upstream misses for usaspending_get_award, usaspending_get_recipient, usaspending_get_agency, and usaspending_get_federal_account; usaspending_search_awards guards the 2007-10-01 date floor client-side; usaspending_spending_over_time relabels month as a fiscal-year ordinal.

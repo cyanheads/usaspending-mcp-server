@@ -10,7 +10,7 @@ import { getUSASpendingService } from '@/services/usaspending/usaspending-servic
 export const getFederalAccountTool = tool('usaspending_get_federal_account', {
   title: 'Get Federal Account',
   description:
-    "Fetch a federal account's budget data: total obligations, gross outlays, and budgetary resources. Federal accounts connect appropriations law to actual agency spending. Account codes appear in usaspending_get_award account_obligations_by_defc field and are formatted as AGENCY-MAIN (e.g., 097-0100 for DoD Operation and Maintenance). Returns account metadata and current fiscal year financial totals.",
+    "Fetch a federal account's budget data: total obligations, gross outlays, and budgetary resources. Federal accounts connect appropriations law to actual agency spending. Account codes come from usaspending_search_federal_accounts (its account_number output field) and are formatted as AGENCY-MAIN (e.g., 097-0100 for DoD Operation and Maintenance). Returns account metadata and current fiscal year financial totals.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -18,7 +18,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       .string()
       .min(1)
       .describe(
-        'Federal account code in AGENCY-MAIN format (e.g., 097-0100). Appears in award funding details from usaspending_get_award.',
+        'Federal account code in AGENCY-MAIN format (e.g., 097-0100). Returned as account_number by usaspending_search_federal_accounts.',
       ),
   }),
 
@@ -41,7 +41,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       code: JsonRpcErrorCode.NotFound,
       when: 'No federal account found for the given account code.',
       recovery:
-        'Account codes come from usaspending_get_award account_obligations_by_defc field. Verify the AGENCY-MAIN format (e.g., 097-0100).',
+        'Look the code up with usaspending_search_federal_accounts and pass its account_number value. Verify the AGENCY-MAIN format (e.g., 097-0100).',
     },
     {
       reason: 'api_unavailable',
@@ -61,7 +61,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
     if (!account?.account_title) {
       throw ctx.fail('account_not_found', `Federal account not found: ${input.account_code}`, {
         recovery: {
-          hint: 'Use account codes from usaspending_get_award account_obligations_by_defc. Format: AGENCY-MAIN (e.g., 097-0100).',
+          hint: 'Search for the account with usaspending_search_federal_accounts and pass the account_number it returns. Format: AGENCY-MAIN (e.g., 097-0100).',
         },
       });
     }

@@ -234,23 +234,24 @@ export interface RawSubaward {
   subaward_number?: string | null;
 }
 
-/** Raw recipient search result */
+/**
+ * Raw recipient search result row from POST /recipient/ (RecipientListing contract).
+ * The endpoint returns only these fields — no location/address data (confirmed against
+ * the live API across broad and narrow queries).
+ */
 export interface RawRecipientSearchResult {
   amount?: number | null;
   duns?: string | null;
   id?: string | null;
-  location?: {
-    address_line1?: string | null;
-    city_name?: string | null;
-    state_code?: string | null;
-    zip5?: string | null;
-    country_code?: string | null;
-    country_name?: string | null;
-  } | null;
   name?: string | null;
   recipient_level?: string | null;
-  state_province?: string | null;
   uei?: string | null;
+}
+
+/** Raw paginated response from POST /recipient/ */
+export interface RawRecipientSearchResponse {
+  page_metadata?: RawPageMetadata | null;
+  results?: RawRecipientSearchResult[] | null;
 }
 
 /** Raw recipient detail */
@@ -567,10 +568,14 @@ export interface RawAgencyAutocomplete {
   toptier_flag?: boolean | null;
 }
 
-/** Raw recipient autocomplete result */
+/**
+ * Raw recipient autocomplete result from POST /autocomplete/recipient/.
+ * uei and duns are independent — each populates only when the search text matches that
+ * specific field, so a name search leaves both null (confirmed against the live API).
+ */
 export interface RawRecipientAutocomplete {
-  legal_business_name?: string | null;
-  recipient_id?: string | null;
+  duns?: string | null;
+  recipient_level?: string | null;
+  recipient_name?: string | null;
   uei?: string | null;
-  [key: string]: unknown;
 }

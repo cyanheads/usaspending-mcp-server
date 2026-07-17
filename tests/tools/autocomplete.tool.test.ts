@@ -126,17 +126,44 @@ describe('autocompleteTool', () => {
     expect(result.results[0].name).toBe('Department of Defense');
   });
 
-  it('returns recipient names for recipient type', async () => {
+  it('maps recipient_name to name for recipient type', async () => {
     mockAutocompleteRecipient.mockResolvedValueOnce({
-      results: [{ recipient_id: 'abc123-P', legal_business_name: 'Acme Corporation' }],
+      results: [
+        { recipient_name: 'Acme Corporation', recipient_level: null, uei: null, duns: null },
+      ],
     });
 
     const ctx = createMockContext();
     const input = autocompleteTool.input.parse({ type: 'recipient', search_text: 'acme' });
     const result = await autocompleteTool.handler(input, ctx);
 
-    expect(result.results[0].id).toBe('abc123-P');
     expect(result.results[0].name).toBe('Acme Corporation');
+    // recipient_id / legal_business_name don't exist on this endpoint — id stays unset
+    expect(result.results[0].id).toBeUndefined();
+    expect(result.results[0].uei).toBeUndefined();
+    expect(result.results[0].duns).toBeUndefined();
+  });
+
+  it('surfaces uei and duns for recipient matches', async () => {
+    mockAutocompleteRecipient.mockResolvedValueOnce({
+      results: [
+        {
+          recipient_name: 'MICROSOFT CORPORATION',
+          recipient_level: null,
+          uei: 'FMVPEWNJGLM1',
+          duns: '081466849',
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = autocompleteTool.input.parse({ type: 'recipient', search_text: 'microsoft' });
+    const result = await autocompleteTool.handler(input, ctx);
+
+    expect(result.results[0].name).toBe('MICROSOFT CORPORATION');
+    expect(result.results[0].uei).toBe('FMVPEWNJGLM1');
+    expect(result.results[0].duns).toBe('081466849');
+    expect(result.results[0].id).toBeUndefined();
   });
 
   it('throws no_match when no results found', async () => {
@@ -159,6 +186,31 @@ describe('autocompleteTool', () => {
     const ctx = createMockContext({ errors: autocompleteTool.errors });
     const input = autocompleteTool.input.parse({ type: 'psc', search_text: 'electronics' });
     await expect(autocompleteTool.handler(input, ctx)).rejects.toThrow();
+  });
+
+  it('accepts limit up to the new max of 500 for every type', () => {
+    for (const type of ['naics', 'psc', 'cfda', 'awarding_agency', 'recipient'] as const) {
+      const input = autocompleteTool.input.parse({ type, search_text: 'x', limit: 500 });
+      expect(input.limit).toBe(500);
+    }
+  });
+
+  it('rejects a limit above the 500 ceiling', () => {
+    expect(() =>
+      autocompleteTool.input.parse({ type: 'recipient', search_text: 'x', limit: 501 }),
+    ).toThrow();
+  });
+
+  it('passes the raised limit through to the service', async () => {
+    mockAutocompleteNaics.mockResolvedValueOnce({
+      results: [{ naics: '513210', naics_description: 'Software Publishers' }],
+    });
+
+    const ctx = createMockContext();
+    const input = autocompleteTool.input.parse({ type: 'naics', search_text: 'soft', limit: 500 });
+    await autocompleteTool.handler(input, ctx);
+
+    expect(mockAutocompleteNaics).toHaveBeenCalledWith('soft', 500, ctx);
   });
 
   it('formats output with codes and names', () => {

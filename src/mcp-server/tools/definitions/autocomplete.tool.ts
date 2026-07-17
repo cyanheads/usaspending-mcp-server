@@ -12,7 +12,7 @@ import { getUSASpendingService } from '@/services/usaspending/usaspending-servic
 export const autocompleteTool = tool('usaspending_autocomplete', {
   title: 'Autocomplete Codes and Names',
   description:
-    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency names and IDs), or recipient (recipient names and IDs). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
+    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency names and IDs), or recipient (recipient names with UEI/DUNS). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -31,9 +31,11 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       .number()
       .int()
       .min(1)
-      .max(50)
+      .max(500)
       .default(10)
-      .describe('Maximum number of results to return (1–50)'),
+      .describe(
+        'Maximum number of results to return (1–500). The recipient lookup enforces an upstream max of 500; naics/psc/cfda/awarding_agency return only their matching entries regardless.',
+      ),
   }),
 
   output: z.object({
@@ -53,9 +55,23 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
             id: z
               .string()
               .optional()
-              .describe('Numeric or string ID (for agency and recipient types)'),
+              .describe('Numeric or string ID (for the awarding_agency type)'),
+            uei: z
+              .string()
+              .optional()
+              .describe(
+                'Unique Entity Identifier (SAM.gov) — recipient type only; populated when the search text matches a UEI',
+              ),
+            duns: z
+              .string()
+              .optional()
+              .describe(
+                'DUNS number (legacy) — recipient type only; populated when the search text matches a DUNS',
+              ),
           })
-          .describe('Matched code entry with optional code, name, and ID fields'),
+          .describe(
+            'Matched entry — code/name for code lookups, name plus optional UEI/DUNS for recipients',
+          ),
       )
       .describe('Matching codes and names'),
     total: z.number().describe('Number of results returned'),
@@ -92,7 +108,7 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
     ctx.log.info('usaspending_autocomplete', { type: input.type, search_text: input.search_text });
     const svc = getUSASpendingService();
 
-    type ResultItem = { code?: string; name?: string; id?: string };
+    type ResultItem = { code?: string; name?: string; id?: string; uei?: string; duns?: string };
     let rawResults: ResultItem[] = [];
 
     if (input.type === 'naics') {
@@ -127,8 +143,9 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       // recipient
       const resp = await svc.autocompleteRecipient(input.search_text, input.limit, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
-        ...(r.recipient_id ? { id: r.recipient_id } : {}),
-        ...(r.legal_business_name ? { name: r.legal_business_name } : {}),
+        ...(r.recipient_name ? { name: r.recipient_name } : {}),
+        ...(r.uei ? { uei: r.uei } : {}),
+        ...(r.duns ? { duns: r.duns } : {}),
       }));
     }
 
@@ -150,7 +167,7 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
         shown: rawResults.length,
         cap: input.limit,
         guidance:
-          'More matches may exist. Raise limit (max 50) or use a more specific search term.',
+          'More matches may exist. Raise limit (max 500) or use a more specific search term.',
       });
     }
     return {
@@ -168,6 +185,8 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       if (r.code) parts.push(`**Code:** ${r.code}`);
       if (r.id) parts.push(`**ID:** ${r.id}`);
       if (r.name) parts.push(`**Name:** ${r.name}`);
+      if (r.uei) parts.push(`**UEI:** ${r.uei}`);
+      if (r.duns) parts.push(`**DUNS:** ${r.duns}`);
       lines.push(`- ${parts.join(' | ')}`);
     }
     lines.push(`\n**Total:** ${result.total}`);

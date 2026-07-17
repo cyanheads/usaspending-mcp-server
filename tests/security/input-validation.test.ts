@@ -151,18 +151,18 @@ describe('autocompleteTool — input validation', () => {
     ).toThrow();
   });
 
-  it('rejects limit=51 (above max)', () => {
+  it('rejects limit=501 (above max)', () => {
     expect(() =>
-      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 51 }),
+      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 501 }),
     ).toThrow();
   });
 
-  it('accepts limit at boundaries 1 and 50', () => {
+  it('accepts limit at boundaries 1 and 500', () => {
     expect(() =>
       autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 1 }),
     ).not.toThrow();
     expect(() =>
-      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 50 }),
+      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 500 }),
     ).not.toThrow();
   });
 });
@@ -366,7 +366,7 @@ describe('Security — injection strings do not break tool format output', () =>
           recipient_level: 'P',
         },
       ],
-      total: 1,
+      page_metadata: { total: 1, page: 1, has_next: false, limit: 10 },
     };
     expect(() => searchRecipientsTool.format!(output)).not.toThrow();
   });

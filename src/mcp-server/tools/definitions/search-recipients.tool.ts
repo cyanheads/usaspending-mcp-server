@@ -10,7 +10,7 @@ import { getUSASpendingService } from '@/services/usaspending/usaspending-servic
 export const searchRecipientsTool = tool('usaspending_search_recipients', {
   title: 'Search Award Recipients',
   description:
-    'Search for organizations or individuals receiving federal funds by name or UEI (Unique Entity Identifier). Returns recipient IDs (UUID hashes), total award amounts, business type classifications, and location data. Recipient IDs from this tool can be passed to usaspending_get_recipient for full profiles. Recipient level: P = parent organization, C = child entity, R = standalone.',
+    'Search for organizations or individuals receiving federal funds by name, UEI (Unique Entity Identifier), or DUNS. Returns recipient hash IDs, UEI/DUNS identifiers, total award amounts, and hierarchy level. Results are paginated — use page to retrieve matches beyond the first page; page_metadata.total reports the full match count. Recipient hash IDs from this tool can be passed to usaspending_get_recipient for full profiles. Recipient level: P = parent organization, C = child entity, R = standalone.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -28,7 +28,15 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       .min(1)
       .max(100)
       .default(10)
-      .describe('Maximum results to return (1–100)'),
+      .describe('Maximum results per page (1–100)'),
+    page: z
+      .number()
+      .int()
+      .min(1)
+      .default(1)
+      .describe(
+        'Page number (1-based) — request the next page to retrieve matches beyond the first',
+      ),
   }),
 
   output: z.object({
@@ -53,35 +61,34 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
               .number()
               .optional()
               .describe('Total award amount in USD for the selected award type'),
-            state: z.string().optional().describe('State code of recipient address'),
-            location: z
-              .object({
-                city_name: z.string().optional().describe('City of recipient address'),
-                state_code: z.string().optional().describe('State code'),
-                country_code: z.string().optional().describe('Country code'),
-              })
-              .optional()
-              .describe('Recipient address location'),
           })
           .describe('Recipient entry with ID, name, and award totals'),
       )
       .describe('Matching recipients'),
-    total: z.number().describe('Number of results returned'),
+    page_metadata: z
+      .object({
+        total: z.number().optional().describe('Total matching recipients across all pages'),
+        page: z.number().describe('Current page number'),
+        has_next: z.boolean().describe('Whether there are more pages of results'),
+        limit: z.number().describe('Results per page'),
+      })
+      .describe('Pagination metadata — page through with the page input to reach later matches'),
   }),
 
-  // Agent-facing search context: result count and an optional recovery notice
-  // for empty searches. Populated via ctx.enrich() so it reaches both surfaces.
-  // The recipient endpoint returns no total, so a hit-the-cap signal discloses truncation.
+  // Agent-facing search context: per-page count, total match count, current page, and
+  // an optional recovery notice. Populated via ctx.enrich() so it reaches both surfaces.
+  // The recipient endpoint returns a real total and a reliable hasNext, so continuation
+  // is disclosed by pagination state rather than a hit-the-cap heuristic.
   enrichment: {
-    recipient_count: z.number().describe('Number of matching recipients returned'),
-    truncated: z.boolean().optional().describe('True when results were capped at the limit.'),
-    shown: z.number().optional().describe('Number of recipients returned.'),
-    cap: z.number().optional().describe('The limit that was applied.'),
+    recipient_count: z.number().describe('Number of matching recipients returned on this page'),
+    totalCount: z.number().optional().describe('Total matching recipients across all pages'),
+    page: z.number().describe('Current page number returned'),
+    has_next: z.boolean().describe('Whether there are more pages of results'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — suggests how to broaden the search. Absent when results are present.',
+        'Recovery hint — how to continue to the next page when more results exist, or how to broaden the search when empty. Absent when the full match set fits on this page.',
       ),
   },
 
@@ -96,55 +103,67 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('usaspending_search_recipients', { keyword: input.keyword, limit: input.limit });
+    ctx.log.info('usaspending_search_recipients', {
+      keyword: input.keyword,
+      page: input.page,
+      limit: input.limit,
+    });
     const svc = getUSASpendingService();
-    const rawResults = await svc.searchRecipients(
+    const data = await svc.searchRecipients(
       {
         keyword: input.keyword,
         ...(input.award_type !== undefined ? { award_type: input.award_type } : {}),
         limit: input.limit,
+        page: input.page,
       },
       ctx,
     );
 
-    const results = rawResults.map((r) => ({
+    const results = (data.results ?? []).map((r) => ({
       ...(r.id ? { id: r.id } : {}),
       ...(r.name ? { name: r.name } : {}),
       ...(r.uei ? { uei: r.uei } : {}),
       ...(r.duns ? { duns: r.duns } : {}),
       ...(r.recipient_level ? { recipient_level: r.recipient_level } : {}),
       ...(typeof r.amount === 'number' ? { amount: r.amount } : {}),
-      ...(r.state_province ? { state: r.state_province } : {}),
-      ...(r.location
-        ? {
-            location: {
-              ...(r.location.city_name ? { city_name: r.location.city_name } : {}),
-              ...(r.location.state_code ? { state_code: r.location.state_code } : {}),
-              ...(r.location.country_code ? { country_code: r.location.country_code } : {}),
-            },
-          }
-        : {}),
     }));
 
-    ctx.enrich({ recipient_count: results.length });
+    const meta = data.page_metadata ?? {};
+    const total = typeof meta.total === 'number' ? meta.total : undefined;
+    const currentPage = typeof meta.page === 'number' ? meta.page : input.page;
+    const hasNext = meta.hasNext ?? false;
+
+    ctx.enrich({ recipient_count: results.length, page: currentPage, has_next: hasNext });
+    if (total !== undefined) ctx.enrich.total(total);
 
     if (results.length === 0) {
+      const pageNote = input.page > 1 ? ` on page ${input.page}` : '';
       ctx.enrich.notice(
-        `No recipients matched "${input.keyword}". Try a partial name, different spelling, or use a UEI number directly.`,
+        `No recipients matched "${input.keyword}"${pageNote}. Try a partial name, different spelling, or a UEI number directly.`,
       );
-    } else if (results.length >= input.limit) {
-      ctx.enrich.truncated({
-        shown: results.length,
-        cap: input.limit,
-        guidance: 'More recipients may match. Raise limit (max 100) or refine the keyword.',
-      });
+    } else if (hasNext) {
+      const totalNote = total !== undefined ? ` (${total.toLocaleString()} total)` : '';
+      ctx.enrich.notice(
+        `More recipients match${totalNote}. Request page ${currentPage + 1} to continue.`,
+      );
     }
 
-    return { results, total: results.length };
+    return {
+      results,
+      page_metadata: {
+        ...(total !== undefined ? { total } : {}),
+        page: currentPage,
+        has_next: hasNext,
+        limit: input.limit,
+      },
+    };
   },
 
   format: (result) => {
-    const lines: string[] = [`## Recipient Search Results (${result.total})`];
+    const lines: string[] = ['## Recipient Search Results'];
+    lines.push(
+      `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page}${result.page_metadata.total !== undefined ? ` of ~${result.page_metadata.total.toLocaleString()}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
+    );
     for (const r of result.results) {
       lines.push('');
       lines.push(`### ${r.name ?? r.id ?? 'Unknown'}`);
@@ -154,13 +173,6 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       if (r.recipient_level) lines.push(`**Level:** ${r.recipient_level}`);
       if (typeof r.amount === 'number')
         lines.push(`**Award Amount:** $${r.amount.toLocaleString()}`);
-      if (r.state) lines.push(`**State:** ${r.state}`);
-      if (r.location) {
-        const loc = r.location;
-        lines.push(
-          `**Location:** ${[loc.city_name, loc.state_code, loc.country_code].filter(Boolean).join(', ')}`,
-        );
-      }
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

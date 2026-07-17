@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.6-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -38,7 +38,7 @@
 | `usaspending_get_idv_awards` | List child contracts and task/delivery orders placed under an IDV award. Each row includes a `generated_unique_award_id` for chaining into `usaspending_get_award`. |
 | `usaspending_get_award_transactions` | List individual transactions (modifications, amendments) on an award. Reveals spending history and obligation changes over time. |
 | `usaspending_get_award_subawards` | List subaward contracts or grants under a prime award. Reveals the sub-contractor or sub-grantee layer — who actually does the work. |
-| `usaspending_search_recipients` | Search for organizations receiving federal funds by name or UEI. Returns recipient IDs, total award amounts, and business type classifications. |
+| `usaspending_search_recipients` | Search for organizations receiving federal funds by name, UEI, or DUNS. Returns recipient hash IDs, UEI/DUNS, total award amounts, and hierarchy level. Paginated — page through with `page`; `page_metadata.total` reports the full match count. |
 | `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parent organization, alternate names, and total award amounts by type. |
 | `usaspending_get_agency` | Fetch an agency's fiscal year overview: mission, budget authority, obligation totals, sub-agency count, and DEF codes. Accepts a 3-digit `toptier_code` or an `agency_slug` from award search results. |
 | `usaspending_spending_by_geography` | Aggregate federal spending by state, county, or congressional district. Returns per-capita figures when combined with population data. |
@@ -109,10 +109,11 @@ List subawards under a prime contract or grant.
 
 ### `usaspending_search_recipients`
 
-Search for organizations receiving federal funds by name or UEI.
+Search for organizations receiving federal funds by name, UEI, or DUNS.
 
 - Returns recipient IDs (UUID hashes with level suffix: `-P` parent, `-C` child, `-R` root), UEI, DUNS, name, recipient level, and total award amount
 - `results[].id` chains to `usaspending_get_recipient`; `uei` and `duns` chain to SAM.gov or SEC EDGAR
+- Paginated via `limit` (max 100) and `page`; `page_metadata` reports `total`, `page`, and `has_next` — page through to reach matches beyond the first page
 
 ---
 
@@ -216,8 +217,9 @@ List all top-tier federal agencies.
 Discover valid code values for award filter fields.
 
 - `type` enum selects the lookup: `naics`, `psc`, `cfda`, `awarding_agency`, or `recipient`
-- Returns matching codes and names — use before filtering to find the right code when you only know a description (e.g., "cybersecurity" → NAICS code)
+- Returns matching codes and names — use before filtering to find the right code when you only know a description (e.g., "cybersecurity" → NAICS code); `recipient` matches also carry `uei`/`duns`
 - Consolidates five autocomplete endpoints into one tool
+- `limit` accepts 1–500 (the `recipient` lookup enforces an upstream max of 500; the other four return only their matching entries)
 
 ## Features
 

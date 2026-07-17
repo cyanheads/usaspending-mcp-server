@@ -35,7 +35,7 @@ import type {
   RawPscAutocomplete,
   RawRecipientAutocomplete,
   RawRecipientDetail,
-  RawRecipientSearchResult,
+  RawRecipientSearchResponse,
   RawSpendingByCategoryResult,
   RawSpendingOverTimeResult,
   RawSubAgencyEntry,
@@ -192,21 +192,17 @@ export class USASpendingService {
 
   // --- Recipients ---
 
-  async searchRecipients(
+  searchRecipients(
     params: {
       keyword: string;
       award_type?: string;
       limit?: number;
+      page?: number;
     },
     ctx: Context,
-  ): Promise<RawRecipientSearchResult[]> {
-    ctx.log.debug('searchRecipients', { keyword: params.keyword });
-    const result = await this.post<{ results: RawRecipientSearchResult[] }>(
-      'recipient/',
-      params,
-      ctx,
-    );
-    return result.results ?? [];
+  ): Promise<RawRecipientSearchResponse> {
+    ctx.log.debug('searchRecipients', { keyword: params.keyword, page: params.page });
+    return this.post<RawRecipientSearchResponse>('recipient/', params, ctx);
   }
 
   async getRecipient(

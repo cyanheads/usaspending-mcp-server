@@ -10,7 +10,7 @@
 | `usaspending_get_award` | Fetch full details of a federal award by its generated ID. Returns contract or assistance data, parent IDV info, subaward count, and funding account linkages. Use award IDs from `usaspending_search_awards`. | `award_id` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_get_award_transactions` | List individual transactions (modifications, amendments) on an award. Reveals spending history and obligation changes over time. | `award_id`, `sort`, `order`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_get_award_subawards` | List subaward contracts or grants under a prime award. Reveals the sub-contractor or sub-grantee layer — who actually does the work. | `award_id`, `sort`, `order`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: false` |
-| `usaspending_search_recipients` | Search for organizations receiving federal funds by name or UEI. Returns recipient IDs, total award amounts, and business type classifications. | `keyword`, `award_type`, `limit` | `readOnlyHint: true`, `openWorldHint: true` |
+| `usaspending_search_recipients` | Search for organizations receiving federal funds by name, UEI, or DUNS. Returns recipient hash IDs, UEI/DUNS, total award amounts, and hierarchy level. Paginated with `page_metadata` (`total`, `page`, `has_next`). | `keyword`, `award_type`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` |
 | `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parent organization, alternate names, and total award amounts by type. Optionally scope to a specific fiscal year and award type. Use recipient IDs from `usaspending_search_recipients`. | `recipient_id`, `fiscal_year`, `award_type` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_get_agency` | Fetch an agency's current fiscal year overview: mission, budget authority, obligation totals, sub-agency count, and DEF codes. Also returns sub-agency breakdown with transaction counts. Accepts either a 3-digit `toptier_code` (e.g., `097`) or an `agency_slug` (e.g., `department-of-defense`) — slugs appear in award search results. | `toptier_code`, `agency_slug` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_spending_by_geography` | Aggregate federal spending by state, county, or congressional district. Geographic filters require FIPS codes or 2-letter state abbreviations, not place names — use a geocoding server to resolve names first. Useful for per-capita analysis chained with Census population data. | `scope`, `geo_layer`, `filters`, `subawards` | `readOnlyHint: true`, `openWorldHint: true` |
@@ -92,7 +92,7 @@ Each step is independently testable.
 | `usaspending_get_award` | `generated_unique_award_id`, `type`, `type_description`, `description`, `total_obligation`, `subaward_count`, `date_signed`, `parent_award.generated_unique_award_id`, `latest_transaction_contract_data.naics`, `recipient.recipient_hash` (chain to `usaspending_get_recipient`), `account_obligations_by_defc` |
 | `usaspending_get_award_transactions` | `results[].id`, `action_date`, `federal_action_obligation`, `modification_number`, `description`, `page_metadata` |
 | `usaspending_get_award_subawards` | `results[].id`, `subaward_number`, `description`, `action_date`, `amount`, `recipient_name` |
-| `usaspending_search_recipients` | `results[].id` (recipient hash — chain to `usaspending_get_recipient`), `duns`, `uei`, `name`, `recipient_level`, `amount` |
+| `usaspending_search_recipients` | `results[].id` (recipient hash — chain to `usaspending_get_recipient`), `duns`, `uei`, `name`, `recipient_level`, `amount`, `page_metadata` (`total`, `page`, `has_next`, `limit`) |
 | `usaspending_get_recipient` | `name`, `uei`, `duns`, `recipient_id`, `recipient_level`, `parent_name`, `business_types`, `location` |
 | `usaspending_get_agency` | `name`, `abbreviation`, `toptier_code`, `agency_id`, `mission`, `budget_authority_amount`, `obligation_amount`, `subtier_agency_count`, `def_codes` |
 | `usaspending_spending_by_geography` | `results[].shape_code`, `display_name`, `aggregated_amount`, `population`, `per_capita` |
@@ -101,7 +101,7 @@ Each step is independently testable.
 | `usaspending_disaster_spending` | Varies by dimension: `results[].description`, `obligation`, `outlay`, `award_count`; or geography aggregations |
 | `usaspending_get_federal_account` | `account_title`, `federal_account_code`, `budget_function`, `managing_agency`, fiscal year snapshot with obligations and outlays |
 | `usaspending_list_agencies` | `results[].agency_name`, `abbreviation`, `toptier_code`, `agency_slug`, `obligated_amount`, `budget_authority_amount` |
-| `usaspending_autocomplete` | `results[].code`, `name` (for naics/psc/cfda); `results[].id`, `name` (for agency/recipient) |
+| `usaspending_autocomplete` | `results[].code`, `name` (for naics/psc/cfda); `results[].id`, `name` (for awarding_agency); `results[].name`, `uei`, `duns` (for recipient) |
 
 ---
 

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.8](changelog/0.2.x/0.2.8.md) — 2026-07-17
+
+Corrects raw-response drift against the live USAspending.gov API across four tools: usaspending_get_award and usaspending_get_agency drop a dead transactions_count field, usaspending_get_recipient's totals/ZIP mapping is fixed, and usaspending_get_agency now sources real budget data and paginates sub-agencies.
+
 ## [0.2.7](changelog/0.2.x/0.2.7.md) — 2026-07-16
 
 Fixes six tools' content[] rendering an upstream item total as though it were a page count, via a new shared pagination-line helper.

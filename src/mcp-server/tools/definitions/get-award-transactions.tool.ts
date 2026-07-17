@@ -83,7 +83,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .string()
       .optional()
       .describe(
-        'Guidance when no transactions were returned — suggests checking transactions_count from usaspending_get_award first. Absent when results are present.',
+        'Guidance when no transactions were returned — helps confirm the award_id is a valid generated_internal_id. Absent when results are present.',
       ),
   },
 
@@ -149,7 +149,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
 
     if (results.length === 0) {
       ctx.enrich.notice(
-        `No transactions found for award ${input.award_id}. Check transactions_count from usaspending_get_award to confirm transaction history exists.`,
+        `No transactions found for award ${input.award_id}. Verify the award_id is a valid generated_internal_id from usaspending_search_awards; an invalid ID or a page past the last returns no transactions.`,
       );
     }
 

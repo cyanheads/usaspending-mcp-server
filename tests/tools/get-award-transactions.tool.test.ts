@@ -65,7 +65,10 @@ describe('getAwardTransactionsTool', () => {
     expect(result.page_metadata.total).toBe(0);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.notice).toBeDefined();
-    expect(enrichment.notice).toContain('transactions_count');
+    // #12: notice must not cite transactions_count (absent from the live award endpoint);
+    // it points to the generated_internal_id from usaspending_search_awards instead.
+    expect(enrichment.notice).not.toContain('transactions_count');
+    expect(enrichment.notice).toContain('generated_internal_id');
     expect(enrichment.notice).toContain('CONT_AWD_EMPTY');
   });
 

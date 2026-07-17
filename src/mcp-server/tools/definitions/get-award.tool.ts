@@ -147,10 +147,6 @@ export const getAwardTool = tool('usaspending_get_award', {
       .describe(
         'Funding breakdown by Disaster/Emergency Funding (DEF) code — links to disaster appropriations',
       ),
-    transactions_count: z
-      .number()
-      .optional()
-      .describe('Number of transactions; use with usaspending_get_award_transactions'),
   }),
 
   errors: [
@@ -197,9 +193,9 @@ export const getAwardTool = tool('usaspending_get_award', {
       ...(r.category ? { category: r.category } : {}),
       ...(r.description ? { description: r.description } : {}),
       ...(typeof r.total_obligation === 'number' ? { total_obligation: r.total_obligation } : {}),
-      ...(typeof r.total_outlays === 'number' ? { total_outlays: r.total_outlays } : {}),
-      ...(typeof r.base_and_all_options_value === 'number'
-        ? { base_and_all_options_value: r.base_and_all_options_value }
+      ...(typeof r.total_outlay === 'number' ? { total_outlays: r.total_outlay } : {}),
+      ...(typeof r.base_and_all_options === 'number'
+        ? { base_and_all_options_value: r.base_and_all_options }
         : {}),
       ...(typeof r.subaward_count === 'number' ? { subaward_count: r.subaward_count } : {}),
       ...(r.date_signed ? { date_signed: r.date_signed } : {}),
@@ -329,8 +325,8 @@ export const getAwardTool = tool('usaspending_get_award', {
         ? {
             product_or_service_code: {
               code: contractData.product_or_service_code,
-              ...(contractData.product_or_service_code_description
-                ? { description: contractData.product_or_service_code_description }
+              ...(contractData.product_or_service_description
+                ? { description: contractData.product_or_service_description }
                 : {}),
             },
           }
@@ -352,9 +348,6 @@ export const getAwardTool = tool('usaspending_get_award', {
                 ...(typeof d.amount === 'number' ? { amount: d.amount } : {}),
               })),
           }
-        : {}),
-      ...(typeof r.transactions_count === 'number'
-        ? { transactions_count: r.transactions_count }
         : {}),
     };
   },
@@ -439,8 +432,6 @@ export const getAwardTool = tool('usaspending_get_award', {
 
     if (typeof result.subaward_count === 'number')
       lines.push(`**Subaward Count:** ${result.subaward_count}`);
-    if (typeof result.transactions_count === 'number')
-      lines.push(`**Transaction Count:** ${result.transactions_count}`);
 
     if (result.parent_award) {
       lines.push('\n### Parent Award (IDV)');

@@ -81,8 +81,8 @@ export interface RawAwardDetail {
       code?: string | null;
     } | null;
   } | null;
-  base_and_all_options_value?: number | null;
-  base_exercised_options_val?: number | null;
+  base_and_all_options?: number | null;
+  base_exercised_options?: number | null;
   category?: string | null;
   date_signed?: string | null;
   description?: string | null;
@@ -118,7 +118,7 @@ export interface RawAwardDetail {
     naics?: string | null;
     naics_description?: string | null;
     product_or_service_code?: string | null;
-    product_or_service_code_description?: string | null;
+    product_or_service_description?: string | null;
     type_of_contract_pricing?: string | null;
     type_of_contract_pricing_description?: string | null;
     extent_competed?: string | null;
@@ -179,9 +179,8 @@ export interface RawAwardDetail {
   total_account_outlay?: number | null;
   total_loan_value?: number | null;
   total_obligation?: number | null;
-  total_outlays?: number | null;
+  total_outlay?: number | null;
   total_subsidy_cost?: number | null;
-  transactions_count?: number | null;
   type?: string | null;
   type_description?: string | null;
   unique_awards?: number | null;
@@ -254,11 +253,15 @@ export interface RawRecipientSearchResponse {
   results?: RawRecipientSearchResult[] | null;
 }
 
-/** Raw recipient detail */
+/**
+ * Raw recipient detail from GET /recipient/{id}/.
+ * Aggregate totals are returned as flat top-level fields (transaction/loan amounts and counts),
+ * not a nested per-category `total` object; `location.zip` is the ZIP field name (confirmed
+ * against the live API). No `business_types_description` is returned — only `business_types` codes.
+ */
 export interface RawRecipientDetail {
   alternate_names?: string[] | null;
   business_types?: string[] | null;
-  business_types_description?: string[] | null;
   children?: unknown[] | null;
   duns?: string | null;
   location?: {
@@ -266,7 +269,7 @@ export interface RawRecipientDetail {
     address_line2?: string | null;
     city_name?: string | null;
     state_code?: string | null;
-    zip5?: string | null;
+    zip?: string | null;
     zip4?: string | null;
     country_code?: string | null;
     country_name?: string | null;
@@ -279,13 +282,10 @@ export interface RawRecipientDetail {
   parent_uei?: string | null;
   recipient_id?: string | null;
   recipient_level?: string | null;
-  total?: {
-    contracts?: number | null;
-    grants?: number | null;
-    direct_payments?: number | null;
-    loans?: number | null;
-    other?: number | null;
-  } | null;
+  total_face_value_loan_amount?: number | null;
+  total_face_value_loan_transactions?: number | null;
+  total_transaction_amount?: number | null;
+  total_transactions?: number | null;
   uei?: string | null;
 }
 
@@ -312,7 +312,11 @@ export interface RawAgencyEntry {
   website?: string | null;
 }
 
-/** Raw agency detail */
+/**
+ * Raw agency detail from GET /agency/{code}/ (overview).
+ * This endpoint carries no budget/obligation/transaction totals — those come from
+ * GET /agency/{code}/budgetary_resources/ (see RawBudgetaryResources), fetched separately.
+ */
 export interface RawAgencyDetail {
   abbreviation?: string | null;
   agency_id?: number | null;
@@ -325,8 +329,6 @@ export interface RawAgencyDetail {
       cj_html_url?: string | null;
     } | null;
   } | null;
-  budget_authority_amount?: number | null;
-  current_total_budget_authority_amount?: number | null;
   def_codes?: Array<{
     code?: string | null;
     public_law?: string | null;
@@ -345,12 +347,10 @@ export interface RawAgencyDetail {
     transaction_count?: number | null;
     agency_slug?: string | null;
   } | null;
-  obligated_amount?: number | null;
   slug?: string | null;
   sub_agency_count?: number | null;
   subtier_agency_count?: number | null;
   toptier_code?: string | null;
-  transactions_count?: number | null;
   website?: string | null;
 }
 
@@ -370,7 +370,7 @@ export interface RawBudgetaryResources {
   agency_budgetary_resources?: number | null;
   agency_obligated_amount?: number | null;
   agency_total_obligated?: number | null;
-  agency_total_outlays?: number | null;
+  agency_total_outlayed?: number | null;
   fiscal_year?: number | null;
 }
 

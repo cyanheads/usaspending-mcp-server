@@ -245,11 +245,16 @@ export class USASpendingService {
 
   async getAgencySubAgencies(
     toptierCode: string,
+    params: { page?: number; limit?: number },
     ctx: Context,
-  ): Promise<{ results: RawSubAgencyEntry[] }> {
-    ctx.log.debug('getAgencySubAgencies', { toptierCode });
-    return await this.get<{ results: RawSubAgencyEntry[] }>(
-      `agency/${encodeURIComponent(toptierCode)}/sub_agency/`,
+  ): Promise<{ results: RawSubAgencyEntry[]; page_metadata?: RawPageMetadata }> {
+    ctx.log.debug('getAgencySubAgencies', { toptierCode, page: params.page });
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    const query = qs.toString();
+    return await this.get<{ results: RawSubAgencyEntry[]; page_metadata?: RawPageMetadata }>(
+      `agency/${encodeURIComponent(toptierCode)}/sub_agency/${query ? `?${query}` : ''}`,
       ctx,
     );
   }

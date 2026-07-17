@@ -5,13 +5,17 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import type { RawSubAgencyEntry } from '@/services/usaspending/types.js';
+import type { RawBudgetaryResources, RawSubAgencyEntry } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatPaginationLine } from './pagination.js';
+
+/** Sub-agency breakdown page size (the endpoint's natural page cap). */
+const SUB_AGENCY_PAGE_LIMIT = 10;
 
 export const getAgencyTool = tool('usaspending_get_agency', {
   title: 'Get Agency Overview',
   description:
-    "Fetch an agency's current fiscal year overview including mission, budget authority, obligation totals, sub-agency count, and DEF codes for disaster/emergency funding. Also returns sub-agency breakdown with transaction counts. Accepts either a 3-digit toptier_code (e.g., 097 for DoD, 012 for Agriculture) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results.",
+    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year), sub-agency count, and DEF codes for disaster/emergency funding. Also returns a paginated sub-agency breakdown with obligation and transaction counts. Accepts either a 3-digit toptier_code (e.g., 097 for DoD, 012 for Agriculture) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -27,6 +31,14 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       .describe(
         'URL-friendly agency slug (e.g., department-of-defense) — from usaspending_list_agencies or award search results. Use either toptier_code or agency_slug, not both.',
       ),
+    page: z
+      .number()
+      .int()
+      .min(1)
+      .default(1)
+      .describe(
+        'Sub-agency breakdown page (1-based, 10 per page). Use with sub_agency_page_metadata.has_next to page through the full list.',
+      ),
   }),
 
   output: z.object({
@@ -35,15 +47,19 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     toptier_code: z.string().optional().describe('3-digit toptier agency code'),
     agency_id: z.number().optional().describe('Internal agency ID'),
     mission: z.string().optional().describe('Agency mission statement'),
-    budget_authority_amount: z
+    fiscal_year: z
       .number()
       .optional()
-      .describe('Total budget authority amount in USD for current fiscal year'),
+      .describe('Fiscal year the budgetary totals below reflect (most recent available)'),
+    budgetary_resources_amount: z
+      .number()
+      .optional()
+      .describe('Total budgetary resources in USD for the fiscal year'),
     obligated_amount: z
       .number()
       .optional()
-      .describe('Total obligated amount in USD for current fiscal year'),
-    transactions_count: z.number().optional().describe('Total transaction count'),
+      .describe('Total amount obligated in USD for the fiscal year'),
+    outlay_amount: z.number().optional().describe('Total outlays in USD for the fiscal year'),
     subtier_agency_count: z
       .number()
       .optional()
@@ -61,7 +77,16 @@ export const getAgencyTool = tool('usaspending_get_agency', {
           .describe('Sub-agency entry with obligations and transaction counts'),
       )
       .optional()
-      .describe('Sub-agency breakdown within this toptier agency'),
+      .describe('Sub-agency breakdown within this toptier agency (one page)'),
+    sub_agency_page_metadata: z
+      .object({
+        total: z.number().optional().describe('Total sub-agencies across all pages'),
+        page: z.number().describe('Current sub-agency page number'),
+        has_next: z.boolean().describe('Whether more sub-agency pages are available'),
+        limit: z.number().describe('Sub-agencies per page'),
+      })
+      .optional()
+      .describe('Pagination metadata for the sub-agency breakdown'),
     def_codes: z
       .array(
         z
@@ -76,6 +101,22 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       .describe('Disaster/Emergency Funding (DEF) codes applicable to this agency'),
     website: z.string().optional().describe('Agency website URL'),
   }),
+
+  // Agent-facing context: sub-agency pagination state and truncation guidance.
+  enrichment: {
+    sub_agency_page: z.number().describe('Current sub-agency page returned'),
+    has_more_sub_agencies: z.boolean().describe('Whether more sub-agency pages are available'),
+    sub_agency_total: z
+      .number()
+      .optional()
+      .describe('Total sub-agencies across all pages (when available)'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Guidance when the sub-agency breakdown is truncated — how to page for the rest. Absent when the last page is shown.',
+      ),
+  },
 
   errors: [
     {
@@ -141,11 +182,14 @@ export const getAgencyTool = tool('usaspending_get_agency', {
         },
       });
     }
-    const [detail, subAgenciesData] = await Promise.all([
+    const [detail, subAgenciesData, budgetData] = await Promise.all([
       svc.getAgency(toptierCode, ctx),
-      svc.getAgencySubAgencies(toptierCode, ctx).catch(() => ({
-        results: [] as RawSubAgencyEntry[],
-      })),
+      svc
+        .getAgencySubAgencies(toptierCode, { page: input.page, limit: SUB_AGENCY_PAGE_LIMIT }, ctx)
+        .catch(() => ({ results: [] as RawSubAgencyEntry[], page_metadata: undefined })),
+      svc
+        .getAgencyBudgetaryResources(toptierCode, ctx)
+        .catch(() => ({ agency_data_by_year: [] as RawBudgetaryResources[] })),
     ]);
 
     if (!detail?.name) {
@@ -156,8 +200,13 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       });
     }
 
+    // Budget totals live on the budgetary-resources endpoint, not the agency overview.
+    // Pick the most recent fiscal year available.
+    const currentBudget = [...(budgetData.agency_data_by_year ?? [])].sort(
+      (a, b) => (b.fiscal_year ?? 0) - (a.fiscal_year ?? 0),
+    )[0];
+
     const subAgencies = (subAgenciesData.results ?? [])
-      .slice(0, 20)
       .map((s) => ({
         ...(s.name ? { name: s.name } : {}),
         ...(s.abbreviation ? { abbreviation: s.abbreviation } : {}),
@@ -171,6 +220,22 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       }))
       .filter((s) => s.name);
 
+    const subMeta = subAgenciesData.page_metadata ?? {};
+    const subPage = subMeta.page ?? input.page;
+    const subHasNext = subMeta.hasNext ?? false;
+    const subTotal = typeof subMeta.total === 'number' ? subMeta.total : undefined;
+
+    ctx.enrich({
+      sub_agency_page: subPage,
+      has_more_sub_agencies: subHasNext,
+      ...(subTotal !== undefined ? { sub_agency_total: subTotal } : {}),
+    });
+    if (subHasNext) {
+      ctx.enrich.notice(
+        `Showing sub-agency page ${subPage}${subTotal !== undefined ? ` of ${subTotal} total` : ''}. Call again with page=${subPage + 1} for more sub-agencies.`,
+      );
+    }
+
     return {
       ...(detail.name ? { name: detail.name } : {}),
       ...(detail.abbreviation ? { abbreviation: detail.abbreviation } : {}),
@@ -179,14 +244,17 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       ...(detail.mission || detail.agency_overview?.mission
         ? { mission: (detail.mission ?? detail.agency_overview?.mission) || undefined }
         : {}),
-      ...(typeof detail.budget_authority_amount === 'number'
-        ? { budget_authority_amount: detail.budget_authority_amount }
+      ...(typeof currentBudget?.fiscal_year === 'number'
+        ? { fiscal_year: currentBudget.fiscal_year }
         : {}),
-      ...(typeof detail.obligated_amount === 'number'
-        ? { obligated_amount: detail.obligated_amount }
+      ...(typeof currentBudget?.agency_budgetary_resources === 'number'
+        ? { budgetary_resources_amount: currentBudget.agency_budgetary_resources }
         : {}),
-      ...(typeof detail.transactions_count === 'number'
-        ? { transactions_count: detail.transactions_count }
+      ...(typeof currentBudget?.agency_total_obligated === 'number'
+        ? { obligated_amount: currentBudget.agency_total_obligated }
+        : {}),
+      ...(typeof currentBudget?.agency_total_outlayed === 'number'
+        ? { outlay_amount: currentBudget.agency_total_outlayed }
         : {}),
       ...(typeof detail.sub_agency_count === 'number'
         ? { subtier_agency_count: detail.sub_agency_count }
@@ -194,6 +262,16 @@ export const getAgencyTool = tool('usaspending_get_agency', {
           ? { subtier_agency_count: detail.subtier_agency_count }
           : {}),
       ...(subAgencies.length > 0 ? { sub_agencies: subAgencies } : {}),
+      ...(subAgencies.length > 0
+        ? {
+            sub_agency_page_metadata: {
+              ...(subTotal !== undefined ? { total: subTotal } : {}),
+              page: subPage,
+              has_next: subHasNext,
+              limit: subMeta.limit ?? SUB_AGENCY_PAGE_LIMIT,
+            },
+          }
+        : {}),
       ...(detail.def_codes?.length
         ? {
             def_codes: detail.def_codes.map((d) => ({
@@ -214,18 +292,24 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     if (result.toptier_code) lines.push(`**Toptier Code:** ${result.toptier_code}`);
     if (typeof result.agency_id === 'number') lines.push(`**Agency ID:** ${result.agency_id}`);
     if (result.mission) lines.push(`**Mission:** ${result.mission}`);
-    if (typeof result.budget_authority_amount === 'number')
-      lines.push(`**Budget Authority:** $${result.budget_authority_amount.toLocaleString()}`);
+    if (typeof result.fiscal_year === 'number')
+      lines.push(`**Fiscal Year:** ${result.fiscal_year}`);
+    if (typeof result.budgetary_resources_amount === 'number')
+      lines.push(`**Budgetary Resources:** $${result.budgetary_resources_amount.toLocaleString()}`);
     if (typeof result.obligated_amount === 'number')
       lines.push(`**Obligated:** $${result.obligated_amount.toLocaleString()}`);
-    if (typeof result.transactions_count === 'number')
-      lines.push(`**Transactions:** ${result.transactions_count.toLocaleString()}`);
+    if (typeof result.outlay_amount === 'number')
+      lines.push(`**Outlays:** $${result.outlay_amount.toLocaleString()}`);
     if (typeof result.subtier_agency_count === 'number')
       lines.push(`**Sub-agencies:** ${result.subtier_agency_count}`);
     if (result.website) lines.push(`**Website:** ${result.website}`);
 
-    if (result.sub_agencies?.length) {
+    if (result.sub_agencies?.length || result.sub_agency_page_metadata) {
       lines.push('\n### Sub-Agency Breakdown');
+      if (result.sub_agency_page_metadata)
+        lines.push(formatPaginationLine(result.sub_agency_page_metadata));
+    }
+    if (result.sub_agencies?.length) {
       lines.push('| Sub-Agency | Obligations | Transactions | New Awards |');
       lines.push('|:-----------|:------------|:-------------|:-----------|');
       for (const s of result.sub_agencies) {

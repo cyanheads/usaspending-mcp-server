@@ -22,10 +22,9 @@ const fullAwardFixture = {
   category: 'contract',
   description: 'IT services contract for cloud infrastructure',
   total_obligation: 5_000_000,
-  total_outlays: 4_200_000,
-  base_and_all_options_value: 6_000_000,
+  total_outlay: 4_200_000,
+  base_and_all_options: 6_000_000,
   subaward_count: 3,
-  transactions_count: 12,
   date_signed: '2018-06-01',
   period_of_performance: {
     start_date: '2018-07-01',
@@ -59,7 +58,7 @@ const fullAwardFixture = {
     naics: '541512',
     naics_description: 'Computer Systems Design',
     product_or_service_code: 'D306',
-    product_or_service_code_description: 'IT Services',
+    product_or_service_description: 'IT Services',
   },
 };
 
@@ -75,6 +74,12 @@ describe('getAwardTool', () => {
     expect(result.piid).toBe('FA862118F6251');
     expect(result.category).toBe('contract');
     expect(result.total_obligation).toBe(5_000_000);
+    // #36: renamed raw fields flow through to the unchanged public output names.
+    expect(result.total_outlays).toBe(4_200_000);
+    expect(result.base_and_all_options_value).toBe(6_000_000);
+    expect(result.product_or_service_code?.description).toBe('IT Services');
+    // #12: transactions_count is never returned by the live award endpoint — output field dropped.
+    expect(result).not.toHaveProperty('transactions_count');
     expect(result.recipient?.recipient_name).toBe('Acme Corp');
     expect(result.recipient?.recipient_id).toBe('abc123');
     expect(result.awarding_agency?.toptier_name).toBe('Department of Defense');
@@ -206,7 +211,6 @@ describe('getAwardTool', () => {
       total_outlays: 900_000,
       base_and_all_options_value: 1_500_000,
       subaward_count: 2,
-      transactions_count: 5,
       date_signed: '2022-01-01',
       period_of_performance: {
         start_date: '2022-02-01',

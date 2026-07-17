@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.7](changelog/0.2.x/0.2.7.md) — 2026-07-16
+
+Fixes six tools' content[] rendering an upstream item total as though it were a page count, via a new shared pagination-line helper.
+
 ## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-07-16
 
 Fixes usaspending_get_idv_awards's false has_next hiding later pages, adds real pagination to usaspending_search_recipients, corrects usaspending_autocomplete's recipient field mapping, and raises its limit ceiling to 500.

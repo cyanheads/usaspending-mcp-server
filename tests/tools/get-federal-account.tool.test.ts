@@ -45,6 +45,78 @@ describe('getFederalAccountTool', () => {
     expect(result.fiscal_year).toBe(2026);
   });
 
+  it('maps the children Treasury Account Symbol breakdown', async () => {
+    // Verbatim shape of two of the seven children the live API returns for 080-0120.
+    mockGetFederalAccount.mockResolvedValueOnce({
+      account_title: 'Science, National Aeronautics and Space Administration',
+      federal_account_code: '080-0120',
+      children: [
+        {
+          name: 'Science, National Aeronautics and Space Administration',
+          code: '080-2020/2021-0120-000',
+          obligated_amount: 80_867.4,
+          gross_outlay_amount: 996_051.75,
+          budgetary_resources_amount: 13_551_991.48,
+        },
+        {
+          name: 'Science, National Aeronautics and Space Administration',
+          code: '080-2026/2027-0120-000',
+          obligated_amount: 3_436_332_447.12,
+          gross_outlay_amount: 905_838_263.09,
+          budgetary_resources_amount: 7_250_000_000,
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = getFederalAccountTool.input.parse({ account_code: '080-0120' });
+    const result = await getFederalAccountTool.handler(input, ctx);
+
+    expect(result.children).toHaveLength(2);
+    expect(result.children?.[0]).toEqual({
+      name: 'Science, National Aeronautics and Space Administration',
+      code: '080-2020/2021-0120-000',
+      obligated_amount: 80_867.4,
+      gross_outlay_amount: 996_051.75,
+      budgetary_resources_amount: 13_551_991.48,
+    });
+    expect(result.children?.[1]?.code).toBe('080-2026/2027-0120-000');
+    expect(result.children?.[1]?.budgetary_resources_amount).toBe(7_250_000_000);
+  });
+
+  it('omits children when upstream returns none', async () => {
+    mockGetFederalAccount.mockResolvedValueOnce({
+      account_title: 'Test Account',
+      federal_account_code: '097-0200',
+      children: [],
+    });
+
+    const ctx = createMockContext();
+    const input = getFederalAccountTool.input.parse({ account_code: '097-0200' });
+    const result = await getFederalAccountTool.handler(input, ctx);
+
+    expect(result.children).toBeUndefined();
+  });
+
+  it('handles a sparse child — amounts omitted by upstream', async () => {
+    mockGetFederalAccount.mockResolvedValueOnce({
+      account_title: 'Test Account',
+      federal_account_code: '097-0200',
+      children: [{ code: '097-2021/2025-0100-000' }],
+    });
+
+    const ctx = createMockContext();
+    const input = getFederalAccountTool.input.parse({ account_code: '097-0200' });
+    const result = await getFederalAccountTool.handler(input, ctx);
+
+    expect(result.children).toHaveLength(1);
+    expect(result.children?.[0]?.code).toBe('097-2021/2025-0100-000');
+    expect(result.children?.[0]?.name).toBeUndefined();
+    expect(result.children?.[0]?.obligated_amount).toBeUndefined();
+    expect(result.children?.[0]?.gross_outlay_amount).toBeUndefined();
+    expect(result.children?.[0]?.budgetary_resources_amount).toBeUndefined();
+  });
+
   it('returns account without financial totals when absent', async () => {
     mockGetFederalAccount.mockResolvedValueOnce({
       account_title: 'Test Account',
@@ -100,5 +172,44 @@ describe('getFederalAccountTool', () => {
     expect(text).toContain('Department of Defense');
     expect(text).toContain('Operation and Maintenance');
     expect(text).toContain('2026');
+  });
+
+  it('renders the children breakdown in content[] at parity with structuredContent', () => {
+    const output = {
+      account_title: 'Science, National Aeronautics and Space Administration',
+      federal_account_code: '080-0120',
+      children: [
+        {
+          name: 'Science, National Aeronautics and Space Administration',
+          code: '080-2020/2021-0120-000',
+          obligated_amount: 80_867.4,
+          gross_outlay_amount: 996_051.75,
+          budgetary_resources_amount: 13_551_991.48,
+        },
+      ],
+    };
+
+    const blocks = getFederalAccountTool.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('Treasury Account Symbols');
+    expect(text).toContain('080-2020/2021-0120-000');
+    expect(text).toContain('80,867.4');
+    expect(text).toContain('996,051.75');
+    expect(text).toContain('13,551,991.48');
+  });
+
+  it('renders a sparse child without inventing amounts', () => {
+    const output = {
+      account_title: 'Test Account',
+      federal_account_code: '097-0200',
+      children: [{ code: '097-2021/2025-0100-000' }],
+    };
+
+    const blocks = getFederalAccountTool.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('097-2021/2025-0100-000');
+    // Missing amounts render as N/A — never as $0.
+    expect(text).toContain('N/A');
+    expect(text).not.toContain('$0');
   });
 });

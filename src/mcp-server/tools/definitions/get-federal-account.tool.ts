@@ -10,7 +10,7 @@ import { getUSASpendingService } from '@/services/usaspending/usaspending-servic
 export const getFederalAccountTool = tool('usaspending_get_federal_account', {
   title: 'Get Federal Account',
   description:
-    "Fetch a federal account's budget data: total obligations, gross outlays, and budgetary resources. Federal accounts connect appropriations law to actual agency spending. Account codes come from usaspending_search_federal_accounts (its account_number output field) and are formatted as AGENCY-MAIN (e.g., 097-0100 for DoD Operation and Maintenance). Returns account metadata and current fiscal year financial totals.",
+    "Fetch a federal account's budget data: total obligations, gross outlays, and budgetary resources, plus the per-Treasury-Account-Symbol (TAS) component breakdown in children. Federal accounts connect appropriations law to actual agency spending. Account codes come from usaspending_search_federal_accounts (its account_number output field) or usaspending_get_award_federal_accounts (its federal_account field), and are formatted as AGENCY-MAIN (e.g., 097-0100 for DoD Operation and Maintenance). For obligations broken down by program activity or object class, use usaspending_get_federal_account_breakdown.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -18,7 +18,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       .string()
       .min(1)
       .describe(
-        'Federal account code in AGENCY-MAIN format (e.g., 097-0100). Returned as account_number by usaspending_search_federal_accounts.',
+        'Federal account code in AGENCY-MAIN format (e.g., 097-0100). Returned as account_number by usaspending_search_federal_accounts and as federal_account by usaspending_get_award_federal_accounts.',
       ),
   }),
 
@@ -33,6 +33,36 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
     total_gross_outlay_amount: z.number().optional().describe('Total gross outlay amount in USD'),
     total_budgetary_resources: z.number().optional().describe('Total budgetary resources in USD'),
     fiscal_year: z.number().optional().describe('Fiscal year of the financial data'),
+    children: z
+      .array(
+        z
+          .object({
+            name: z.string().optional().describe('Treasury Account Symbol title'),
+            code: z
+              .string()
+              .optional()
+              .describe(
+                'Full Treasury Account Symbol (e.g., 080-2020/2021-0120-000) — the availability-period-scoped component of this federal account, not an account_code accepted by this tool',
+              ),
+            obligated_amount: z
+              .number()
+              .optional()
+              .describe('Obligated amount in USD for this Treasury Account Symbol'),
+            gross_outlay_amount: z
+              .number()
+              .optional()
+              .describe('Gross outlay amount in USD for this Treasury Account Symbol'),
+            budgetary_resources_amount: z
+              .number()
+              .optional()
+              .describe('Budgetary resources in USD for this Treasury Account Symbol'),
+          })
+          .describe('Treasury Account Symbol component with its own financial amounts'),
+      )
+      .optional()
+      .describe(
+        'Treasury Account Symbol (TAS) components that make up this federal account, each with its own obligated, outlay, and budgetary-resource amounts. Omitted when the upstream returns none.',
+      ),
   }),
 
   errors: [
@@ -66,6 +96,18 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       });
     }
 
+    const children = (account.children ?? []).map((c) => ({
+      ...(c.name ? { name: c.name } : {}),
+      ...(c.code ? { code: c.code } : {}),
+      ...(typeof c.obligated_amount === 'number' ? { obligated_amount: c.obligated_amount } : {}),
+      ...(typeof c.gross_outlay_amount === 'number'
+        ? { gross_outlay_amount: c.gross_outlay_amount }
+        : {}),
+      ...(typeof c.budgetary_resources_amount === 'number'
+        ? { budgetary_resources_amount: c.budgetary_resources_amount }
+        : {}),
+    }));
+
     return {
       ...(account.account_title ? { account_title: account.account_title } : {}),
       ...(account.federal_account_code
@@ -85,6 +127,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
         ? { total_budgetary_resources: account.total_budgetary_resources }
         : {}),
       ...(typeof account.fiscal_year === 'number' ? { fiscal_year: account.fiscal_year } : {}),
+      ...(children.length > 0 ? { children } : {}),
     };
   },
 
@@ -115,6 +158,29 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
         lines.push(
           `- **Total Gross Outlays:** $${result.total_gross_outlay_amount.toLocaleString()}`,
         );
+    }
+
+    if (result.children?.length) {
+      lines.push('\n### Treasury Account Symbols');
+      lines.push('| TAS | Name | Obligated | Gross Outlays | Budgetary Resources |');
+      lines.push('|:----|:-----|:----------|:--------------|:--------------------|');
+      for (const c of result.children) {
+        const obligated =
+          typeof c.obligated_amount === 'number'
+            ? `$${c.obligated_amount.toLocaleString()}`
+            : 'N/A';
+        const outlay =
+          typeof c.gross_outlay_amount === 'number'
+            ? `$${c.gross_outlay_amount.toLocaleString()}`
+            : 'N/A';
+        const resources =
+          typeof c.budgetary_resources_amount === 'number'
+            ? `$${c.budgetary_resources_amount.toLocaleString()}`
+            : 'N/A';
+        lines.push(
+          `| ${c.code ?? 'N/A'} | ${c.name ?? 'N/A'} | ${obligated} | ${outlay} | ${resources} |`,
+        );
+      }
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

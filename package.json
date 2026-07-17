@@ -1,7 +1,7 @@
 {
   "name": "@cyanheads/usaspending-mcp-server",
   "mcpName": "io.github.cyanheads/usaspending-mcp-server",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP. STDIO or Streamable HTTP.",
   "type": "module",
   "main": "dist/index.js",

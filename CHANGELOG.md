@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-07-16
+
+Fixes usaspending_get_idv_awards's false has_next hiding later pages, adds real pagination to usaspending_search_recipients, corrects usaspending_autocomplete's recipient field mapping, and raises its limit ceiling to 500.
+
 ## [0.2.5](changelog/0.2.x/0.2.5.md) — 2026-07-16
 
 usaspending_search_awards gains a nested filters object mirroring the analytics tools, an agency_slug chaining field, and keyset-cursor pagination past the endpoint's 50,000-result window, plus a fix for a crash on any search's terminal page.

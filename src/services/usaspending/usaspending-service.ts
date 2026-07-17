@@ -6,14 +6,9 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import {
-  fetchWithTimeout,
-  httpErrorFromResponse,
-  type RequestContext,
-  withRetry,
-} from '@cyanheads/mcp-ts-core/utils';
+import { fetchWithTimeout, type RequestContext, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import type { ServerConfig } from '@/config/server-config.js';
 import type {
   RawAgencyAutocomplete,
@@ -42,6 +37,26 @@ import type {
   RawSubaward,
   RawTransaction,
 } from './types.js';
+
+/**
+ * Upstream statuses that mean "no such entity" on the single-entity detail
+ * endpoints. Verified against the live API per endpoint:
+ *
+ * - `recipient/{id}/` — 400 for a well-formed miss ("Recipient ID not found")
+ *   and for a malformed identifier ("Invalid Recipient-Level"). The
+ *   `fiscal_year` / `award_type` query params are ignored rather than
+ *   rejected, so no existing recipient can answer 400.
+ * - `federal_accounts/{code}/` — 400 for a well-formed miss ("Cannot find
+ *   Federal Account"), 404 when the code shape fails URL routing.
+ * - `agency/{code}/` and `awards/{id}/` — 404 for both a miss and a malformed
+ *   identifier.
+ *
+ * Every reachable 400/404 at these four call sites means the entity does not
+ * exist, so neither status can mask a real record. Everything else — notably
+ * 5xx, and the 422 the agency endpoint raises for an out-of-range
+ * `fiscal_year` — still propagates.
+ */
+const ENTITY_MISS_STATUSES = new Set([400, 404]);
 
 export class USASpendingService {
   private readonly baseUrl: string;
@@ -99,12 +114,6 @@ export class USASpendingService {
             signal: ctx.signal,
           },
         );
-        if (!response.ok) {
-          throw await httpErrorFromResponse(response, {
-            service: 'USAspending',
-            data: { path },
-          });
-        }
         const text = await response.text();
         return this.parseJson<T>(text, url);
       },
@@ -115,6 +124,34 @@ export class USASpendingService {
         signal: ctx.signal,
       },
     );
+  }
+
+  /**
+   * Fetches one entity by path identifier, resolving to `undefined` when the
+   * upstream reports it does not exist (see {@link ENTITY_MISS_STATUSES}). This
+   * lets the calling tool handler's existence check run and its declared
+   * not-found contract fire, instead of `fetchWithTimeout`'s status-mapped
+   * throw escaping as an unclassified error.
+   *
+   * Deliberately kept out of `get<T>()` itself: `listAgencies`,
+   * `getAgencySubAgencies`, `getAgencyBudgetaryResources`, and
+   * `getDisasterOverview` share that primitive but have no not-found contract
+   * and no existence check, so swallowing their 4xx would silently turn real
+   * upstream failures into empty successes.
+   */
+  private async getEntity<T>(path: string, ctx: Context): Promise<T | undefined> {
+    try {
+      return await this.get<T>(path, ctx);
+    } catch (err) {
+      if (err instanceof McpError) {
+        const status = err.data?.statusCode;
+        if (typeof status === 'number' && ENTITY_MISS_STATUSES.has(status)) {
+          ctx.log.debug('Upstream reported no such entity', { path, status });
+          return;
+        }
+      }
+      throw err;
+    }
   }
 
   private parseJson<T>(text: string, url: string): T {
@@ -157,9 +194,9 @@ export class USASpendingService {
 
   // --- Award detail ---
 
-  async getAward(awardId: string, ctx: Context): Promise<RawAwardDetail> {
+  async getAward(awardId: string, ctx: Context): Promise<RawAwardDetail | undefined> {
     ctx.log.debug('getAward', { awardId });
-    return await this.get<RawAwardDetail>(`awards/${encodeURIComponent(awardId)}/`, ctx);
+    return await this.getEntity<RawAwardDetail>(`awards/${encodeURIComponent(awardId)}/`, ctx);
   }
 
   getAwardTransactions(
@@ -209,13 +246,13 @@ export class USASpendingService {
     recipientId: string,
     params: { fiscal_year?: number; award_type?: string },
     ctx: Context,
-  ): Promise<RawRecipientDetail> {
+  ): Promise<RawRecipientDetail | undefined> {
     ctx.log.debug('getRecipient', { recipientId });
     const qs = new URLSearchParams();
     if (params.fiscal_year) qs.set('fiscal_year', String(params.fiscal_year));
     if (params.award_type) qs.set('award_type', params.award_type);
     const query = qs.toString();
-    return await this.get<RawRecipientDetail>(
+    return await this.getEntity<RawRecipientDetail>(
       `recipient/${encodeURIComponent(recipientId)}/${query ? `?${query}` : ''}`,
       ctx,
     );
@@ -238,9 +275,9 @@ export class USASpendingService {
     );
   }
 
-  async getAgency(toptierCode: string, ctx: Context): Promise<RawAgencyDetail> {
+  async getAgency(toptierCode: string, ctx: Context): Promise<RawAgencyDetail | undefined> {
     ctx.log.debug('getAgency', { toptierCode });
-    return await this.get<RawAgencyDetail>(`agency/${encodeURIComponent(toptierCode)}/`, ctx);
+    return await this.getEntity<RawAgencyDetail>(`agency/${encodeURIComponent(toptierCode)}/`, ctx);
   }
 
   async getAgencySubAgencies(
@@ -357,9 +394,12 @@ export class USASpendingService {
 
   // --- Federal accounts ---
 
-  async getFederalAccount(accountCode: string, ctx: Context): Promise<RawFederalAccount> {
+  async getFederalAccount(
+    accountCode: string,
+    ctx: Context,
+  ): Promise<RawFederalAccount | undefined> {
     ctx.log.debug('getFederalAccount', { accountCode });
-    return await this.get<RawFederalAccount>(
+    return await this.getEntity<RawFederalAccount>(
       `federal_accounts/${encodeURIComponent(accountCode)}/`,
       ctx,
     );

@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.8-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.9-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -43,9 +43,9 @@
 | `usaspending_get_agency` | Fetch an agency's fiscal year overview: mission, budget authority, obligation totals, sub-agency count, and DEF codes. Accepts a 3-digit `toptier_code` or an `agency_slug` from award search results. |
 | `usaspending_spending_by_geography` | Aggregate federal spending by state, county, or congressional district. Returns per-capita figures when combined with population data. |
 | `usaspending_spending_by_category` | Aggregate spending grouped by NAICS code, PSC code, awarding agency, funding agency, CFDA program, or recipient. Returns top items with amounts for trend and breakdown analysis. |
-| `usaspending_spending_over_time` | Fetch aggregated spending by fiscal year, fiscal quarter, or calendar month. Filter by award type, agency, recipient, or keyword to trace trends in a specific area. |
+| `usaspending_spending_over_time` | Fetch aggregated spending by fiscal year, fiscal quarter, or fiscal month. Filter by award type, agency, recipient, or keyword to trace trends in a specific area. |
 | `usaspending_disaster_spending` | Fetch disaster and emergency supplemental spending (COVID-19, hurricanes, etc.) broken down by agency, CFDA program, recipient, or geography. Filter by DEF codes to isolate a specific appropriation. |
-| `usaspending_get_federal_account` | Fetch a federal account's budget data: total obligations, outlays, program activities, and object class breakdown. Account codes appear in award funding details. |
+| `usaspending_get_federal_account` | Fetch a federal account's budget data: total obligations, outlays, program activities, and object class breakdown. Account codes come from `usaspending_search_federal_accounts`. |
 | `usaspending_search_federal_accounts` | List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers for chaining into `usaspending_get_federal_account`. |
 | `usaspending_list_agencies` | List all top-tier federal agencies with toptier codes, budget authority amounts, and obligation totals. Entry point for agency navigation. |
 | `usaspending_autocomplete` | Look up valid code values for filter fields: NAICS, PSC, CFDA, recipient names, or agency names. Use before filtering to discover the right code from a description. |
@@ -186,7 +186,7 @@ Fetch budget data for a federal account identified by its account code.
 - Returns account title, federal account code, budget function, and managing agency
 - Includes fiscal year snapshot with total obligations and outlays
 - Program activity and object class breakdown shows how funds are categorized
-- Account codes appear in `account_obligations_by_defc` from `usaspending_get_award`
+- Account codes come from `account_number` in `usaspending_search_federal_accounts` results
 
 ---
 

@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-07-17 06:21:33
+Generated on: 2026-07-17 11:09:12
 
 ```text
 usaspending-mcp-server/
@@ -161,6 +161,8 @@ usaspending-mcp-server/
 ├── tests/
 │   ├── security/
 │   │   └── input-validation.test.ts
+│   ├── services/
+│   │   └── usaspending-service.test.ts
 │   ├── tools/
 │   │   ├── autocomplete.tool.test.ts
 │   │   ├── disaster-spending.tool.test.ts

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.9](changelog/0.2.x/0.2.9.md) — 2026-07-17
+
+Declared not-found contracts now fire on upstream misses for usaspending_get_award, usaspending_get_recipient, usaspending_get_agency, and usaspending_get_federal_account; usaspending_search_awards guards the 2007-10-01 date floor client-side; usaspending_spending_over_time relabels month as a fiscal-year ordinal.
+
 ## [0.2.8](changelog/0.2.x/0.2.8.md) — 2026-07-17
 
 Corrects raw-response drift against the live USAspending.gov API across four tools: usaspending_get_award and usaspending_get_agency drop a dead transactions_count field, usaspending_get_recipient's totals/ZIP mapping is fixed, and usaspending_get_agency now sources real budget data and paginates sub-agencies.

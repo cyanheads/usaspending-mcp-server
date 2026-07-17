@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.5](changelog/0.2.x/0.2.5.md) — 2026-07-16
+
+usaspending_search_awards gains a nested filters object mirroring the analytics tools, an agency_slug chaining field, and keyset-cursor pagination past the endpoint's 50,000-result window, plus a fix for a crash on any search's terminal page.
+
 ## [0.2.4](changelog/0.2.x/0.2.4.md) — 2026-07-16
 
 Three usaspending_disaster_spending fixes — geography returns real obligation amounts plus population/per-capita (#18), breakdown pagination advances pages (#19), and the unreachable no_data contract is removed (#35) — atop @cyanheads/mcp-ts-core ^0.10.14 adoption with Socket install-time scanning.

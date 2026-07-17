@@ -139,11 +139,12 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
 
     const results = (data.results ?? []).map((r) => {
       const tp = r.time_period ?? {};
+      const month = tp.month ?? tp.calendar_month;
       return {
         time_period: {
           ...(tp.fiscal_year ? { fiscal_year: tp.fiscal_year } : {}),
           ...(tp.quarter ? { quarter: tp.quarter } : {}),
-          ...((tp.month ?? tp.calendar_month) ? { month: (tp.month ?? tp.calendar_month)! } : {}),
+          ...(month ? { month } : {}),
           ...(tp.calendar_year ? { calendar_year: tp.calendar_year } : {}),
         },
         ...(typeof r.aggregated_amount === 'number'

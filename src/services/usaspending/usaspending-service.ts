@@ -56,7 +56,7 @@ export class USASpendingService {
 
   // --- HTTP primitives ---
 
-  private async get<T>(path: string, ctx: Context): Promise<T> {
+  private get<T>(path: string, ctx: Context): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     return withRetry(
       async () => {
@@ -81,7 +81,7 @@ export class USASpendingService {
     );
   }
 
-  private async post<T>(path: string, body: unknown, ctx: Context): Promise<T> {
+  private post<T>(path: string, body: unknown, ctx: Context): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     return withRetry(
       async () => {
@@ -133,7 +133,7 @@ export class USASpendingService {
 
   // --- Award search ---
 
-  async searchAwards(
+  searchAwards(
     params: {
       filters: Record<string, unknown>;
       fields: string[];
@@ -153,10 +153,10 @@ export class USASpendingService {
 
   async getAward(awardId: string, ctx: Context): Promise<RawAwardDetail> {
     ctx.log.debug('getAward', { awardId });
-    return this.get<RawAwardDetail>(`awards/${encodeURIComponent(awardId)}/`, ctx);
+    return await this.get<RawAwardDetail>(`awards/${encodeURIComponent(awardId)}/`, ctx);
   }
 
-  async getAwardTransactions(
+  getAwardTransactions(
     params: {
       award_id: string;
       sort: string;
@@ -170,7 +170,7 @@ export class USASpendingService {
     return this.post('transactions/', params, ctx);
   }
 
-  async getAwardSubawards(
+  getAwardSubawards(
     params: {
       award_id: string;
       sort: string;
@@ -213,7 +213,7 @@ export class USASpendingService {
     if (params.fiscal_year) qs.set('fiscal_year', String(params.fiscal_year));
     if (params.award_type) qs.set('award_type', params.award_type);
     const query = qs.toString();
-    return this.get<RawRecipientDetail>(
+    return await this.get<RawRecipientDetail>(
       `recipient/${encodeURIComponent(recipientId)}/${query ? `?${query}` : ''}`,
       ctx,
     );
@@ -221,7 +221,7 @@ export class USASpendingService {
 
   // --- Agencies ---
 
-  async listAgencies(
+  listAgencies(
     params: { sort?: string; order?: string },
     ctx: Context,
   ): Promise<{ results: RawAgencyEntry[] }> {
@@ -238,7 +238,7 @@ export class USASpendingService {
 
   async getAgency(toptierCode: string, ctx: Context): Promise<RawAgencyDetail> {
     ctx.log.debug('getAgency', { toptierCode });
-    return this.get<RawAgencyDetail>(`agency/${encodeURIComponent(toptierCode)}/`, ctx);
+    return await this.get<RawAgencyDetail>(`agency/${encodeURIComponent(toptierCode)}/`, ctx);
   }
 
   async getAgencySubAgencies(
@@ -246,7 +246,7 @@ export class USASpendingService {
     ctx: Context,
   ): Promise<{ results: RawSubAgencyEntry[] }> {
     ctx.log.debug('getAgencySubAgencies', { toptierCode });
-    return this.get<{ results: RawSubAgencyEntry[] }>(
+    return await this.get<{ results: RawSubAgencyEntry[] }>(
       `agency/${encodeURIComponent(toptierCode)}/sub_agency/`,
       ctx,
     );
@@ -257,7 +257,7 @@ export class USASpendingService {
     ctx: Context,
   ): Promise<{ agency_data_by_year: RawBudgetaryResources[] }> {
     ctx.log.debug('getAgencyBudgetaryResources', { toptierCode });
-    return this.get<{ agency_data_by_year: RawBudgetaryResources[] }>(
+    return await this.get<{ agency_data_by_year: RawBudgetaryResources[] }>(
       `agency/${encodeURIComponent(toptierCode)}/budgetary_resources/`,
       ctx,
     );
@@ -265,7 +265,7 @@ export class USASpendingService {
 
   // --- Spending analytics ---
 
-  async spendingByGeography(
+  spendingByGeography(
     body: {
       scope: string;
       geo_layer: string;
@@ -278,7 +278,7 @@ export class USASpendingService {
     return this.post('search/spending_by_geography/', body, ctx);
   }
 
-  async spendingByCategory(
+  spendingByCategory(
     category: string,
     body: {
       filters: Record<string, unknown>;
@@ -295,7 +295,7 @@ export class USASpendingService {
     return this.post(`search/spending_by_category/${category}/`, body, ctx);
   }
 
-  async spendingOverTime(
+  spendingOverTime(
     body: {
       group: string;
       filters: Record<string, unknown>;
@@ -309,12 +309,12 @@ export class USASpendingService {
 
   // --- Disaster ---
 
-  async getDisasterOverview(ctx: Context): Promise<RawDisasterOverview> {
+  getDisasterOverview(ctx: Context): Promise<RawDisasterOverview> {
     ctx.log.debug('getDisasterOverview');
     return this.get<RawDisasterOverview>('disaster/overview/', ctx);
   }
 
-  async getDisasterByAgency(
+  getDisasterByAgency(
     spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
@@ -323,7 +323,7 @@ export class USASpendingService {
     return this.post('disaster/agency/spending/', { ...body, spending_type: spendingType }, ctx);
   }
 
-  async getDisasterByCfda(
+  getDisasterByCfda(
     body: Record<string, unknown>,
     ctx: Context,
   ): Promise<{ results: RawDisasterResult[]; page_metadata: RawPageMetadata }> {
@@ -331,7 +331,7 @@ export class USASpendingService {
     return this.post('disaster/cfda/spending/', body, ctx);
   }
 
-  async getDisasterByRecipient(
+  getDisasterByRecipient(
     spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
@@ -340,7 +340,7 @@ export class USASpendingService {
     return this.post('disaster/recipient/spending/', { ...body, spending_type: spendingType }, ctx);
   }
 
-  async getDisasterByGeography(
+  getDisasterByGeography(
     body: Record<string, unknown>,
     ctx: Context,
   ): Promise<{ scope: string; geo_layer: string; results: RawDisasterGeoResult[] }> {
@@ -352,10 +352,13 @@ export class USASpendingService {
 
   async getFederalAccount(accountCode: string, ctx: Context): Promise<RawFederalAccount> {
     ctx.log.debug('getFederalAccount', { accountCode });
-    return this.get<RawFederalAccount>(`federal_accounts/${encodeURIComponent(accountCode)}/`, ctx);
+    return await this.get<RawFederalAccount>(
+      `federal_accounts/${encodeURIComponent(accountCode)}/`,
+      ctx,
+    );
   }
 
-  async searchFederalAccounts(
+  searchFederalAccounts(
     body: Record<string, unknown>,
     ctx: Context,
   ): Promise<RawFederalAccountSearchResponse> {
@@ -369,7 +372,7 @@ export class USASpendingService {
 
   // --- IDV awards ---
 
-  async getIdvAwards(
+  getIdvAwards(
     params: {
       award_id: string;
       type: string;
@@ -386,7 +389,7 @@ export class USASpendingService {
 
   // --- Autocomplete ---
 
-  async autocompleteNaics(
+  autocompleteNaics(
     searchText: string,
     limit: number,
     ctx: Context,
@@ -395,7 +398,7 @@ export class USASpendingService {
     return this.post('autocomplete/naics/', { search_text: searchText, limit }, ctx);
   }
 
-  async autocompletePsc(
+  autocompletePsc(
     searchText: string,
     limit: number,
     ctx: Context,
@@ -404,7 +407,7 @@ export class USASpendingService {
     return this.post('autocomplete/psc/', { search_text: searchText, limit }, ctx);
   }
 
-  async autocompleteCfda(
+  autocompleteCfda(
     searchText: string,
     limit: number,
     ctx: Context,
@@ -413,7 +416,7 @@ export class USASpendingService {
     return this.post('autocomplete/cfda/', { search_text: searchText, limit }, ctx);
   }
 
-  async autocompleteAwardingAgency(
+  autocompleteAwardingAgency(
     searchText: string,
     limit: number,
     ctx: Context,
@@ -422,7 +425,7 @@ export class USASpendingService {
     return this.post('autocomplete/awarding_agency/', { search_text: searchText, limit }, ctx);
   }
 
-  async autocompleteRecipient(
+  autocompleteRecipient(
     searchText: string,
     limit: number,
     ctx: Context,

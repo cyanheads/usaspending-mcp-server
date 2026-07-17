@@ -134,9 +134,16 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     }
 
     ctx.log.info('usaspending_get_agency', { toptier_code: toptierCode });
+    if (!toptierCode) {
+      throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required', {
+        recovery: {
+          hint: 'Call usaspending_list_agencies to find the correct toptier_code or agency_slug.',
+        },
+      });
+    }
     const [detail, subAgenciesData] = await Promise.all([
-      svc.getAgency(toptierCode!, ctx),
-      svc.getAgencySubAgencies(toptierCode!, ctx).catch(() => ({
+      svc.getAgency(toptierCode, ctx),
+      svc.getAgencySubAgencies(toptierCode, ctx).catch(() => ({
         results: [] as RawSubAgencyEntry[],
       })),
     ]);

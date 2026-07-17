@@ -162,6 +162,147 @@ describe('USASpendingService non-entity GETs', () => {
   });
 });
 
+describe('USASpendingService federal-account POSTs', () => {
+  let ctx: ReturnType<typeof createMockContext>;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * The two breakdown dimensions differ only by a path segment, so the segment is
+   * the whole contract of these methods — and the tool suite mocks the service
+   * away, making this the only layer that can observe it.
+   */
+  it('getFederalAccountProgramActivities posts to the program_activities/total route', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ results: [], page_metadata: {} }));
+    await newService().getFederalAccountProgramActivities('097-0100', { limit: 10, page: 1 }, ctx);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      'https://api.usaspending.gov/api/v2/federal_accounts/097-0100/program_activities/total',
+    );
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ limit: 10, page: 1 });
+  });
+
+  it('getFederalAccountObjectClasses posts to the object_classes/total route', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ results: [], page_metadata: {} }));
+    await newService().getFederalAccountObjectClasses('097-0100', { limit: 10, page: 1 }, ctx);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      'https://api.usaspending.gov/api/v2/federal_accounts/097-0100/object_classes/total',
+    );
+    expect(init.method).toBe('POST');
+  });
+
+  /**
+   * A well-formed but nonexistent account code answers 200 with `total: 0` here,
+   * unlike the sibling GET federal_accounts/{code}/, which 400s. The empty body
+   * must reach the caller as data so the tool can disclose it as a notice — this
+   * route must never be wired through getEntity(), which would flatten a real 4xx
+   * into an indistinguishable `undefined`.
+   */
+  it('getFederalAccountProgramActivities returns the empty 200 body for a nonexistent account', async () => {
+    stubFetch(
+      200,
+      JSON.stringify({
+        results: [],
+        page_metadata: { page: 1, total: 0, limit: 3, hasNext: false, hasPrevious: false },
+      }),
+    );
+    const result = await newService().getFederalAccountProgramActivities(
+      '999-9999',
+      { limit: 3, page: 1 },
+      ctx,
+    );
+    expect(result.results).toEqual([]);
+    expect(result.page_metadata?.total).toBe(0);
+  });
+
+  it('getFederalAccountObjectClasses propagates a 404 rather than reporting an empty breakdown', async () => {
+    // An account code that fails URL routing answers 404 with an HTML body.
+    stubFetch(404, '<!doctype html><html><body><h1>Not Found</h1></body></html>');
+    await expect(
+      newService().getFederalAccountObjectClasses('garbage', { limit: 10, page: 1 }, ctx),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound });
+  });
+});
+
+describe('USASpendingService getAwardFederalAccounts', () => {
+  let ctx: ReturnType<typeof createMockContext>;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts award_id, limit, and page to awards/accounts/', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ results: [], page_metadata: {} }));
+    await newService().getAwardFederalAccounts(
+      { award_id: 'CONT_AWD_GSFC0198106DNAS526555_8000_-NONE-_-NONE-', limit: 2, page: 1 },
+      ctx,
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.usaspending.gov/api/v2/awards/accounts/');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      award_id: 'CONT_AWD_GSFC0198106DNAS526555_8000_-NONE-_-NONE-',
+      limit: 2,
+      page: 1,
+    });
+  });
+
+  /**
+   * A nonexistent award_id answers 200 with zero rows — the endpoint has no miss
+   * status at all. The body must reach the caller as data (not `undefined`) so the
+   * tool discloses it as a notice instead of a not-found that could never fire.
+   */
+  it('returns the empty 200 body for a nonexistent award_id', async () => {
+    stubFetch(
+      200,
+      JSON.stringify({
+        results: [],
+        page_metadata: {
+          page: 1,
+          count: 0,
+          next: null,
+          previous: null,
+          hasNext: false,
+          hasPrevious: false,
+        },
+      }),
+    );
+    const result = await newService().getAwardFederalAccounts(
+      { award_id: 'CONT_AWD_NOTAREALAWARD_0000_-NONE-_-NONE-', limit: 2, page: 1 },
+      ctx,
+    );
+    expect(result.results).toEqual([]);
+    expect(result.page_metadata?.count).toBe(0);
+  });
+
+  it('propagates the 422 an empty award_id draws', async () => {
+    stubFetch(
+      422,
+      JSON.stringify({
+        detail: "Invalid value in 'award_id'. '' is not a valid type (integer, text)",
+      }),
+    );
+    await expect(
+      newService().getAwardFederalAccounts({ award_id: '', limit: 2, page: 1 }, ctx),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.ValidationError });
+  });
+});
+
 describe('USASpendingService POST', () => {
   let ctx: ReturnType<typeof createMockContext>;
 

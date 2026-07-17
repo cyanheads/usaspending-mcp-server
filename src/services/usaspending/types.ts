@@ -234,6 +234,41 @@ export interface RawSubaward {
 }
 
 /**
+ * Raw federal account row from POST /awards/accounts/ (the upstream
+ * `AccountListing` contract). Every field is part of the fixed response shape —
+ * confirmed against the live API across all 29 rows of a multi-account award.
+ * `federal_account` is the AGENCY-MAIN code (e.g. `080-0120`) and chains
+ * unmodified into `usaspending_get_federal_account`.
+ */
+export interface RawAwardFederalAccount {
+  account_title?: string | null;
+  federal_account?: string | null;
+  funding_agency_abbreviation?: string | null;
+  funding_agency_id?: number | null;
+  funding_agency_name?: string | null;
+  funding_agency_slug?: string | null;
+  funding_toptier_agency_id?: number | null;
+  total_transaction_obligated_amount?: number | null;
+}
+
+/**
+ * Raw paginated response from POST /awards/accounts/. Its `page_metadata` keys
+ * differ from {@link RawPageMetadata}: the grand total across pages is `count`
+ * (not `total`) and no `limit` is echoed back, so it needs its own shape.
+ */
+export interface RawAwardFederalAccountsResponse {
+  page_metadata?: {
+    count?: number | null;
+    hasNext?: boolean | null;
+    hasPrevious?: boolean | null;
+    next?: number | null;
+    page?: number | null;
+    previous?: number | null;
+  } | null;
+  results?: RawAwardFederalAccount[] | null;
+}
+
+/**
  * Raw recipient search result row from POST /recipient/ (RecipientListing contract).
  * The endpoint returns only these fields — no location/address data (confirmed against
  * the live API across broad and narrow queries).
@@ -467,13 +502,28 @@ export interface RawDisasterGeoResult {
   shape_code?: string | null;
 }
 
+/**
+ * Raw Treasury Account Symbol (TAS) component of a federal account, from the
+ * `children` array of GET /federal_accounts/{code}/. `code` is the full TAS
+ * (e.g. `080-2020/2021-0120-000`), distinct from the parent's AGENCY-MAIN
+ * `federal_account_code`. One entry per TAS under the account — bounded and
+ * small (7 for 080-0120, 16 for 097-0100 against the live API).
+ */
+export interface RawFederalAccountChild {
+  budgetary_resources_amount?: number | null;
+  code?: string | null;
+  gross_outlay_amount?: number | null;
+  name?: string | null;
+  obligated_amount?: number | null;
+}
+
 /** Raw federal account response from /federal_accounts/{code}/ */
 export interface RawFederalAccount {
   account_title?: string | null;
   agency_identifier?: string | null;
   bureau_name?: string | null;
   bureau_slug?: string | null;
-  children?: unknown[] | null;
+  children?: RawFederalAccountChild[] | null;
   federal_account_code?: string | null;
   fiscal_year?: number | null;
   id?: number | null;
@@ -483,6 +533,31 @@ export interface RawFederalAccount {
   total_budgetary_resources?: number | null;
   total_gross_outlay_amount?: number | null;
   total_obligated_amount?: number | null;
+}
+
+/**
+ * Raw breakdown row from POST /federal_accounts/{code}/program_activities/total/
+ * and POST /federal_accounts/{code}/object_classes/total/. Both endpoints share
+ * this row shape; `type` is returned only by the program-activity route
+ * (`PAC/PAN` for the legacy program activity code/name pair, `PARK` for a
+ * Program Activity Reporting Key) and is absent from object-class rows.
+ */
+export interface RawFederalAccountBreakdownRow {
+  code?: string | null;
+  name?: string | null;
+  obligations?: number | null;
+  type?: string | null;
+}
+
+/**
+ * Raw paginated response from the federal-account breakdown endpoints. Its
+ * `page_metadata` carries an honest `total` (plus `limit`), so it maps onto
+ * {@link RawPageMetadata} — unlike the sibling POST /awards/accounts/, which
+ * reports `count` and omits `limit`.
+ */
+export interface RawFederalAccountBreakdownResponse {
+  page_metadata?: RawPageMetadata | null;
+  results?: RawFederalAccountBreakdownRow[] | null;
 }
 
 /** Raw search result row from POST /federal_accounts/ */

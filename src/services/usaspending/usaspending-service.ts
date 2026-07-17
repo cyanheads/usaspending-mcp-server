@@ -15,6 +15,7 @@ import type {
   RawAgencyDetail,
   RawAgencyEntry,
   RawAwardDetail,
+  RawAwardFederalAccountsResponse,
   RawAwardSummary,
   RawBudgetaryResources,
   RawCfdaAutocomplete,
@@ -22,6 +23,7 @@ import type {
   RawDisasterOverview,
   RawDisasterResult,
   RawFederalAccount,
+  RawFederalAccountBreakdownResponse,
   RawFederalAccountSearchResponse,
   RawGeographyResult,
   RawIdvAwardsResponse,
@@ -227,6 +229,26 @@ export class USASpendingService {
     return this.post('subawards/', params, ctx);
   }
 
+  /**
+   * Lists the Treasury federal accounts that funded an award.
+   *
+   * Not routed through {@link getEntity}: this endpoint answers a nonexistent or
+   * malformed `award_id` with HTTP 200 and zero rows rather than a miss status,
+   * so there is no not-found signal to map. Callers disclose the empty case as a
+   * notice.
+   */
+  getAwardFederalAccounts(
+    params: {
+      award_id: string;
+      limit: number;
+      page: number;
+    },
+    ctx: Context,
+  ): Promise<RawAwardFederalAccountsResponse> {
+    ctx.log.debug('getAwardFederalAccounts', { awardId: params.award_id, page: params.page });
+    return this.post<RawAwardFederalAccountsResponse>('awards/accounts/', params, ctx);
+  }
+
   // --- Recipients ---
 
   searchRecipients(
@@ -415,6 +437,41 @@ export class USASpendingService {
       limit: body.limit,
     });
     return this.post<RawFederalAccountSearchResponse>('federal_accounts/', body, ctx);
+  }
+
+  /**
+   * Obligations for an account broken down by program activity.
+   *
+   * Like {@link getFederalAccountObjectClasses}, a well-formed but nonexistent
+   * account code answers HTTP 200 with zero rows and `total: 0` — only a code
+   * that fails URL routing 404s — so neither route carries a not-found signal
+   * the way `federal_accounts/{code}/` does.
+   */
+  getFederalAccountProgramActivities(
+    accountCode: string,
+    body: { limit: number; page: number },
+    ctx: Context,
+  ): Promise<RawFederalAccountBreakdownResponse> {
+    ctx.log.debug('getFederalAccountProgramActivities', { accountCode, page: body.page });
+    return this.post<RawFederalAccountBreakdownResponse>(
+      `federal_accounts/${encodeURIComponent(accountCode)}/program_activities/total`,
+      body,
+      ctx,
+    );
+  }
+
+  /** Obligations for an account broken down by object class. */
+  getFederalAccountObjectClasses(
+    accountCode: string,
+    body: { limit: number; page: number },
+    ctx: Context,
+  ): Promise<RawFederalAccountBreakdownResponse> {
+    ctx.log.debug('getFederalAccountObjectClasses', { accountCode, page: body.page });
+    return this.post<RawFederalAccountBreakdownResponse>(
+      `federal_accounts/${encodeURIComponent(accountCode)}/object_classes/total`,
+      body,
+      ctx,
+    );
   }
 
   // --- IDV awards ---

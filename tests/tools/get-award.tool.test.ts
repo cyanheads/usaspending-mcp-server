@@ -29,7 +29,8 @@ const fullAwardFixture = {
   period_of_performance: {
     start_date: '2018-07-01',
     end_date: '2023-06-30',
-    potential_end_date: '2025-06-30',
+    // Upstream ships this field with a midnight time component; its siblings are plain dates.
+    potential_end_date: '2025-06-30 00:00:00',
   },
   place_of_performance: {
     city_name: 'Seattle',
@@ -85,6 +86,40 @@ describe('getAwardTool', () => {
     expect(result.awarding_agency?.toptier_name).toBe('Department of Defense');
     expect(result.naics?.code).toBe('541512');
     expect(result.account_obligations_by_defc).toHaveLength(1);
+  });
+
+  it('drops the time component from potential_end_date so period dates share one shape', async () => {
+    mockGetAward.mockResolvedValueOnce(fullAwardFixture);
+
+    const ctx = createMockContext();
+    const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_FA862118F6251_9700' });
+    const result = await getAwardTool.handler(input, ctx);
+
+    expect(result.period_of_performance).toEqual({
+      start_date: '2018-07-01',
+      end_date: '2023-06-30',
+      potential_end_date: '2025-06-30',
+    });
+
+    const blocks = getAwardTool.format!(result);
+    expect((blocks[0] as { text: string }).text).toContain('(potential: 2025-06-30)');
+  });
+
+  it('leaves an already-plain potential_end_date unchanged', async () => {
+    mockGetAward.mockResolvedValueOnce({
+      ...fullAwardFixture,
+      period_of_performance: {
+        start_date: '2022-02-01',
+        end_date: '2024-01-31',
+        potential_end_date: '2026-01-31',
+      },
+    });
+
+    const ctx = createMockContext();
+    const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_FA862118F6251_9700' });
+    const result = await getAwardTool.handler(input, ctx);
+
+    expect(result.period_of_performance?.potential_end_date).toBe('2026-01-31');
   });
 
   it('throws award_not_found for an award with no identifier fields', async () => {

@@ -46,9 +46,12 @@ export const getAwardTool = tool('usaspending_get_award', {
     date_signed: z.string().optional().describe('Date award was signed (YYYY-MM-DD)'),
     period_of_performance: z
       .object({
-        start_date: z.string().optional().describe('Performance start date'),
-        end_date: z.string().optional().describe('Performance end date'),
-        potential_end_date: z.string().optional().describe('Potential end date including options'),
+        start_date: z.string().optional().describe('Performance start date (YYYY-MM-DD)'),
+        end_date: z.string().optional().describe('Performance end date (YYYY-MM-DD)'),
+        potential_end_date: z
+          .string()
+          .optional()
+          .describe('Potential end date including options (YYYY-MM-DD)'),
       })
       .optional()
       .describe('Period of performance dates'),
@@ -216,8 +219,10 @@ export const getAwardTool = tool('usaspending_get_award', {
               ...(r.period_of_performance.end_date
                 ? { end_date: r.period_of_performance.end_date }
                 : {}),
+              // Upstream returns this one as "YYYY-MM-DD HH:MM:SS" while its siblings are plain
+              // dates; the time component is always midnight, so drop it for a single shape.
               ...(r.period_of_performance.potential_end_date
-                ? { potential_end_date: r.period_of_performance.potential_end_date }
+                ? { potential_end_date: r.period_of_performance.potential_end_date.slice(0, 10) }
                 : {}),
             },
           }

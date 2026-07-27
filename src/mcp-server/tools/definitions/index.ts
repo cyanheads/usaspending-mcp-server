@@ -3,7 +3,7 @@
  * @module mcp-server/tools/definitions/index
  */
 
-export { autocompleteTool } from './autocomplete.tool.js';
+export { autocompleteFiltersTool } from './autocomplete-filters.tool.js';
 export { disasterSpendingTool } from './disaster-spending.tool.js';
 export { getAgencyTool } from './get-agency.tool.js';
 export { getAwardTool } from './get-award.tool.js';
@@ -22,7 +22,7 @@ export { spendingByCategoryTool } from './spending-by-category.tool.js';
 export { spendingByGeographyTool } from './spending-by-geography.tool.js';
 export { spendingOverTimeTool } from './spending-over-time.tool.js';
 
-import { autocompleteTool } from './autocomplete.tool.js';
+import { autocompleteFiltersTool } from './autocomplete-filters.tool.js';
 import { disasterSpendingTool } from './disaster-spending.tool.js';
 import { getAgencyTool } from './get-agency.tool.js';
 import { getAwardTool } from './get-award.tool.js';
@@ -43,7 +43,7 @@ import { spendingOverTimeTool } from './spending-over-time.tool.js';
 
 export const allToolDefinitions = [
   listAgenciesTool,
-  autocompleteTool,
+  autocompleteFiltersTool,
   searchAwardsTool,
   getAwardTool,
   getAwardTransactionsTool,

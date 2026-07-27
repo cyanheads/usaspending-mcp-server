@@ -7,7 +7,7 @@
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { autocompleteTool } from '@/mcp-server/tools/definitions/autocomplete.tool.js';
+import { autocompleteFiltersTool } from '@/mcp-server/tools/definitions/autocomplete-filters.tool.js';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
 import { getAgencyTool } from '@/mcp-server/tools/definitions/get-agency.tool.js';
 import { getAwardTool } from '@/mcp-server/tools/definitions/get-award.tool.js';
@@ -134,35 +134,35 @@ describe('searchAwardsTool — input validation', () => {
   });
 });
 
-describe('autocompleteTool — input validation', () => {
+describe('autocompleteFiltersTool — input validation', () => {
   it('rejects empty search_text (min length 1)', () => {
-    expect(() => autocompleteTool.input.parse({ type: 'naics', search_text: '' })).toThrow();
+    expect(() => autocompleteFiltersTool.input.parse({ type: 'naics', search_text: '' })).toThrow();
   });
 
   it('rejects invalid type enum', () => {
     expect(() =>
-      autocompleteTool.input.parse({ type: 'unknown_type', search_text: 'test' }),
+      autocompleteFiltersTool.input.parse({ type: 'unknown_type', search_text: 'test' }),
     ).toThrow();
   });
 
   it('rejects limit=0', () => {
     expect(() =>
-      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 0 }),
+      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 0 }),
     ).toThrow();
   });
 
   it('rejects limit=501 (above max)', () => {
     expect(() =>
-      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 501 }),
+      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 501 }),
     ).toThrow();
   });
 
   it('accepts limit at boundaries 1 and 500', () => {
     expect(() =>
-      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 1 }),
+      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 1 }),
     ).not.toThrow();
     expect(() =>
-      autocompleteTool.input.parse({ type: 'naics', search_text: 'test', limit: 500 }),
+      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 500 }),
     ).not.toThrow();
   });
 });
@@ -379,7 +379,7 @@ describe('Security — injection strings do not break tool format output', () =>
       results: [{ code: '541512', name: injection }],
       total: 1,
     };
-    expect(() => autocompleteTool.format!(output)).not.toThrow();
+    expect(() => autocompleteFiltersTool.format!(output)).not.toThrow();
   });
 
   it('spendingByGeographyTool format handles injection in display_name', () => {
@@ -404,8 +404,8 @@ describe('Security — oversized string inputs are rejected by schema', () => {
     expect(input.keyword?.length).toBe(10_000);
   });
 
-  it('autocompleteTool rejects empty search_text at schema level', () => {
-    expect(() => autocompleteTool.input.parse({ type: 'naics', search_text: '' })).toThrow();
+  it('autocompleteFiltersTool rejects empty search_text at schema level', () => {
+    expect(() => autocompleteFiltersTool.input.parse({ type: 'naics', search_text: '' })).toThrow();
   });
 });
 
@@ -666,11 +666,13 @@ describe('spendingByCategoryTool — all valid category values', () => {
   });
 });
 
-describe('autocompleteTool — all valid type values', () => {
+describe('autocompleteFiltersTool — all valid type values', () => {
   it('accepts all valid type enum values', () => {
     const validTypes = ['naics', 'psc', 'cfda', 'awarding_agency', 'recipient'] as const;
     for (const type of validTypes) {
-      expect(() => autocompleteTool.input.parse({ type, search_text: 'test' })).not.toThrow();
+      expect(() =>
+        autocompleteFiltersTool.input.parse({ type, search_text: 'test' }),
+      ).not.toThrow();
     }
   });
 });

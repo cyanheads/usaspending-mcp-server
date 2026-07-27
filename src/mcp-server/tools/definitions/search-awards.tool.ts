@@ -78,7 +78,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe(
-        'Filter to a specific awarding agency by name (e.g., "Department of Defense"). Use usaspending_autocomplete type=awarding_agency to find exact names.',
+        'Filter to a specific awarding agency by name (e.g., "Department of Defense"). Use usaspending_autocomplete_filters type=awarding_agency to find exact names.',
       ),
     recipient_name: z
       .string()
@@ -90,7 +90,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .array(z.string())
       .optional()
       .describe(
-        'Filter by NAICS industry codes (e.g., ["541512"]). Use usaspending_autocomplete type=naics to look up codes.',
+        'Filter by NAICS industry codes (e.g., ["541512"]). Use usaspending_autocomplete_filters type=naics to look up codes.',
       ),
     time_period: z
       .object({

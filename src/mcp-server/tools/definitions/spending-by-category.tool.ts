@@ -12,7 +12,7 @@ import { formatPaginationLine } from './pagination.js';
 export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
   title: 'Spending by Category',
   description:
-    'Aggregate federal spending grouped by a specific dimension: NAICS industry code, PSC product/service code, awarding agency, funding agency, CFDA assistance program, or recipient. Returns top items with obligation amounts — useful for trend and breakdown analysis. Chain NAICS codes into usaspending_search_awards filters or usaspending_autocomplete lookups.',
+    'Aggregate federal spending grouped by a specific dimension: NAICS industry code, PSC product/service code, awarding agency, funding agency, CFDA assistance program, or recipient. Returns top items with obligation amounts — useful for trend and breakdown analysis. Chain NAICS codes into usaspending_search_awards filters or usaspending_autocomplete_filters lookups.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({

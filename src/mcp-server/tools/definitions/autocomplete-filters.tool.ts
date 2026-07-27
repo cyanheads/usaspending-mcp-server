@@ -1,7 +1,7 @@
 /**
  * @fileoverview Tool to look up valid code values for filter fields: NAICS, PSC, CFDA,
  * agency names, and recipient names.
- * @module mcp-server/tools/definitions/autocomplete.tool
+ * @module mcp-server/tools/definitions/autocomplete-filters.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -9,7 +9,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { RawAgencyAutocomplete } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 
-export const autocompleteTool = tool('usaspending_autocomplete', {
+export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', {
   title: 'Autocomplete Codes and Names',
   description:
     'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency names and IDs), or recipient (recipient names with UEI/DUNS). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
@@ -34,7 +34,7 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       .max(500)
       .default(10)
       .describe(
-        'Maximum number of results to return (1–500). The recipient lookup enforces an upstream max of 500; naics/psc/cfda/awarding_agency return only their matching entries regardless.',
+        'Maximum number of results to return (1–500), enforced client-side. The recipient lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x this value, so its results are capped to this limit before returning — the cap keeps them in bucket order, so name matches fill the page first and identifier matches appear only in whatever room is left. To resolve a specific UEI or DUNS, pass the identifier itself as search_text. naics/psc/cfda/awarding_agency honor this limit exactly.',
       ),
   }),
 
@@ -112,7 +112,10 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('usaspending_autocomplete', { type: input.type, search_text: input.search_text });
+    ctx.log.info('usaspending_autocomplete_filters', {
+      type: input.type,
+      search_text: input.search_text,
+    });
     const svc = getUSASpendingService();
 
     type ResultItem = { code?: string; name?: string; id?: string; uei?: string; duns?: string };
@@ -156,6 +159,11 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       }));
     }
 
+    // `autocomplete/recipient/` applies `limit` per match bucket (name, UEI, DUNS) and
+    // unions them, so it can hand back up to 3x what was asked for. The other four
+    // lookups already honor `limit`, so capping here is a no-op for them.
+    rawResults = rawResults.slice(0, input.limit);
+
     if (rawResults.length === 0) {
       throw ctx.fail('no_match', `No ${input.type} results matched "${input.search_text}"`, {
         recovery: {
@@ -173,8 +181,15 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       ctx.enrich.truncated({
         shown: rawResults.length,
         cap: input.limit,
+        // The recipient cap is a head-slice over name-then-UEI-then-DUNS, and upstream
+        // fills the name bucket to `limit` on its own whenever the corpus allows. So a
+        // saturated recipient page holds name matches only, and raising `limit` raises
+        // the name bucket with it — it never reaches the identifier buckets behind it.
+        // Pointing that caller at `limit` would send them somewhere the rows are not.
         guidance:
-          'More matches may exist. Raise limit (max 500) or use a more specific search term.',
+          input.type === 'recipient'
+            ? 'More name matches may exist — raise limit (max 500) or use a more specific search term. Matches on a UEI or DUNS are not reachable this way once name matches fill the page; to resolve one, pass the identifier itself as search_text.'
+            : 'More matches may exist. Raise limit (max 500) or use a more specific search term.',
       });
     }
     return {

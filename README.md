@@ -50,7 +50,7 @@
 | `usaspending_get_federal_account_breakdown` | Break a federal account's obligations down by program activity (what the money funds) or object class (what it buys). Paginated with a total count. |
 | `usaspending_search_federal_accounts` | List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers for chaining into `usaspending_get_federal_account`. |
 | `usaspending_list_agencies` | List all top-tier federal agencies with toptier codes, budget authority amounts, and obligation totals. Entry point for agency navigation. |
-| `usaspending_autocomplete` | Look up valid code values for filter fields: NAICS, PSC, CFDA, recipient names, or agency names. Use before filtering to discover the right code from a description. |
+| `usaspending_autocomplete_filters` | Look up valid code values for filter fields: NAICS, PSC, CFDA, recipient names, or agency names. Use before filtering to discover the right code from a description. |
 
 ### `usaspending_search_awards`
 
@@ -158,6 +158,8 @@ Aggregate federal spending by geographic unit.
 - `scope`: `place_of_performance` or `recipient_location`
 - `geo_layer`: `state`, `county`, or `district`
 - Returns `shape_code`, `display_name`, `aggregated_amount`, and `per_capita` (when `population` is available)
+- `limit` accepts 1–500 (default 50). The upstream endpoint is not paginated — a nationwide county query matches over 3,000 areas — so areas are ranked by `aggregated_amount` descending and capped client-side; `total_areas_available` reports the full match count
+- Omitting `filters` entirely aggregates every award type (contracts, IDVs, grants, direct payments, loans, insurance, and unspecified); the substitution is disclosed on the response
 - Geographic filters require FIPS codes or 2-letter state abbreviations — use a geocoding server (e.g., Census or OpenStreetMap) to resolve place names first
 
 ---
@@ -238,14 +240,14 @@ List all top-tier federal agencies.
 
 ---
 
-### `usaspending_autocomplete`
+### `usaspending_autocomplete_filters`
 
 Discover valid code values for award filter fields.
 
 - `type` enum selects the lookup: `naics`, `psc`, `cfda`, `awarding_agency`, or `recipient`
 - Returns matching codes and names — use before filtering to find the right code when you only know a description (e.g., "cybersecurity" → NAICS code); `recipient` matches also carry `uei`/`duns`
 - Consolidates five autocomplete endpoints into one tool
-- `limit` accepts 1–500 (the `recipient` lookup enforces an upstream max of 500; the other four return only their matching entries)
+- `limit` accepts 1–500 and is enforced client-side — the `recipient` lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x the requested count, so its results are capped before returning; the other four honor `limit` exactly
 
 ## Features
 
@@ -264,7 +266,7 @@ USAspending-specific:
 - No authentication required — all data is public domain under the DATA Act
 - `usaspending_spending_by_category` consolidates 14 category sub-routes behind a single `category` enum; `usaspending_disaster_spending` consolidates 9+ disaster endpoints behind `dimension` + `spending_type` enums
 - `usaspending_get_agency` accepts both `toptier_code` and `agency_slug`, eliminating the intermediate agency-list lookup that award search results would otherwise require
-- `usaspending_autocomplete` serves as the code-discovery step before filtering — maps human-readable terms to NAICS, PSC, CFDA, and agency codes
+- `usaspending_autocomplete_filters` serves as the code-discovery step before filtering — maps human-readable terms to NAICS, PSC, CFDA, and agency codes
 
 Agent-friendly output:
 

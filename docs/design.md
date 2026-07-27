@@ -15,7 +15,7 @@
 | `usaspending_search_recipients` | Search for organizations receiving federal funds by name, UEI, or DUNS. Returns recipient hash IDs, UEI/DUNS, total award amounts, and hierarchy level. Paginated with `page_metadata` (`total`, `page`, `has_next`). | `keyword`, `award_type`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` |
 | `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parent organization, alternate names, and total award amounts by type. Optionally scope to a specific fiscal year and award type. Use recipient IDs from `usaspending_search_recipients`. | `recipient_id`, `fiscal_year`, `award_type` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_get_agency` | Fetch an agency's current fiscal year overview: mission, budget authority, obligation totals, sub-agency count, and DEF codes. Also returns sub-agency breakdown with transaction counts. Accepts either a 3-digit `toptier_code` (e.g., `097`) or an `agency_slug` (e.g., `department-of-defense`) — slugs appear in award search results. | `toptier_code`, `agency_slug` | `readOnlyHint: true`, `openWorldHint: false` |
-| `usaspending_spending_by_geography` | Aggregate federal spending by state, county, or congressional district. Geographic filters require FIPS codes or 2-letter state abbreviations, not place names — use a geocoding server to resolve names first. Useful for per-capita analysis chained with Census population data. | `scope`, `geo_layer`, `filters`, `subawards` | `readOnlyHint: true`, `openWorldHint: true` |
+| `usaspending_spending_by_geography` | Aggregate federal spending by state, county, or congressional district. Geographic filters require FIPS codes or 2-letter state abbreviations, not place names — use a geocoding server to resolve names first. Useful for per-capita analysis chained with Census population data. | `scope`, `geo_layer`, `filters`, `limit`, `subawards` | `readOnlyHint: true`, `openWorldHint: true` |
 | `usaspending_spending_by_category` | Aggregate spending grouped by a dimension: NAICS code, PSC code, awarding agency, funding agency, CFDA program, or recipient. Returns top items with amounts for trend and breakdown analysis. | `category`, `filters`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` |
 | `usaspending_spending_over_time` | Fetch aggregated spending by fiscal year, fiscal quarter, or fiscal month. Filter by award type, agency, recipient, or keyword to trace trends in a specific area. | `group`, `filters`, `subawards` | `readOnlyHint: true`, `openWorldHint: true` |
 | `usaspending_disaster_spending` | Fetch disaster and emergency supplemental spending (COVID-19, hurricanes, etc.) broken down by agency, CFDA program, recipient, or geography. Pass a `dimension` enum to select the breakdown axis; filter by DEF codes (specific appropriation laws) to isolate a particular emergency. | `dimension`, `spending_type`, `filters`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` |
@@ -23,7 +23,7 @@
 | `usaspending_get_federal_account_breakdown` | Break a federal account's obligations down by program activity or object class. Pass a `dimension` enum to select the axis. Paginated with an honest total count. | `account_code`, `dimension`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: false`, `idempotentHint: true` |
 | `usaspending_search_federal_accounts` | List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers, names, managing agencies, and budgetary resources for chaining into `usaspending_get_federal_account`. | `keyword`, `agency_identifier`, `sort_field`, `sort_direction`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true`, `idempotentHint: true` |
 | `usaspending_list_agencies` | List all top-tier federal agencies with toptier codes, budget authority amounts, and obligation totals for the current fiscal year. Entry point for agency navigation — toptier codes are required by `usaspending_get_agency` and agency filters. | `sort`, `order` | `readOnlyHint: true`, `openWorldHint: false`, `idempotentHint: true` |
-| `usaspending_autocomplete` | Look up valid code values for filter fields: NAICS industry codes, PSC product/service codes, CFDA assistance programs, recipient names, or awarding/funding agency names. Use before filtering awards to discover the right code when you only know a description. | `type`, `search_text`, `limit` | `readOnlyHint: true`, `openWorldHint: true` |
+| `usaspending_autocomplete_filters` | Look up valid code values for filter fields: NAICS industry codes, PSC product/service codes, CFDA assistance programs, recipient names, or awarding/funding agency names. Use before filtering awards to discover the right code when you only know a description. | `type`, `search_text`, `limit` | `readOnlyHint: true`, `openWorldHint: true` |
 
 ### Resources
 
@@ -77,7 +77,7 @@ Target users: investigative journalists, policy researchers, government contract
 
 1. Config and server setup — `server-config.ts` with base URL and timeout
 2. `USASpendingService` — single HTTP client with retry, timeout, and parse-failure classification
-3. Discovery tools: `usaspending_list_agencies`, `usaspending_autocomplete`
+3. Discovery tools: `usaspending_list_agencies`, `usaspending_autocomplete_filters`
 4. Core search tools: `usaspending_search_awards`, `usaspending_search_recipients`
 5. Entity detail tools: `usaspending_get_award`, `usaspending_get_recipient`, `usaspending_get_agency`
 6. Award drill-down tools: `usaspending_get_award_transactions`, `usaspending_get_award_subawards`
@@ -109,7 +109,7 @@ Each step is independently testable.
 | `usaspending_get_federal_account_breakdown` | `account_code`, `dimension`, `results[].code`, `name`, `obligations`, `type` (program_activity only), `page_metadata` (`total`, `page`, `has_next`, `has_previous`, `limit`) |
 | `usaspending_search_federal_accounts` | `results[].account_number` (chain to `usaspending_get_federal_account`), `account_name`, `agency_identifier`, `managing_agency`, `managing_agency_acronym`, `budgetary_resources`, `page_metadata` (`count`, `page`, `has_next`, `limit`) |
 | `usaspending_list_agencies` | `results[].agency_name`, `abbreviation`, `toptier_code`, `agency_slug`, `obligated_amount`, `budget_authority_amount` |
-| `usaspending_autocomplete` | `results[].code`, `name` (for naics/psc/cfda); `results[].id`, `name` (for awarding_agency); `results[].name`, `uei`, `duns` (for recipient) |
+| `usaspending_autocomplete_filters` | `results[].code`, `name` (for naics/psc/cfda); `results[].id`, `name` (for awarding_agency); `results[].name`, `uei`, `duns` (for recipient) |
 
 ---
 
@@ -150,7 +150,7 @@ This consolidates 9+ disaster endpoints into one tool. The agent selects the bre
 
 **Consolidating spending analytics into three tools instead of fourteen.** The `/search/spending_by_category/{category}/` endpoint family has 14 sub-routes (one per category dimension). Exposing these as 14 tools would drown the tool surface. Instead, `usaspending_spending_by_category` takes a `category` enum that maps to the right sub-route. Same pattern for disaster spending (9+ endpoints → one tool with `dimension` + `spending_type` enums). The `spending_by_geography` and `spending_over_time` tools stand alone because their input shapes and workflows are genuinely distinct.
 
-**Adding `usaspending_autocomplete` as a code discovery tool.** Agents filtering by NAICS code, PSC code, CFDA program, or agency name need to know the exact code values. The API provides autocomplete endpoints for each. Without this tool, agents that know "cybersecurity" or "aircraft maintenance" but not the NAICS/PSC code would have to guess or fail. A single `usaspending_autocomplete` tool with a `type` enum (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) consolidates five autocomplete endpoints and serves as the code-lookup step before filtering.
+**Adding `usaspending_autocomplete_filters` as a code discovery tool.** Agents filtering by NAICS code, PSC code, CFDA program, or agency name need to know the exact code values. The API provides autocomplete endpoints for each. Without this tool, agents that know "cybersecurity" or "aircraft maintenance" but not the NAICS/PSC code would have to guess or fail. A single `usaspending_autocomplete_filters` tool with a `type` enum (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) consolidates five autocomplete endpoints and serves as the code-lookup step before filtering.
 
 **Omitting bulk download, transaction-level search, and IDV-specific tools.** Bulk download endpoints generate async ZIP files that require polling and redirects — unsuitable for interactive MCP workflows. The `/search/spending_by_transaction/` endpoints are nearly identical to `spending_by_award` for most questions. IDV-specific endpoints (`/idvs/*`) are covered structurally by `usaspending_get_award` plus `usaspending_get_award_subawards` for the common case; IDV tree-walking is a low-frequency niche. All three are deferred, not permanently excluded.
 
@@ -203,6 +203,14 @@ Several search endpoints accept `spending_level`:
 `usaspending_spending_by_geography` accepts:
 - `scope`: `place_of_performance` or `recipient_location`
 - `geo_layer`: `state`, `county`, or `district`
+
+The endpoint is not paginated — it returns every matching area in one response, and a nationwide
+`county` query matches over 3,000 of them. Areas are ranked by `aggregated_amount` descending and
+capped client-side at `limit` (default 50, max 500), with `total_areas_available` reporting the full
+match count. It also rejects an empty `filters` object with HTTP 500, so a call supplying no filters
+at all defaults `award_type_codes` to the complete set rather than to contracts alone — contracts
+account for roughly 15% of total federal obligations, and a narrower default would undercount
+silently. The substitution is disclosed on the response.
 
 ---
 

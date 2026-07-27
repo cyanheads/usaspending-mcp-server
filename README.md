@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.4.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -95,7 +95,7 @@ List child contracts and orders placed under an IDV (Indefinite Delivery Vehicle
 List obligation history and modifications for an award.
 
 - Each row is one transaction: `action_date`, `federal_action_obligation`, `modification_number`, and description
-- Pagination via `limit` and `page`; configurable sort and order
+- Pagination via `limit` and `page`; configurable sort and order. No `total` count is available from this endpoint
 
 ---
 
@@ -105,7 +105,7 @@ List subawards under a prime contract or grant.
 
 - Each row covers: subaward number, description, action date, amount, and recipient name
 - Reveals the supply chain below the prime — who actually performs the work
-- Pagination via `limit` and `page`; configurable sort and order
+- Pagination via `limit` and `page`; configurable sort and order. No `total` count is available from this endpoint
 
 ---
 
@@ -171,6 +171,7 @@ Aggregate spending broken down by a single dimension.
 - `category` enum maps to the right sub-route: `naics`, `psc`, `awarding_agency`, `funding_agency`, `cfda`, or `recipient`
 - Returns top items with amounts and codes for trend analysis
 - Accepts the standard award filter object for scoping to a specific agency, time period, or keyword
+- Pagination via `limit` and `page`; no `total` count is available from this endpoint
 
 ---
 
@@ -245,7 +246,8 @@ List all top-tier federal agencies.
 Discover valid code values for award filter fields.
 
 - `type` enum selects the lookup: `naics`, `psc`, `cfda`, `awarding_agency`, or `recipient`
-- Returns matching codes and names — use before filtering to find the right code when you only know a description (e.g., "cybersecurity" → NAICS code); `recipient` matches also carry `uei`/`duns`
+- Returns matching codes and names — use before filtering to find the right code when you only know a description (e.g., "software" → NAICS codes); `recipient` matches also carry `uei`/`duns`
+- The `naics` lookup matches official NAICS title text, not colloquial industry language — "software" and "aircraft" resolve, "cybersecurity" and "aircraft maintenance" return nothing. Fall back to the broader industry term the NAICS title would use
 - Consolidates five autocomplete endpoints into one tool
 - `limit` accepts 1–500 and is enforced client-side — the `recipient` lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x the requested count, so its results are capped before returning; the other four honor `limit` exactly
 
@@ -271,7 +273,7 @@ USAspending-specific:
 Agent-friendly output:
 
 - Chaining fields on every response — `generated_internal_id`, `agency_slug`, `recipient_hash`, and `account_code` fields are surfaced explicitly so agents can follow the money without parsing identifiers out of display strings
-- Pagination metadata on all list responses — `page_metadata.hasNext`, `page_metadata.page`, and `page_metadata.total` let agents iterate large result sets without guessing
+- Pagination metadata on list responses — `page_metadata.has_next` and `page_metadata.page` let agents iterate large result sets without guessing. `page_metadata.total` is carried wherever the upstream endpoint publishes one; `usaspending_get_award_transactions`, `usaspending_get_award_subawards`, and `usaspending_spending_by_category` sit on endpoints that publish none, so `has_next` is the only continuation signal there
 - Structured geographic outputs — `shape_code`, `display_name`, `aggregated_amount`, and `per_capita` are typed consistently across state, county, and district views for composable analysis
 
 ## Getting started
@@ -393,7 +395,8 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 | Variable | Description | Default |
 |:---------|:------------|:--------|
 | `USASPENDING_BASE_URL` | Base URL for the USAspending.gov API. | `https://api.usaspending.gov/api/v2/` |
-| `USASPENDING_TIMEOUT_MS` | Per-request HTTP timeout in milliseconds. | `30000` |
+| `USASPENDING_TIMEOUT_MS` | HTTP timeout in milliseconds, applied per attempt. | `30000` |
+| `USASPENDING_RETRY_BUDGET_MS` | Wall-clock budget covering every retry attempt of one request, so a slow endpoint cannot re-pay the per-attempt timeout on each retry. Accepts 1000–300000. | `1.5 × USASPENDING_TIMEOUT_MS` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
 | `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path. | `/mcp` |

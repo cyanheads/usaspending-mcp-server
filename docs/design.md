@@ -71,7 +71,8 @@ Target users: investigative journalists, policy researchers, government contract
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
 | `USASPENDING_BASE_URL` | No | Override base URL (default: `https://api.usaspending.gov/api/v2/`) |
-| `USASPENDING_TIMEOUT_MS` | No | Request timeout in ms (default: 30000) |
+| `USASPENDING_TIMEOUT_MS` | No | Request timeout in ms, applied per attempt (default: 30000) |
+| `USASPENDING_RETRY_BUDGET_MS` | No | Wall-clock budget in ms spanning every retry attempt of one request, 1000–300000 (default: 1.5 × `USASPENDING_TIMEOUT_MS`). A per-attempt timeout classifies as transient, so without a shared deadline the retry loop re-pays the full timeout on each attempt; expiry surfaces as a `Timeout` naming the budget. |
 
 ## Implementation Order
 
@@ -94,15 +95,15 @@ Each step is independently testable.
 |:-----|:-----------------|
 | `usaspending_search_awards` | `results[].generated_internal_id` (chain to `usaspending_get_award`), `Recipient Name`, `Award Amount`, `Awarding Agency`, `agency_slug` (chain to `usaspending_get_agency`), `page_metadata.hasNext` |
 | `usaspending_get_award` | `generated_unique_award_id`, `type`, `type_description`, `description`, `total_obligation`, `subaward_count`, `date_signed`, `parent_award.generated_unique_award_id`, `latest_transaction_contract_data.naics`, `recipient.recipient_hash` (chain to `usaspending_get_recipient`), `account_obligations_by_defc` |
-| `usaspending_get_award_transactions` | `results[].id`, `action_date`, `federal_action_obligation`, `modification_number`, `description`, `page_metadata` |
-| `usaspending_get_award_subawards` | `results[].id`, `subaward_number`, `description`, `action_date`, `amount`, `recipient_name` |
+| `usaspending_get_award_transactions` | `results[].id`, `action_date`, `federal_action_obligation`, `modification_number`, `description`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
+| `usaspending_get_award_subawards` | `results[].id`, `subaward_number`, `description`, `action_date`, `amount`, `recipient_name`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
 | `usaspending_get_idv_awards` | `results[].generated_unique_award_id` (chain to `usaspending_get_award`), `piid`, `award_type`, `obligated_amount`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
 | `usaspending_get_award_federal_accounts` | `results[].federal_account` (chain to `usaspending_get_federal_account`), `account_title`, `total_transaction_obligated_amount`, `funding_agency_name`, `funding_agency_abbreviation`, `funding_agency_slug` (chain to `usaspending_get_agency`), `funding_agency_id`, `funding_toptier_agency_id`, `page_metadata` (`count`, `page`, `has_next`, `has_previous`, `limit`) |
 | `usaspending_search_recipients` | `results[].id` (recipient hash — chain to `usaspending_get_recipient`), `duns`, `uei`, `name`, `recipient_level`, `amount`, `page_metadata` (`total`, `page`, `has_next`, `limit`) |
 | `usaspending_get_recipient` | `name`, `uei`, `duns`, `recipient_id`, `recipient_level`, `parent_name`, `business_types`, `location` |
 | `usaspending_get_agency` | `name`, `abbreviation`, `toptier_code`, `agency_id`, `mission`, `budget_authority_amount`, `obligation_amount`, `subtier_agency_count`, `def_codes` |
 | `usaspending_spending_by_geography` | `results[].shape_code`, `display_name`, `aggregated_amount`, `population`, `per_capita` |
-| `usaspending_spending_by_category` | `category`, `results[].code`, `name`, `amount`, `id`, `page_metadata` |
+| `usaspending_spending_by_category` | `category`, `results[].code`, `name`, `amount`, `id`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
 | `usaspending_spending_over_time` | `group`, `results[].time_period`, `aggregated_amount`, by-type obligation columns |
 | `usaspending_disaster_spending` | Varies by dimension: `results[].description`, `obligation`, `outlay`, `award_count`; or geography aggregations |
 | `usaspending_get_federal_account` | `account_title`, `federal_account_code`, `agency_identifier`, `main_account_code`, `parent_agency_name`, `bureau_name`, `fiscal_year`, `total_obligated_amount`, `total_gross_outlay_amount`, `total_budgetary_resources`, `children[]` (per-TAS `name`, `code`, `obligated_amount`, `gross_outlay_amount`, `budgetary_resources_amount`) |
@@ -150,7 +151,9 @@ This consolidates 9+ disaster endpoints into one tool. The agent selects the bre
 
 **Consolidating spending analytics into three tools instead of fourteen.** The `/search/spending_by_category/{category}/` endpoint family has 14 sub-routes (one per category dimension). Exposing these as 14 tools would drown the tool surface. Instead, `usaspending_spending_by_category` takes a `category` enum that maps to the right sub-route. Same pattern for disaster spending (9+ endpoints → one tool with `dimension` + `spending_type` enums). The `spending_by_geography` and `spending_over_time` tools stand alone because their input shapes and workflows are genuinely distinct.
 
-**Adding `usaspending_autocomplete_filters` as a code discovery tool.** Agents filtering by NAICS code, PSC code, CFDA program, or agency name need to know the exact code values. The API provides autocomplete endpoints for each. Without this tool, agents that know "cybersecurity" or "aircraft maintenance" but not the NAICS/PSC code would have to guess or fail. A single `usaspending_autocomplete_filters` tool with a `type` enum (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) consolidates five autocomplete endpoints and serves as the code-lookup step before filtering.
+**Adding `usaspending_autocomplete_filters` as a code discovery tool.** Agents filtering by NAICS code, PSC code, CFDA program, or agency name need to know the exact code values. The API provides autocomplete endpoints for each. Without this tool, agents that know "software" or "aircraft maintenance" but not the NAICS/PSC code would have to guess or fail. A single `usaspending_autocomplete_filters` tool with a `type` enum (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) consolidates five autocomplete endpoints and serves as the code-lookup step before filtering.
+
+Each lookup inherits its upstream match semantics rather than normalizing them. The `naics` lookup matches official NAICS title text only, so a colloquial term that never appears in a title returns nothing — "software" and "aircraft" resolve, "cybersecurity" and "aircraft maintenance" do not, and "aircraft maintenance" is a `psc` term rather than a `naics` one. Adding synonym expansion or fuzzy matching on this side would make the tool disagree with the codes the filter endpoints actually accept.
 
 **Omitting bulk download, transaction-level search, and IDV-specific tools.** Bulk download endpoints generate async ZIP files that require polling and redirects — unsuitable for interactive MCP workflows. The `/search/spending_by_transaction/` endpoints are nearly identical to `spending_by_award` for most questions. IDV-specific endpoints (`/idvs/*`) are covered structurally by `usaspending_get_award` plus `usaspending_get_award_subawards` for the common case; IDV tree-walking is a low-frequency niche. All three are deferred, not permanently excluded.
 
@@ -189,7 +192,21 @@ Key filter fields for `usaspending_search_awards`, `usaspending_spending_by_cate
 
 ### Pagination
 
-Search and list endpoints return `page_metadata.hasNext` and `page_metadata.page`. Use `limit` (max 100) and `page` parameters. `usaspending_search_awards` (`spending_by_award`) returns no total count; its `page_metadata` instead carries `last_record_unique_id` + `last_record_sort_value` on every page. Page-number paging caps at a 50,000-result offset (`page` × `limit`); past that boundary, continue with keyset (after-cursor) pagination by passing those two cursor values back — page is omitted when the cursor is supplied.
+Search and list endpoints return `page_metadata.has_next` and `page_metadata.page`. Use `limit` (max 100) and `page` parameters.
+
+A total count is not universal, so `has_next` is the only continuation signal every paginated tool carries. These endpoints publish no total, and the corresponding tools omit `page_metadata.total` entirely:
+
+| Endpoint | Tool |
+|:---------|:-----|
+| `search/spending_by_award/` | `usaspending_search_awards` |
+| `transactions/` | `usaspending_get_award_transactions` |
+| `subawards/` | `usaspending_get_award_subawards` |
+| `search/spending_by_category/{category}/` | `usaspending_spending_by_category` |
+| `idvs/awards/` | `usaspending_get_idv_awards` |
+
+Among the endpoints that do publish one, `awards/accounts/` and `federal_accounts/` name it `count` rather than `total`, and `disaster/recipient/spending/` reports a 10,000 ceiling rather than a count — `usaspending_disaster_spending` discloses the cap on the response.
+
+`usaspending_search_awards` compensates for the missing total with a cursor: its `page_metadata` carries `last_record_unique_id` + `last_record_sort_value` on every page. Page-number paging caps at a 50,000-result offset (`page` × `limit`); past that boundary, continue with keyset (after-cursor) pagination by passing those two cursor values back — page is omitted when the cursor is supplied.
 
 ### Spending level parameter
 

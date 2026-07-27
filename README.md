@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -60,7 +60,7 @@ Search for federal awards across contracts, grants, loans, direct payments, and 
 - Filter by award type codes (`A/B/C/D` = contracts, `02/03/04/05` = grants, `06/10` = direct payments, `07/08` = loans, `IDV_*` = IDVs)
 - Filter by awarding or funding agency (toptier or subtier), recipient name, NAICS code, and place of performance
 - Date range filtering — earliest 2007-10-01 via search API
-- Pagination via `limit` (max 100) and `page`; `page_metadata.hasNext` signals more results. Page-number paging caps at a 50,000-result offset (`page` × `limit`) — past that, continue with keyset pagination using the `last_record_sort_value` + `last_record_unique_id` cursor returned on every page
+- Pagination via `limit` (max 100) and `page`; `page_metadata.has_next` signals more results and is `true` on any full page — the endpoint stops advertising continuation once `page` × `limit` reaches 10,000, so page fullness is the honest signal past that point. Page-number paging caps at a 50,000-result offset — beyond it, continue with keyset pagination using the `last_record_sort_value` + `last_record_unique_id` cursor, which is only returned below the 10,000-result offset and has to be captured before crossing it
 - Returns `generated_internal_id` for chaining to `usaspending_get_award` and `agency_slug` for chaining to `usaspending_get_agency`
 
 ---

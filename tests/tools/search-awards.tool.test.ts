@@ -710,4 +710,147 @@ describe('searchAwardsTool', () => {
     expect(result.page_metadata.last_record_sort_value).toBe('4257135886768');
     expect(result.page_metadata.last_record_unique_id).toBe(295_527_116);
   });
+
+  // --- #44: continuation past the offset where upstream stops advertising it ---
+
+  /**
+   * The live page_metadata at and past a 10,000-result offset: full rows, hasNext
+   * false, and both cursor values replaced by their end-of-results sentinels.
+   */
+  const boundaryPageMetadata = (page: number) => ({
+    page,
+    hasNext: false,
+    limit: 100,
+    last_record_unique_id: null,
+    last_record_sort_value: 'None',
+  });
+
+  it('treats a full page as continuing when upstream reports hasNext false (#44)', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: Array.from({ length: 100 }, (_, i) => ({
+        generated_internal_id: `CONT_AWD_BOUNDARY_${i}`,
+      })),
+      page_metadata: boundaryPageMetadata(100),
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 100, limit: 100 });
+    const result = await searchAwardsTool.handler(input, ctx);
+
+    expect(() => searchAwardsTool.output.parse(result)).not.toThrow();
+    expect(result.page_metadata.has_next).toBe(true);
+    // The cursor sentinels are still unusable — continuation must not fabricate one.
+    expect(result.page_metadata).not.toHaveProperty('last_record_sort_value');
+    expect(result.page_metadata).not.toHaveProperty('last_record_unique_id');
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.has_next).toBe(true);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.shown).toBe(100);
+    expect(enrichment.cap).toBe(100);
+  });
+
+  it('keeps reporting continuation on every page past the boundary (#44)', async () => {
+    // The upstream lie does not reset one page later — page 101 carries it too.
+    mockSearchAwards.mockResolvedValueOnce({
+      results: Array.from({ length: 100 }, (_, i) => ({
+        generated_internal_id: `CONT_AWD_PAST_${i}`,
+      })),
+      page_metadata: boundaryPageMetadata(101),
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 101, limit: 100 });
+    const result = await searchAwardsTool.handler(input, ctx);
+
+    expect(result.page_metadata.has_next).toBe(true);
+    expect(result.page_metadata.page).toBe(101);
+  });
+
+  it('reports the end of results on a short final page (#44)', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [{ generated_internal_id: 'CONT_AWD_LAST' }],
+      page_metadata: { hasNext: false, page: 7, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 7, limit: 10 });
+    const result = await searchAwardsTool.handler(input, ctx);
+
+    expect(result.page_metadata.has_next).toBe(false);
+    expect(getEnrichment(ctx).truncated).toBeUndefined();
+  });
+
+  it('reports the end of results on an empty page (#44)', async () => {
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 8, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 8, limit: 10 });
+    const result = await searchAwardsTool.handler(input, ctx);
+
+    expect(result.page_metadata.has_next).toBe(false);
+    expect(getEnrichment(ctx).truncated).toBeUndefined();
+  });
+
+  it('directs to page numbers in format when continuing without a cursor (#44)', () => {
+    const output = {
+      results: [{ generated_internal_id: 'CONT_AWD_BOUNDARY_0' }],
+      page_metadata: { has_next: true, page: 100, limit: 100 },
+    };
+
+    const text = (searchAwardsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Next page:** request page 101');
+    expect(text).not.toContain('Next-page cursor');
+  });
+
+  it('does not blame the cursor window on an exactly-full final page (#44)', () => {
+    // page 1 at limit 1: the cursor is absent because this is the last page, not
+    // because the 10,000-result window was crossed. Attributing it to the window
+    // tells the agent it has paged far past a boundary it is nowhere near.
+    const output = {
+      results: [{ generated_internal_id: 'CONT_AWD_ONLY' }],
+      page_metadata: { has_next: true, page: 1, limit: 1 },
+    };
+
+    const text = (searchAwardsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Next page:** request page 2');
+    expect(text).toContain('final page');
+    expect(text).not.toContain('only way forward');
+  });
+
+  it('does not direct past the page-number cap when no cursor is offered (#44)', () => {
+    // page 500 at limit 100 is the last servable page — the handler's own
+    // pagination_limit_exceeded guard rejects page 501, so format() must not send
+    // the caller there.
+    const output = {
+      results: [{ generated_internal_id: 'CONT_AWD_CAP' }],
+      page_metadata: { has_next: true, page: 500, limit: 100 },
+    };
+
+    const text = (searchAwardsTool.format!(output)[0] as { text: string }).text;
+    expect(text).not.toContain('request page 501');
+    expect(text).toContain('**No further pages reachable:**');
+  });
+
+  // --- #50: the API-notices trailer heading ---
+
+  it('renders the API notices heading in the content[] trailer (#50)', () => {
+    const trailer = searchAwardsTool.enrichmentTrailer?.upstream_messages;
+    // A sibling `label` never renders — the trailer renderer treats `render` as a
+    // full escape hatch — so the heading has to come from `render` itself.
+    expect(trailer?.label).toBeUndefined();
+
+    const rendered = trailer?.render?.([
+      'For searches, time period start and end dates are currently limited to an earliest date of 2007-10-01.',
+      "The following filters from the request were not used: {'recipient_id'}.",
+    ]);
+
+    expect(rendered).toContain('**API notices:**');
+    expect(rendered?.split('\n')[0]).toBe('**API notices:**');
+    expect(rendered).toContain('- For searches, time period start and end dates');
+    expect(rendered).toContain('- The following filters from the request were not used');
+  });
 });

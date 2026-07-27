@@ -1,7 +1,27 @@
 /**
- * @fileoverview Shared pagination-line renderer for paginated tool `format()` output.
+ * @fileoverview Shared pagination helpers — the `format()` summary line and the
+ * page-fullness continuation guard for endpoints that under-report `hasNext`.
  * @module mcp-server/tools/definitions/pagination
  */
+
+/**
+ * Resolves the continuation flag for endpoints whose `hasNext` under-reports:
+ * several USAspending endpoints return a full page while reporting `hasNext: false`,
+ * which reads as a clean end-of-results and strands every remaining match. A full
+ * page (`shown >= limit`) forces continuation; a short or empty page marks the end.
+ *
+ * Keyed off page fullness rather than an offset threshold, because the endpoints
+ * that under-report keep doing so on every subsequent page instead of recovering at
+ * a fixed point. The tradeoff is an exactly-full final page reporting one page more
+ * than exists — an extra round trip instead of silently truncated results.
+ */
+export function resolveHasNext(
+  upstreamHasNext: boolean | null | undefined,
+  shown: number,
+  limit: number,
+): boolean {
+  return (upstreamHasNext ?? false) || shown >= limit;
+}
 
 /**
  * Renders the pagination summary segment shared by paginated tools' `format()`:

@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { resolveHasNext } from './pagination.js';
 
 /** Award search default fields — covers summary + chaining IDs. */
 const AWARD_SEARCH_FIELDS = [
@@ -37,6 +38,16 @@ const AWARD_SEARCH_FIELDS = [
  * pagination via last_record_sort_value + last_record_unique_id.
  */
 const MAX_PAGE_OFFSET = 50_000;
+
+/**
+ * Result offset (page × limit) past which search/spending_by_award/ stops emitting
+ * usable pagination metadata. From this offset on, every page still returns its full
+ * rows but reports `hasNext: false` with `last_record_unique_id: null` and
+ * `last_record_sort_value: "None"` — so page-number paging keeps working up to
+ * MAX_PAGE_OFFSET while the keyset cursor becomes unobtainable. A caller who needs
+ * the cursor must capture it before crossing this line.
+ */
+const CURSOR_WINDOW_OFFSET = 10_000;
 
 /**
  * Earliest action date search/spending_by_award/ will accept. A start_date before
@@ -129,13 +140,13 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .min(1)
       .default(1)
       .describe(
-        'Page number (1-based). Page-number pagination caps at a 50,000-result offset (page × limit); to read past that, use the cursor fields below.',
+        `Page number (1-based). Page-number pagination caps at a ${MAX_PAGE_OFFSET.toLocaleString()}-result offset (page × limit), but the keyset cursor below is only returned while the offset stays under ${CURSOR_WINDOW_OFFSET.toLocaleString()} — capture the cursor pair before paging past that, or the only way forward is page numbers.`,
       ),
     last_record_sort_value: z
       .string()
       .optional()
       .describe(
-        'Keyset-pagination cursor: the last_record_sort_value from a prior response page_metadata. Provide together with last_record_unique_id to fetch the next page past the 50,000-result page-number cap. When both cursor fields are supplied, page is ignored.',
+        `Keyset-pagination cursor: the last_record_sort_value from a prior response page_metadata. Provide together with last_record_unique_id to fetch the next page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number cap. The upstream stops emitting the pair once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so take it from a page below that offset. When both cursor fields are supplied, page is ignored.`,
       ),
     last_record_unique_id: z
       .number()
@@ -234,20 +245,24 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe('Matching award summaries'),
     page_metadata: z
       .object({
-        has_next: z.boolean().describe('Whether there are more pages of results'),
+        has_next: z
+          .boolean()
+          .describe(
+            `Whether more results may remain — true on a full page even when the upstream flag reports none, since this endpoint under-reports continuation on a final full page and on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset. A short or empty page marks the end.`,
+          ),
         page: z.number().describe('Current page number'),
         limit: z.number().describe('Results per page'),
         last_record_sort_value: z
           .string()
           .optional()
           .describe(
-            'Keyset-pagination cursor for the next page — pass back as last_record_sort_value to continue past the 50,000-result page limit',
+            `Keyset-pagination cursor for the next page — pass back as last_record_sort_value to continue past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page limit. Absent once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, where the upstream stops emitting the pair.`,
           ),
         last_record_unique_id: z
           .number()
           .optional()
           .describe(
-            'Keyset-pagination cursor for the next page — pass back as last_record_unique_id alongside last_record_sort_value',
+            'Keyset-pagination cursor for the next page — pass back as last_record_unique_id alongside last_record_sort_value. Absent on the same pages that omit last_record_sort_value.',
           ),
       })
       .describe(
@@ -260,12 +275,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   // structuredContent and content[] without a format() entry.
   enrichment: {
     page: z.number().describe('Current page number returned'),
-    has_next: z.boolean().describe('Whether there are more pages of results'),
+    has_next: z
+      .boolean()
+      .describe(
+        'Whether more results may remain — set on a full page even when the upstream flag reports none.',
+      ),
     truncated: z
       .boolean()
       .optional()
       .describe(
-        'True when this page was capped at `limit` and more results remain (continue via page or the cursor).',
+        'True when this page was capped at `limit` and more results may remain (continue via page or the cursor).',
       ),
     shown: z.number().optional().describe('Number of awards returned on this page.'),
     cap: z.number().optional().describe('Per-page cap (limit) applied to this page.'),
@@ -296,10 +315,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
   // upstream_messages is an array — supply a markdown renderer so the content[] trailer
   // shows a bullet list instead of a one-line JSON blob (structuredContent is unaffected).
+  // The heading is emitted from inside render(): the trailer renderer treats render as a
+  // full escape hatch and never consults a sibling `label`, so an unheaded bullet list
+  // would otherwise sit unattributed between the surrounding `**key:** value` lines.
   enrichmentTrailer: {
     upstream_messages: {
-      label: 'API notices',
-      render: (msgs) => (msgs ?? []).map((m) => `- ${m}`).join('\n'),
+      render: (msgs) => ['**API notices:**', ...(msgs ?? []).map((m) => `- ${m}`)].join('\n'),
     },
   },
 
@@ -324,8 +345,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'page multiplied by limit exceeds the endpoint 50,000-result page window and no cursor was supplied.',
       retryable: false,
-      recovery:
-        'Continue past 50,000 results with keyset pagination: pass last_record_sort_value and last_record_unique_id from the most recent page_metadata instead of page.',
+      recovery: `Continue past ${MAX_PAGE_OFFSET.toLocaleString()} results with keyset pagination, using a cursor taken from a page below a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset — that is where the endpoint stops emitting last_record_sort_value and last_record_unique_id. Re-page from within that window to obtain the pair.`,
     },
     {
       reason: 'date_before_earliest',
@@ -364,7 +384,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         `Requested page ${input.page} at limit ${input.limit} exceeds this endpoint's ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window.`,
         {
           recovery: {
-            hint: 'Re-request with last_record_sort_value and last_record_unique_id from the most recent page_metadata to continue via keyset pagination.',
+            hint: `Continue via keyset pagination with last_record_sort_value and last_record_unique_id. The endpoint only returns that pair while page × limit stays under ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so re-page from within that window to capture it.`,
           },
         },
       );
@@ -494,7 +514,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     }));
 
     const pageMeta = data.page_metadata ?? {};
-    const hasNext = pageMeta.hasNext ?? false;
+    // Past a 10,000-result offset this endpoint keeps returning full pages while
+    // reporting hasNext: false, so forwarding the flag verbatim ends pagination with
+    // tens of thousands of matches still behind it. Page fullness is the honest signal.
+    const hasNext = resolveHasNext(pageMeta.hasNext, results.length, input.limit);
     // The keyset cursor is usable only on interior pages. On the final page the upstream
     // returns last_record_unique_id: null and last_record_sort_value: "None" (a stringified
     // Python None) — a bare `!== undefined` forwards that null and crashes the z.number()
@@ -532,8 +555,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ctx.enrich.truncated({
         shown: results.length,
         cap: input.limit,
-        guidance:
-          'More results remain — request the next page, or page past the 50,000-result limit with last_record_sort_value + last_record_unique_id from page_metadata.',
+        guidance: `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`,
       });
     }
 
@@ -586,15 +608,28 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         );
       }
     }
-    if (
-      result.page_metadata.has_next &&
-      result.page_metadata.last_record_sort_value !== undefined &&
-      result.page_metadata.last_record_unique_id !== undefined
-    ) {
+    if (result.page_metadata.has_next) {
       lines.push('');
-      lines.push(
-        `**Next-page cursor:** last_record_sort_value=\`${result.page_metadata.last_record_sort_value}\`, last_record_unique_id=\`${result.page_metadata.last_record_unique_id}\` — pass both to page past the 50,000-result limit.`,
-      );
+      if (
+        result.page_metadata.last_record_sort_value !== undefined &&
+        result.page_metadata.last_record_unique_id !== undefined
+      ) {
+        lines.push(
+          `**Next-page cursor:** last_record_sort_value=\`${result.page_metadata.last_record_sort_value}\`, last_record_unique_id=\`${result.page_metadata.last_record_unique_id}\` — pass both to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result limit.`,
+        );
+      } else {
+        // The cursor is withheld both past the CURSOR_WINDOW_OFFSET boundary and on a
+        // final page (the "None"/null sentinels), so this branch must not attribute its
+        // absence to the boundary — it fires on any exactly-full last page too. And at
+        // the MAX_PAGE_OFFSET cap there is no next page to direct to: the handler's own
+        // pagination_limit_exceeded guard rejects it.
+        const nextPage = result.page_metadata.page + 1;
+        lines.push(
+          nextPage * result.page_metadata.limit > MAX_PAGE_OFFSET
+            ? `**No further pages reachable:** this page sits at the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number cap and no keyset cursor was returned, so nothing beyond it can be read. Narrow the filters to bring the result set inside the window.`
+            : `**Next page:** request page ${nextPage}. No keyset cursor was returned for this page — the endpoint withholds the pair on a final page and on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset, so continue by page number; a short or empty page marks the true end.`,
+        );
+      }
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

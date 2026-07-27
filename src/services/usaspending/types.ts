@@ -429,12 +429,20 @@ export interface RawSpendingByCategoryResult {
   name?: string | null;
 }
 
-/** Raw spending over time result */
+/**
+ * Raw spending over time result. The award-category obligation keys are
+ * `<Category>_Obligations` where the category is the upstream's own short label:
+ * direct payments are `Direct_Obligations`, not `Direct Payment_Obligations`.
+ * A matching `*_Outlays` family (plus `total_outlays`) is returned alongside but
+ * is null in every sampled response, so it stays unmodeled until upstream
+ * populates it.
+ */
 export interface RawSpendingOverTimeResult {
   aggregated_amount?: number | null;
   Contract_Obligations?: number | null;
-  'Direct Payment_Obligations'?: number | null;
+  Direct_Obligations?: number | null;
   Grant_Obligations?: number | null;
+  Idv_Obligations?: number | null;
   Loan_Obligations?: number | null;
   Other_Obligations?: number | null;
   /**
@@ -604,13 +612,21 @@ export interface RawIdvChildAward {
   piid?: string | null;
 }
 
-/** Raw paginated response from POST /idvs/awards/ */
+/**
+ * Raw paginated response from POST /idvs/awards/. Only `results` and
+ * `page_metadata` are returned at the top level — the pagination fields are
+ * nested, never flat. Its `page_metadata` needs its own shape rather than
+ * {@link RawPageMetadata}: it carries `next`/`previous` page pointers and omits
+ * the `total`, `limit`, and cursor fields that interface models.
+ */
 export interface RawIdvAwardsResponse {
-  hasNext?: boolean | null;
-  hasPrevious?: boolean | null;
-  next?: number | null;
-  page?: number | null;
-  previous?: number | null;
+  page_metadata?: {
+    hasNext?: boolean | null;
+    hasPrevious?: boolean | null;
+    next?: number | null;
+    page?: number | null;
+    previous?: number | null;
+  } | null;
   results?: RawIdvChildAward[] | null;
 }
 

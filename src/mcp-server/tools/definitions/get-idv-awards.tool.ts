@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { resolveHasNext } from './pagination.js';
 
 export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
   title: 'Get IDV Child Awards',
@@ -184,14 +185,18 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       };
     });
 
-    const rawHasNext = data.hasNext ?? false;
-    const hasPrevious = data.hasPrevious ?? false;
-    const currentPage = typeof data.page === 'number' ? data.page : input.page;
+    // idvs/awards/ nests every pagination field under page_metadata; reading them from
+    // the top level resolves each one to undefined, which silently pinned has_previous
+    // to false and discarded the upstream hasNext entirely.
+    const pageMeta = data.page_metadata ?? {};
+    const rawHasNext = pageMeta.hasNext ?? false;
+    const hasPrevious = pageMeta.hasPrevious ?? false;
+    const currentPage = typeof pageMeta.page === 'number' ? pageMeta.page : input.page;
     // idvs/awards page_metadata omits a total and can report a stale hasNext, so a full
-    // page must disclose possible continuation even when upstream hasNext is false. A
-    // short or empty page marks the end.
+    // page must disclose possible continuation even when upstream hasNext is false.
+    // pageIsFull is kept separately — it also gates the truncation disclosure below.
     const pageIsFull = results.length >= input.limit;
-    const hasNext = rawHasNext || pageIsFull;
+    const hasNext = resolveHasNext(rawHasNext, results.length, input.limit);
 
     ctx.enrich({
       parent_award_id: input.award_id,
@@ -228,7 +233,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
   format: (result) => {
     const lines: string[] = [
       `## Child Awards for IDV: ${result.award_id}`,
-      `**Page:** ${result.page_metadata.page} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
+      `**Page:** ${result.page_metadata.page} | **Per page:** ${result.page_metadata.limit} | **Has previous:** ${result.page_metadata.has_previous ? 'Yes' : 'No'} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
     ];
     for (const a of result.results) {
       lines.push('');

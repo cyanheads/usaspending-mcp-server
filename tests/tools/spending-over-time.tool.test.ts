@@ -147,15 +147,29 @@ describe('spendingOverTimeTool', () => {
     expect(result.results[0].time_period).not.toHaveProperty('calendar_year');
   });
 
-  it('maps all award breakdown fields (loans, direct_payments, other)', async () => {
+  it('maps every award breakdown column from the upstream key set', async () => {
+    // Verbatim FY2023 row from search/spending_over_time/ for award_type_codes
+    // ["06","10"] — direct payments are keyed Direct_Obligations, and the whole
+    // *_Outlays family comes back null. The mapping must reconcile the breakdown
+    // to aggregated_amount and ignore the null outlays.
     mockSpendingOverTime.mockResolvedValueOnce({
       results: [
         {
+          aggregated_amount: 2_856_946_892_406.17,
           time_period: { fiscal_year: '2023' },
-          aggregated_amount: 600_000_000,
-          Loan_Obligations: 200_000_000,
-          'Direct Payment_Obligations': 150_000_000,
-          Other_Obligations: 50_000_000,
+          Contract_Obligations: 0,
+          Direct_Obligations: 2_856_870_495_687.04,
+          Grant_Obligations: -264_436.97,
+          Idv_Obligations: 0,
+          Loan_Obligations: 0,
+          Other_Obligations: 76_661_156.1,
+          total_outlays: null,
+          Contract_Outlays: null,
+          Direct_Outlays: null,
+          Grant_Outlays: null,
+          Idv_Outlays: null,
+          Loan_Outlays: null,
+          Other_Outlays: null,
         },
       ],
     });
@@ -164,9 +178,65 @@ describe('spendingOverTimeTool', () => {
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
-    expect(result.results[0].loans).toBe(200_000_000);
-    expect(result.results[0].direct_payments).toBe(150_000_000);
-    expect(result.results[0].other).toBe(50_000_000);
+    const row = result.results[0];
+    expect(row.contracts).toBe(0);
+    expect(row.direct_payments).toBe(2_856_870_495_687.04);
+    expect(row.grants).toBe(-264_436.97);
+    expect(row.idvs).toBe(0);
+    expect(row.loans).toBe(0);
+    expect(row.other).toBe(76_661_156.1);
+
+    const breakdownSum =
+      (row.contracts ?? 0) +
+      (row.direct_payments ?? 0) +
+      (row.grants ?? 0) +
+      (row.idvs ?? 0) +
+      (row.loans ?? 0) +
+      (row.other ?? 0);
+    expect(breakdownSum).toBeCloseTo(row.aggregated_amount ?? 0, 0);
+  });
+
+  it('maps Idv_Obligations into the idvs column on an IDV-scoped query', async () => {
+    // Verbatim FY2023 row for award_type_codes ["IDV_A".."IDV_E"] — the entire
+    // amount lands in Idv_Obligations, which previously had no output field.
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [
+        {
+          aggregated_amount: 135_257_049.76,
+          time_period: { fiscal_year: '2023' },
+          Contract_Obligations: 0,
+          Direct_Obligations: 0,
+          Grant_Obligations: 0,
+          Idv_Obligations: 135_257_049.76,
+          Loan_Obligations: 0,
+          Other_Obligations: 0,
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({
+      group: 'fiscal_year',
+      filters: { award_type_codes: ['IDV_A', 'IDV_B', 'IDV_C', 'IDV_D', 'IDV_E'] },
+    });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+
+    expect(result.results[0].idvs).toBe(135_257_049.76);
+    expect(result.results[0].aggregated_amount).toBe(135_257_049.76);
+  });
+
+  it('omits breakdown columns the upstream did not return', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [{ time_period: { fiscal_year: '2023' }, aggregated_amount: 600_000_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+
+    expect(result.results[0].direct_payments).toBeUndefined();
+    expect(result.results[0].idvs).toBeUndefined();
+    expect(result.results[0].loans).toBeUndefined();
   });
 
   it('subawards=true is forwarded to service', async () => {
@@ -194,6 +264,7 @@ describe('spendingOverTimeTool', () => {
           contracts: 300_000_000_000,
           grants: 100_000_000_000,
           direct_payments: 50_000_000_000,
+          idvs: 10_000_000_000,
           loans: 25_000_000_000,
           other: 25_000_000_000,
         },
@@ -207,6 +278,29 @@ describe('spendingOverTimeTool', () => {
     expect(text).toContain('2022');
     expect(text).toContain('500,000,000,000');
     expect(text).toContain('300,000,000,000');
+  });
+
+  it('renders the IDVs column in the markdown table', () => {
+    const output = {
+      group: 'fiscal_year',
+      results: [
+        {
+          time_period: { fiscal_year: '2023' },
+          aggregated_amount: 135_257_049.76,
+          contracts: 0,
+          grants: 0,
+          direct_payments: 0,
+          idvs: 135_257_049.76,
+          loans: 0,
+          other: 0,
+        },
+      ],
+      total_periods: 1,
+    };
+
+    const text = (spendingOverTimeTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('| IDVs |');
+    expect(text).toContain('135,257,049.76');
   });
 
   it('renders no always-empty calendar-year column', () => {

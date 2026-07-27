@@ -12,7 +12,7 @@ import { buildFilters } from './filters.js';
 export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   title: 'Spending Over Time',
   description:
-    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, or NAICS code to trace spending trends in a specific area. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, loans, other).',
+    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, or NAICS code to trace spending trends in a specific area. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, IDVs, loans, other).',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -82,6 +82,12 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
               .number()
               .optional()
               .describe('Direct payment obligation amount in USD for this period'),
+            idvs: z
+              .number()
+              .optional()
+              .describe(
+                'IDV (Indefinite Delivery Vehicle) obligation amount in USD for this period',
+              ),
             loans: z.number().optional().describe('Loan obligation amount in USD for this period'),
             other: z
               .number()
@@ -166,9 +172,10 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
           ? { contracts: r.Contract_Obligations }
           : {}),
         ...(typeof r.Grant_Obligations === 'number' ? { grants: r.Grant_Obligations } : {}),
-        ...(typeof r['Direct Payment_Obligations'] === 'number'
-          ? { direct_payments: r['Direct Payment_Obligations'] }
+        ...(typeof r.Direct_Obligations === 'number'
+          ? { direct_payments: r.Direct_Obligations }
           : {}),
+        ...(typeof r.Idv_Obligations === 'number' ? { idvs: r.Idv_Obligations } : {}),
         ...(typeof r.Loan_Obligations === 'number' ? { loans: r.Loan_Obligations } : {}),
         ...(typeof r.Other_Obligations === 'number' ? { other: r.Other_Obligations } : {}),
       };
@@ -218,8 +225,8 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
 
     lines.push(
       '',
-      '| Period | Fiscal Year | Total | Contracts | Grants | Direct Pmts | Loans | Other |',
-      '|:-------|:------------|:------|:----------|:-------|:------------|:------|:------|',
+      '| Period | Fiscal Year | Total | Contracts | Grants | Direct Pmts | IDVs | Loans | Other |',
+      '|:-------|:------------|:------|:----------|:-------|:------------|:-----|:------|:------|',
     );
 
     for (const r of result.results) {
@@ -233,9 +240,10 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       const c = r.contracts !== undefined ? `$${r.contracts.toLocaleString()}` : 'N/A';
       const g = r.grants !== undefined ? `$${r.grants.toLocaleString()}` : 'N/A';
       const dp = r.direct_payments !== undefined ? `$${r.direct_payments.toLocaleString()}` : 'N/A';
+      const idv = r.idvs !== undefined ? `$${r.idvs.toLocaleString()}` : 'N/A';
       const l = r.loans !== undefined ? `$${r.loans.toLocaleString()}` : 'N/A';
       const o = r.other !== undefined ? `$${r.other.toLocaleString()}` : 'N/A';
-      lines.push(`| ${period} | ${fy} | ${amt} | ${c} | ${g} | ${dp} | ${l} | ${o} |`);
+      lines.push(`| ${period} | ${fy} | ${amt} | ${c} | ${g} | ${dp} | ${idv} | ${l} | ${o} |`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

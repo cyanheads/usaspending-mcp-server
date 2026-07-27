@@ -13,12 +13,15 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ getIdvAwards: mockGetIdvAwards }),
 }));
 
+/**
+ * POST idvs/awards/ returns only `results` and `page_metadata` at the top level —
+ * every pagination field is nested. Fixtures mirror that shape so a handler reading
+ * the flat top level cannot pass.
+ */
 describe('getIdvAwardsTool', () => {
   it('returns child awards for a valid IDV award_id', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
-      page: 1,
-      hasNext: true,
-      hasPrevious: false,
+      page_metadata: { page: 1, next: 2, previous: null, hasNext: true, hasPrevious: false },
       results: [
         {
           award_id: 291813109,
@@ -64,9 +67,7 @@ describe('getIdvAwardsTool', () => {
 
   it('discloses truncation when a full page has more results', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
-      page: 1,
-      hasNext: true,
-      hasPrevious: false,
+      page_metadata: { page: 1, next: 2, previous: null, hasNext: true, hasPrevious: false },
       results: Array.from({ length: 2 }, (_, i) => ({
         generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
       })),
@@ -85,9 +86,13 @@ describe('getIdvAwardsTool', () => {
 
   it('discloses continuation on a full page even when upstream hasNext is false', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
-      page: 1,
-      hasNext: false, // upstream (possibly stale) reports no more
-      hasPrevious: false,
+      page_metadata: {
+        page: 1,
+        next: null,
+        previous: null,
+        hasNext: false, // upstream (possibly stale) reports no more
+        hasPrevious: false,
+      },
       results: Array.from({ length: 2 }, (_, i) => ({
         generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
       })),
@@ -108,9 +113,7 @@ describe('getIdvAwardsTool', () => {
 
   it('does not disclose continuation on a short final page', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
-      page: 2,
-      hasNext: false,
-      hasPrevious: true,
+      page_metadata: { page: 2, next: null, previous: 1, hasNext: false, hasPrevious: true },
       results: [{ generated_unique_award_id: 'CONT_AWD_LAST_001' }],
     });
 
@@ -119,16 +122,58 @@ describe('getIdvAwardsTool', () => {
     const result = await getIdvAwardsTool.handler(input, ctx);
 
     expect(result.page_metadata.has_next).toBe(false);
+    expect(result.page_metadata.has_previous).toBe(true);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.has_next_page).toBe(false);
     expect(enrichment.truncated).toBeUndefined();
   });
 
+  it('reports has_previous on a page past the first (#46)', async () => {
+    // The live page-2 shape for CONT_IDV_FA862115D6276_9700 at limit 2. Reading these
+    // from the response top level instead of page_metadata pinned has_previous to false
+    // on every page.
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page_metadata: { page: 2, next: 3, previous: 1, hasNext: true, hasPrevious: true },
+      results: [
+        { generated_unique_award_id: 'CONT_AWD_CHILD_P2_A', piid: 'FA862115F6276A' },
+        { generated_unique_award_id: 'CONT_AWD_CHILD_P2_B', piid: 'FA862115F6276B' },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = getIdvAwardsTool.input.parse({
+      award_id: 'CONT_IDV_FA862115D6276_9700',
+      limit: 2,
+      page: 2,
+    });
+    const result = await getIdvAwardsTool.handler(input, ctx);
+
+    expect(result.page_metadata.has_previous).toBe(true);
+    expect(result.page_metadata.page).toBe(2);
+    expect(result.page_metadata.has_next).toBe(true);
+    expect(getEnrichment(ctx).current_page).toBe(2);
+  });
+
+  it('honors the upstream hasNext on a short page instead of discarding it (#46)', async () => {
+    // A short page cannot trigger the page-fullness fallback, so has_next here is
+    // truthful only if the nested upstream flag is actually read.
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page_metadata: { page: 1, next: 2, previous: null, hasNext: true, hasPrevious: false },
+      results: [{ generated_unique_award_id: 'CONT_AWD_SHORT_001' }],
+    });
+
+    const ctx = createMockContext();
+    const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_SHORT_000', limit: 2 });
+    const result = await getIdvAwardsTool.handler(input, ctx);
+
+    expect(result.results).toHaveLength(1);
+    expect(result.page_metadata.has_next).toBe(true);
+    expect(getEnrichment(ctx).has_next_page).toBe(true);
+  });
+
   it('populates empty-results notice for IDV with no children of requested type', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
-      page: 1,
-      hasNext: false,
-      hasPrevious: false,
+      page_metadata: { page: 1, next: null, previous: null, hasNext: false, hasPrevious: false },
       results: [],
     });
 
@@ -148,9 +193,7 @@ describe('getIdvAwardsTool', () => {
 
   it('handles sparse child award — optional fields omitted by upstream', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
-      page: 1,
-      hasNext: false,
-      hasPrevious: false,
+      page_metadata: { page: 1, next: null, previous: null, hasNext: false, hasPrevious: false },
       results: [
         {
           // Only generated_unique_award_id present; everything else omitted
@@ -203,11 +246,24 @@ describe('getIdvAwardsTool', () => {
     const blocks = getIdvAwardsTool.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('CONT_IDV_NNK14MA74C_8000');
+    expect(text).toContain('**Has previous:** No');
     expect(text).toContain('CONT_AWD_80KSC024FA106_8000_NNK14MA74C_8000');
     expect(text).toContain('80KSC024FA106');
     expect(text).toContain('DELIVERY ORDER');
     expect(text).toContain('295,048');
     expect(text).toContain('NASA');
     expect(text).toContain('2025-01-01');
+  });
+
+  it('renders has_previous for content[]-only clients (#46)', () => {
+    const output = {
+      award_id: 'CONT_IDV_FA862115D6276_9700',
+      results: [{ generated_unique_award_id: 'CONT_AWD_CHILD_P2_A' }],
+      page_metadata: { has_next: true, has_previous: true, page: 2, limit: 2 },
+    };
+
+    const text = (getIdvAwardsTool.format!(output)[0] as { text: string }).text;
+    expect(text).toContain('**Has previous:** Yes');
+    expect(text).toContain('**Has next:** Yes');
   });
 });

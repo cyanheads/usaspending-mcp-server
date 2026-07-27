@@ -24,7 +24,8 @@
  *   • --check   → exit 1 if CHANGELOG.md differs from what would be generated
  *
  * Missing `summary`: warning (not failure) — the entry renders header-only.
- * Summary > 350 chars, or malformed `breaking` / `security`: hard error.
+ * Summary > 350 chars, malformed `breaking` / `security`, or stray control
+ * markup in the body: hard error.
  *
  * @module scripts/build-changelog
  */
@@ -32,12 +33,30 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 const CHANGELOG_DIR = resolve('changelog');
 const CHANGELOG_PATH = resolve('CHANGELOG.md');
 const EXCLUDED_FILES = new Set(['template.md', 'README.md']);
 const SERIES_PATTERN = /^\d+\.\d+\.x$/;
 const SUMMARY_MAX_LENGTH = 350;
+const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n---\n?/;
+
+/**
+ * A whole line that is nothing but an opening or closing angle-bracket tag.
+ * Entries are prose and bullets, so a bare tag on its own line is leaked control
+ * markup unless it is one of {@link ALLOWED_HTML_TAGS}. Matching the whole
+ * trimmed line (never a substring) keeps legitimate inline angle brackets —
+ * `post<T>()`, `naics_codes: ["<code>"]` — out of scope.
+ */
+const STRAY_MARKUP_LINE = /^<\/?([A-Za-z][\w:.-]*)(?:\s[^<>]*)?\/?>$/;
+
+/**
+ * HTML that legitimately stands alone on a line in markdown. GitHub renders
+ * these in both the changelog and a release body, so a collapsible block or a
+ * line break is prose, not corruption.
+ */
+const ALLOWED_HTML_TAGS = new Set(['details', 'summary', 'br', 'img', 'a', 'hr', 'picture']);
 
 const HEADER = `# Changelog
 
@@ -83,7 +102,7 @@ function compareSemverDesc(a: string, b: string): number {
  * touching the parser. Throws on malformed values we actually care about.
  */
 function parseFrontmatter(content: string, fileLabel: string): Frontmatter {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  const match = content.match(FRONTMATTER_PATTERN);
   if (!match) return { summary: null, breaking: false, security: false };
 
   const block = match[1] as string;
@@ -119,6 +138,28 @@ function parseFrontmatter(content: string, fileLabel: string): Frontmatter {
     breaking: parseBool('breaking'),
     security: parseBool('security'),
   };
+}
+
+/**
+ * Reject control markup that leaked into an entry body. Frontmatter is already
+ * validated; the body was not, so tool-call/XML tags trailing a file passed every
+ * gate and reached the published tarball and GitHub release. Corruption of this
+ * shape always occupies a line by itself — see {@link STRAY_MARKUP_LINE}.
+ */
+export function validateBody(content: string, fileLabel: string): void {
+  const lines = content.split('\n');
+  const frontmatter = content.match(FRONTMATTER_PATTERN);
+  const bodyStart = frontmatter ? (frontmatter[0] as string).split('\n').length - 1 : 0;
+
+  for (let i = bodyStart; i < lines.length; i++) {
+    const line = (lines[i] as string).trim();
+    const match = line.match(STRAY_MARKUP_LINE);
+    if (!match) continue;
+    if (ALLOWED_HTML_TAGS.has((match[1] as string).toLowerCase())) continue;
+    throw new Error(
+      `${fileLabel}:${i + 1}: stray control markup '${line}' on its own line. Changelog entries are prose — delete the leaked tag.`,
+    );
+  }
 }
 
 /** Extract the release date from the H1 heading. */
@@ -176,6 +217,7 @@ function buildRollup(): { content: string; missingSummary: string[] } {
     const fileLabel = `changelog/${entry.series}/${entry.version}.md`;
     const content = readFileSync(entry.path, 'utf-8');
     const fm = parseFrontmatter(content, fileLabel);
+    validateBody(content, fileLabel);
     const date = extractDate(content, fileLabel);
 
     if (!fm.summary) {
@@ -245,4 +287,6 @@ function main(): void {
   reportMissingSummaries(missingSummary);
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.2](changelog/0.3.x/0.3.2.md) — 2026-07-27
+
+Fixes usaspending_search_awards's has_next going false at a 10,000-result offset, usaspending_spending_over_time's dropped direct-payment/IDV obligations, usaspending_get_idv_awards's pagination read from the wrong response path, and a dead enrichment-trailer label.
+
 ## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-07-27
 
 @cyanheads/mcp-ts-core ^0.10.14 → ^0.11.0 (TypeScript 7, fetch-timeout Timeout reclassification, canonical error-data fields); every tool gains an api_timeout error contract entry; the two unreachable award_not_found contracts are removed; the changelog build now rejects leaked control markup in an entry body.

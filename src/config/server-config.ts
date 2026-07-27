@@ -18,7 +18,16 @@ const ServerConfigSchema = z.object({
     .min(1000)
     .max(120_000)
     .default(30_000)
-    .describe('HTTP request timeout in milliseconds'),
+    .describe('HTTP request timeout in milliseconds, per attempt'),
+  retryBudgetMs: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(300_000)
+    .optional()
+    .describe(
+      'Wall-clock budget covering every retry attempt of one request. Defaults to 1.5x the per-attempt timeout, which leaves room for one retry rather than four full timeouts plus backoff.',
+    ),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -29,6 +38,7 @@ export function getServerConfig(): ServerConfig {
   _config ??= parseEnvConfig(ServerConfigSchema, {
     baseUrl: 'USASPENDING_BASE_URL',
     timeoutMs: 'USASPENDING_TIMEOUT_MS',
+    retryBudgetMs: 'USASPENDING_RETRY_BUDGET_MS',
   });
   return _config;
 }

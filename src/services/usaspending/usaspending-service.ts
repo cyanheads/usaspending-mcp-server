@@ -6,9 +6,14 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, serviceUnavailable, timeout } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { fetchWithTimeout, type RequestContext, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import {
+  type FetchWithTimeoutOptions,
+  fetchWithTimeout,
+  type RequestContext,
+  withRetry,
+} from '@cyanheads/mcp-ts-core/utils';
 import type { ServerConfig } from '@/config/server-config.js';
 import type {
   RawAgencyAutocomplete,
@@ -60,73 +65,115 @@ import type {
  */
 const ENTITY_MISS_STATUSES = new Set([400, 404]);
 
+/** Backoff before the first retry; subsequent waits double from here. */
+const RETRY_BASE_DELAY_MS = 1000;
+
 export class USASpendingService {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly retryBudgetMs: number;
 
   constructor(_appConfig: AppConfig, _storage: StorageService, serverConfig: ServerConfig) {
     this.baseUrl = serverConfig.baseUrl.endsWith('/')
       ? serverConfig.baseUrl
       : `${serverConfig.baseUrl}/`;
     this.timeoutMs = serverConfig.timeoutMs;
+    this.retryBudgetMs = serverConfig.retryBudgetMs ?? Math.round(serverConfig.timeoutMs * 1.5);
   }
 
   // --- HTTP primitives ---
 
-  private get<T>(path: string, ctx: Context, expectedStatuses?: number[]): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-    return withRetry(
-      async () => {
-        const response = await fetchWithTimeout(
-          url,
-          this.timeoutMs,
-          ctx as unknown as RequestContext,
+  /**
+   * Issues one upstream request under a wall-clock deadline spanning the whole
+   * retry loop.
+   *
+   * `withRetry` re-runs a transient failure three more times by default and a
+   * per-request timeout classifies as transient, so an endpoint that cannot
+   * answer inside `USASPENDING_TIMEOUT_MS` re-pays that budget on every attempt
+   * — measured at 128s against the 30s default. A timeout is not evidence the
+   * next attempt will be faster, so a single deadline signal, composed with the
+   * caller's and threaded into both `withRetry` and `fetchWithTimeout`, caps the
+   * total instead of letting it scale with the attempt count.
+   *
+   * Worst case is `USASPENDING_RETRY_BUDGET_MS` plus the time to unwind an
+   * in-flight fetch: ~45s at the defaults, and ~180s if a caller raises
+   * `USASPENDING_TIMEOUT_MS` to its 120000 ceiling and leaves the budget derived
+   * — where the unbounded loop ran roughly eight minutes.
+   *
+   * Deadline expiry reaches this frame two ways, neither coherent on its own.
+   * Aborted mid-fetch, `fetchWithTimeout` throws its `FetchAborted`
+   * `InternalError` ("was aborted") and `withRetry` re-throws it verbatim,
+   * naming no deadline. Aborted mid-backoff, `withRetry`'s internal sleep
+   * rejects with the raw abort reason, which bypasses its error-enrichment path
+   * entirely and surfaces a bare `AbortError`. Both are normalized here into one
+   * `Timeout` naming the budget it exhausted. A caller-initiated abort is left
+   * untouched.
+   */
+  private async request<T>(
+    operation: string,
+    url: string,
+    ctx: Context,
+    init: FetchWithTimeoutOptions,
+  ): Promise<T> {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), this.retryBudgetMs);
+    const signal = ctx.signal ? AbortSignal.any([deadline.signal, ctx.signal]) : deadline.signal;
+
+    try {
+      return await withRetry(
+        async () => {
+          const response = await fetchWithTimeout(
+            url,
+            this.timeoutMs,
+            ctx as unknown as RequestContext,
+            { ...init, signal },
+          );
+          const text = await response.text();
+          return this.parseJson<T>(text, url);
+        },
+        {
+          operation,
+          context: ctx as unknown as RequestContext,
+          baseDelayMs: RETRY_BASE_DELAY_MS,
+          signal,
+        },
+      );
+    } catch (err) {
+      if (deadline.signal.aborted && !ctx.signal?.aborted) {
+        throw timeout(
+          `USAspending did not answer ${operation} within the ${this.retryBudgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`,
           {
-            headers: { Accept: 'application/json' },
-            signal: ctx.signal,
-            ...(expectedStatuses ? { expectedStatuses } : {}),
+            url,
+            operation,
+            budgetMs: this.retryBudgetMs,
+            timeoutMs: this.timeoutMs,
+            errorSource: 'RequestBudgetExhausted',
           },
+          { cause: err },
         );
-        const text = await response.text();
-        return this.parseJson<T>(text, url);
-      },
-      {
-        operation: `GET ${path}`,
-        context: ctx as unknown as RequestContext,
-        baseDelayMs: 1000,
-        signal: ctx.signal,
-      },
-    );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private get<T>(path: string, ctx: Context, expectedStatuses?: number[]): Promise<T> {
+    return this.request<T>(`GET ${path}`, `${this.baseUrl}${path}`, ctx, {
+      headers: { Accept: 'application/json' },
+      ...(expectedStatuses ? { expectedStatuses } : {}),
+    });
   }
 
   private post<T>(path: string, body: unknown, ctx: Context): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-    return withRetry(
-      async () => {
-        const response = await fetchWithTimeout(
-          url,
-          this.timeoutMs,
-          ctx as unknown as RequestContext,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json',
-            },
-            body: JSON.stringify(body),
-            signal: ctx.signal,
-          },
-        );
-        const text = await response.text();
-        return this.parseJson<T>(text, url);
+    return this.request<T>(`POST ${path}`, `${this.baseUrl}${path}`, ctx, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
       },
-      {
-        operation: `POST ${path}`,
-        context: ctx as unknown as RequestContext,
-        baseDelayMs: 1000,
-        signal: ctx.signal,
-      },
-    );
+      body: JSON.stringify(body),
+    });
   }
 
   /**

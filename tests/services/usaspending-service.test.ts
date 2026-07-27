@@ -22,9 +22,27 @@ const serverConfig: ServerConfig = {
 const newService = () =>
   new USASpendingService({} as AppConfig, {} as StorageService, serverConfig);
 
+const newServiceWith = (overrides: Partial<ServerConfig>) =>
+  new USASpendingService({} as AppConfig, {} as StorageService, { ...serverConfig, ...overrides });
+
 /** Stubs the next fetch with a verbatim upstream response body and status. */
 const stubFetch = (status: number, body: string) => {
   const fetchMock = vi.fn(async () => new Response(body, { status }));
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+};
+
+/**
+ * Stubs a fetch that never answers and only settles when its signal aborts —
+ * the shape of an endpoint that cannot respond inside any budget.
+ */
+const stubHangingFetch = () => {
+  const fetchMock = vi.fn(
+    (_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      }),
+  );
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 };
@@ -343,5 +361,90 @@ describe('USASpendingService POST', () => {
     await expect(
       newService().spendingOverTime({ group: 'month', filters: {} }, ctx),
     ).rejects.toMatchObject({ code: JsonRpcErrorCode.Forbidden });
+  });
+});
+
+/**
+ * The retry loop runs under one wall-clock budget, so a per-attempt timeout is
+ * not re-paid on every attempt (#52). Deadline expiry reaches the caller through
+ * two different framework paths, each incoherent on its own — mid-fetch it is
+ * `fetchWithTimeout`'s `FetchAborted` InternalError ("was aborted"), mid-backoff
+ * it is the raw `AbortError` DOMException `withRetry`'s sleep rejects with,
+ * which never passes through the enrichment path. Both must land as one Timeout
+ * naming the budget.
+ */
+describe('USASpendingService request budget', () => {
+  let ctx: ReturnType<typeof createMockContext>;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('normalizes a deadline that expires mid-fetch', async () => {
+    const fetchMock = stubHangingFetch();
+    const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 1000 });
+
+    await expect(svc.getDisasterOverview(ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message: expect.stringContaining('within the 1000ms request budget'),
+      data: { errorSource: 'RequestBudgetExhausted', budgetMs: 1000, timeoutMs: 60_000 },
+    });
+    // The per-attempt timeout never fired — only the shared deadline ended it.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes a deadline that expires during the backoff sleep', async () => {
+    // 503 is transient, so the first failure is fast and the loop is asleep when
+    // the deadline lands. Raw, that surfaces as a bare AbortError with no code.
+    //
+    // The budget must stay clear of the backoff's jitter floor. withRetry applies
+    // 25% jitter to RETRY_BASE_DELAY_MS, so the first sleep lands anywhere in
+    // 750-1250ms; a budget inside that range wakes the loop before the deadline on
+    // some runs and fires a second fetch. 200ms is below the floor, so the deadline
+    // always lands mid-sleep.
+    const fetchMock = stubFetch(503, JSON.stringify({ detail: 'Service Unavailable' }));
+    const svc = newServiceWith({ timeoutMs: 5000, retryBudgetMs: 200 });
+
+    const err = await svc.getDisasterOverview(ctx).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message: expect.stringContaining('within the 200ms request budget'),
+      data: { errorSource: 'RequestBudgetExhausted' },
+    });
+    expect((err as Error).name).not.toBe('AbortError');
+    // One attempt, then the budget stopped the loop — not the default four.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('derives the default budget from the per-attempt timeout', async () => {
+    stubHangingFetch();
+    const svc = newServiceWith({ timeoutMs: 400 });
+
+    const started = Date.now();
+    await expect(svc.getDisasterOverview(ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { budgetMs: 600 },
+    });
+    // 1.5x the timeout, versus four attempts plus 1s/2s/4s of backoff unbounded.
+    expect(Date.now() - started).toBeLessThan(1600);
+  });
+
+  it('leaves a caller-initiated abort classified as a caller abort', async () => {
+    stubHangingFetch();
+    const caller = new AbortController();
+    const callerCtx = createMockContext({ signal: caller.signal });
+    const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+    const pending = svc.getDisasterOverview(callerCtx).catch((e: unknown) => e);
+    caller.abort();
+
+    expect(await pending).toMatchObject({
+      code: JsonRpcErrorCode.InternalError,
+      data: { errorSource: 'FetchAborted' },
+    });
   });
 });

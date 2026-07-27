@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-07-27 · ⚠️ Breaking
+
+Renames usaspending_autocomplete to usaspending_autocomplete_filters (breaking), bounds and ranks usaspending_spending_by_geography results, fixes its empty-filters 500, and drops the time component from usaspending_get_award's potential_end_date.
+
 ## [0.3.2](changelog/0.3.x/0.3.2.md) — 2026-07-27
 
 Fixes usaspending_search_awards's has_next going false at a 10,000-result offset, usaspending_spending_over_time's dropped direct-payment/IDV obligations, usaspending_get_idv_awards's pagination read from the wrong response path, and a dead enrichment-trailer label.

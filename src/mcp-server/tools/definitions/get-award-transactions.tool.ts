@@ -87,20 +87,26 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       ),
   },
 
+  /**
+   * No not-found reason: the transactions endpoint answers an unknown award_id
+   * with HTTP 200 and zero rows, so the handler discloses that as an enrichment
+   * notice rather than a failure. Declaring one would advertise a failure mode
+   * no input can produce.
+   */
   errors: [
-    {
-      reason: 'award_not_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No award exists for the given award ID.',
-      recovery:
-        'Verify the award_id is a generated_internal_id from usaspending_search_awards results.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
+    },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry with a smaller limit so the upstream assembles a lighter page.',
     },
   ],
 

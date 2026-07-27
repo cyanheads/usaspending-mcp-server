@@ -312,6 +312,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery:
+        'Narrow the search — a shorter time_period, fewer award_type_codes, or a smaller limit — then retry.',
+    },
+    {
       reason: 'pagination_limit_exceeded',
       code: JsonRpcErrorCode.ValidationError,
       when: 'page multiplied by limit exceeds the endpoint 50,000-result page window and no cursor was supplied.',

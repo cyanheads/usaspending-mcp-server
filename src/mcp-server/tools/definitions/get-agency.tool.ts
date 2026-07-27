@@ -140,6 +140,13 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry the request; the sub-agency page is the slow part, so request one page.',
+    },
   ],
 
   async handler(input, ctx) {

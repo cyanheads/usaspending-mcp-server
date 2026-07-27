@@ -86,20 +86,25 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       ),
   },
 
+  /**
+   * No not-found reason: the subawards endpoint answers an unknown award_id with
+   * HTTP 200 and zero rows, and an award with no subawards is a legitimate empty
+   * result. Both are disclosed as an enrichment notice rather than a failure.
+   */
   errors: [
-    {
-      reason: 'award_not_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No award exists for the given award ID, or the award has no subawards.',
-      recovery:
-        'Confirm subaward_count is > 0 from usaspending_get_award before querying subawards.',
-    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
+    },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry with a smaller limit so the upstream assembles a lighter page.',
     },
   ],
 

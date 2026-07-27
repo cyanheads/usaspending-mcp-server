@@ -104,6 +104,13 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry with an agency_identifier set and a smaller limit to lighten the query.',
+    },
   ],
 
   async handler(input, ctx) {

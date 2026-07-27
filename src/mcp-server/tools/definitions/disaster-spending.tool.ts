@@ -160,6 +160,13 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Narrow the query — fewer DEF codes in filters, or a smaller limit — then retry.',
+    },
   ],
 
   async handler(input, ctx) {

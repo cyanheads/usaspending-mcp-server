@@ -220,7 +220,7 @@ describe('getFederalAccountBreakdownTool', () => {
   it('declares no not-found reason — the upstream gives no such signal', () => {
     // A declared reason that can never fire is an unreachable recovery contract.
     const reasons = (getFederalAccountBreakdownTool.errors ?? []).map((e) => e.reason);
-    expect(reasons).toEqual(['api_unavailable']);
+    expect(reasons).toEqual(['api_unavailable', 'api_timeout']);
   });
 
   it('handles a sparse row — fields omitted by upstream', async () => {

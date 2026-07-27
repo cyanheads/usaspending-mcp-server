@@ -73,7 +73,7 @@ export class USASpendingService {
 
   // --- HTTP primitives ---
 
-  private get<T>(path: string, ctx: Context): Promise<T> {
+  private get<T>(path: string, ctx: Context, expectedStatuses?: number[]): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     return withRetry(
       async () => {
@@ -84,6 +84,7 @@ export class USASpendingService {
           {
             headers: { Accept: 'application/json' },
             signal: ctx.signal,
+            ...(expectedStatuses ? { expectedStatuses } : {}),
           },
         );
         const text = await response.text();
@@ -133,20 +134,28 @@ export class USASpendingService {
    * upstream reports it does not exist (see {@link ENTITY_MISS_STATUSES}). This
    * lets the calling tool handler's existence check run and its declared
    * not-found contract fire, instead of `fetchWithTimeout`'s status-mapped
-   * throw escaping as an unclassified error.
+   * throw escaping as an unclassified error. Those same statuses are declared
+   * as `expectedStatuses` so a routine miss logs at `debug` rather than `error`.
    *
    * Deliberately kept out of `get<T>()` itself: `listAgencies`,
    * `getAgencySubAgencies`, `getAgencyBudgetaryResources`, and
    * `getDisasterOverview` share that primitive but have no not-found contract
    * and no existence check, so swallowing their 4xx would silently turn real
    * upstream failures into empty successes.
+   *
+   * The two agency sub-resources still declare the same `expectedStatuses`,
+   * because `usaspending_get_agency` resolves them alongside the agency detail
+   * and catches their rejection — a miss there is an expected outcome and logs
+   * at `debug`, while the still-thrown error reaches that caller's catch.
+   * `listAgencies` and `getDisasterOverview` have no such caller, so their
+   * misses stay at `error`.
    */
   private async getEntity<T>(path: string, ctx: Context): Promise<T | undefined> {
     try {
-      return await this.get<T>(path, ctx);
+      return await this.get<T>(path, ctx, [...ENTITY_MISS_STATUSES]);
     } catch (err) {
       if (err instanceof McpError) {
-        const status = err.data?.statusCode;
+        const status = err.data?.status;
         if (typeof status === 'number' && ENTITY_MISS_STATUSES.has(status)) {
           ctx.log.debug('Upstream reported no such entity', { path, status });
           return;
@@ -315,6 +324,7 @@ export class USASpendingService {
     return await this.get<{ results: RawSubAgencyEntry[]; page_metadata?: RawPageMetadata }>(
       `agency/${encodeURIComponent(toptierCode)}/sub_agency/${query ? `?${query}` : ''}`,
       ctx,
+      [...ENTITY_MISS_STATUSES],
     );
   }
 
@@ -326,6 +336,7 @@ export class USASpendingService {
     return await this.get<{ agency_data_by_year: RawBudgetaryResources[] }>(
       `agency/${encodeURIComponent(toptierCode)}/budgetary_resources/`,
       ctx,
+      [...ENTITY_MISS_STATUSES],
     );
   }
 

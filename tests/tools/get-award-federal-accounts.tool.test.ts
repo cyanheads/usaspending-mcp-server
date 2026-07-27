@@ -188,7 +188,7 @@ describe('getAwardFederalAccountsTool', () => {
   it('declares no not-found reason — the upstream gives no such signal', () => {
     // A declared reason that can never fire is an unreachable recovery contract.
     const reasons = (getAwardFederalAccountsTool.errors ?? []).map((e) => e.reason);
-    expect(reasons).toEqual(['api_unavailable']);
+    expect(reasons).toEqual(['api_unavailable', 'api_timeout']);
   });
 
   it('rejects an empty award_id at the schema — upstream answers it with a 422', () => {

@@ -70,6 +70,12 @@ describe('getAwardSubawardsTool', () => {
     expect(enrichment.notice).toContain('CONT_AWD_NO_SUBS');
   });
 
+  it('declares no not-found reason — the upstream gives no such signal', () => {
+    // A declared reason that can never fire is an unreachable recovery contract.
+    const reasons = (getAwardSubawardsTool.errors ?? []).map((e) => e.reason);
+    expect(reasons).toEqual(['api_unavailable', 'api_timeout']);
+  });
+
   it('throws when service call fails', async () => {
     mockGetAwardSubawards.mockRejectedValueOnce(new Error('API error'));
 

@@ -72,6 +72,12 @@ describe('getAwardTransactionsTool', () => {
     expect(enrichment.notice).toContain('CONT_AWD_EMPTY');
   });
 
+  it('declares no not-found reason — the upstream gives no such signal', () => {
+    // A declared reason that can never fire is an unreachable recovery contract.
+    const reasons = (getAwardTransactionsTool.errors ?? []).map((e) => e.reason);
+    expect(reasons).toEqual(['api_unavailable', 'api_timeout']);
+  });
+
   it('throws when service call fails', async () => {
     mockGetAwardTransactions.mockRejectedValueOnce(new Error('Not found'));
 

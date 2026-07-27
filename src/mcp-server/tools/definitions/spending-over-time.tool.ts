@@ -125,6 +125,14 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery:
+        'Narrow the filters — a shorter time_period or a coarser group — then retry the aggregation.',
+    },
   ],
 
   async handler(input, ctx) {

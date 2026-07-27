@@ -131,6 +131,14 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery:
+        'Narrow the filters — a shorter time_period or a coarser geo_layer — then retry the aggregation.',
+    },
   ],
 
   async handler(input, ctx) {

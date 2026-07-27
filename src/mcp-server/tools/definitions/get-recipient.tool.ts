@@ -90,6 +90,13 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry with a single fiscal_year set to scope the profile to one year.',
+    },
   ],
 
   async handler(input, ctx) {

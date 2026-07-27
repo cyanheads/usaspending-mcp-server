@@ -102,6 +102,13 @@ export const autocompleteTool = tool('usaspending_autocomplete', {
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry with a longer search_text and a smaller limit to shrink the match set.',
+    },
   ],
 
   async handler(input, ctx) {

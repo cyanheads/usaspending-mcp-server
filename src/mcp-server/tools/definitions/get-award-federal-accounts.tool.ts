@@ -113,6 +113,13 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       retryable: true,
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
+    {
+      reason: 'api_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'USAspending.gov did not respond before the request deadline elapsed.',
+      retryable: true,
+      recovery: 'Retry with a smaller limit so the upstream assembles a lighter page.',
+    },
   ],
 
   async handler(input, ctx) {

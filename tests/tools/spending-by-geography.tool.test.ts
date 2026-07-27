@@ -46,14 +46,18 @@ describe('spendingByGeographyTool', () => {
     expect(result.scope).toBe('place_of_performance');
     expect(result.geo_layer).toBe('state');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].shape_code).toBe('53');
-    expect(result.results[0].display_name).toBe('Washington');
-    expect(result.results[0].aggregated_amount).toBe(4_500_000_000);
+    // Ranked by aggregated_amount descending, so California leads despite arriving second.
+    expect(result.results[0].shape_code).toBe('06');
+    expect(result.results[0].display_name).toBe('California');
+    expect(result.results[0].aggregated_amount).toBe(35_000_000_000);
+    expect(result.results[1].display_name).toBe('Washington');
     expect(result.total).toBe(2);
+    expect(result.total_areas_available).toBe(2);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.applied_scope).toBe('place_of_performance');
     expect(enrichment.applied_geo_layer).toBe('state');
     expect(enrichment.area_count).toBe(2);
+    expect(enrichment.truncated).toBeUndefined();
   });
 
   it('returns structured empty response with notice when API returns no results', async () => {
@@ -131,6 +135,105 @@ describe('spendingByGeographyTool', () => {
     );
   });
 
+  it('ranks by obligation and caps at limit, disclosing what was withheld', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: Array.from({ length: 200 }, (_, i) => ({
+        shape_code: String(i).padStart(5, '0'),
+        display_name: `County ${i}`,
+        aggregated_amount: i * 1_000_000,
+      })),
+    });
+
+    const ctx = createMockContext();
+    const input = spendingByGeographyTool.input.parse({
+      scope: 'place_of_performance',
+      geo_layer: 'county',
+      filters: { keywords: ['cyber'] },
+      limit: 3,
+    });
+    const result = await spendingByGeographyTool.handler(input, ctx);
+
+    expect(result.results).toHaveLength(3);
+    expect(result.total).toBe(3);
+    expect(result.total_areas_available).toBe(200);
+    expect(result.results.map((r) => r.aggregated_amount)).toEqual([
+      199_000_000, 198_000_000, 197_000_000,
+    ]);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.shown).toBe(3);
+    expect(enrichment.cap).toBe(3);
+    expect(enrichment.truncationCeiling).toBe(197_000_000);
+    expect(enrichment.notice).toContain('3 highest-obligation areas of 200');
+  });
+
+  it('defaults to 50 areas when no limit is supplied', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: Array.from({ length: 120 }, (_, i) => ({
+        shape_code: String(i),
+        display_name: `County ${i}`,
+        aggregated_amount: i,
+      })),
+    });
+
+    const ctx = createMockContext();
+    const input = spendingByGeographyTool.input.parse({
+      scope: 'place_of_performance',
+      geo_layer: 'county',
+      filters: { keywords: ['cyber'] },
+    });
+    const result = await spendingByGeographyTool.handler(input, ctx);
+
+    expect(result.results).toHaveLength(50);
+    expect(result.total_areas_available).toBe(120);
+  });
+
+  it('sends the complete award-type-code set when no filters are supplied', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: '53', display_name: 'Washington', aggregated_amount: 1_000_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingByGeographyTool.input.parse({
+      scope: 'place_of_performance',
+      geo_layer: 'state',
+    });
+    await spendingByGeographyTool.handler(input, ctx);
+
+    const sentFilters = mockSpendingByGeography.mock.calls.at(-1)?.[0].filters as {
+      award_type_codes?: string[];
+    };
+    // The endpoint answers HTTP 500 to `filters: {}`.
+    expect(Object.keys(sentFilters)).not.toHaveLength(0);
+    // Contracts-only (A/B/C/D) would undercount total obligations by roughly 85%.
+    expect(sentFilters.award_type_codes).toEqual(
+      expect.arrayContaining(['A', 'D', 'IDV_A', '02', '05', '06', '07', '09', '10', '11', '-1']),
+    );
+    expect(getEnrichment(ctx).applied_award_type_default).toContain('complete set');
+  });
+
+  it('leaves a caller-supplied filter set untouched', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: '53', display_name: 'Washington', aggregated_amount: 1_000_000 }],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingByGeographyTool.input.parse({
+      scope: 'place_of_performance',
+      geo_layer: 'state',
+      filters: { time_period_start: '2023-10-01', time_period_end: '2024-09-30' },
+    });
+    await spendingByGeographyTool.handler(input, ctx);
+
+    const sentFilters = mockSpendingByGeography.mock.calls.at(-1)?.[0].filters as Record<
+      string,
+      unknown
+    >;
+    expect(sentFilters.award_type_codes).toBeUndefined();
+    expect(sentFilters.time_period).toEqual([{ start_date: '2023-10-01', end_date: '2024-09-30' }]);
+    expect(getEnrichment(ctx).applied_award_type_default).toBeUndefined();
+  });
+
   it('formats output with area names and spending amounts', () => {
     const output = {
       scope: 'place_of_performance',
@@ -146,10 +249,12 @@ describe('spendingByGeographyTool', () => {
         },
       ],
       total: 1,
+      total_areas_available: 57,
     };
 
     const blocks = spendingByGeographyTool.format!(output);
     const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('1 of 57 matched');
     expect(text).toContain('Washington');
     expect(text).toContain('53');
     expect(text).toContain('4,500,000,000');

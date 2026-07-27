@@ -19,7 +19,7 @@ const SpendingFiltersSchema = z
       .array(z.string())
       .optional()
       .describe(
-        'Award type codes: A/B/C/D (contracts), 02–05 (grants), 06/10 (direct payments), 07/08 (loans)',
+        'Award type codes: A/B/C/D (contracts), IDV_A–IDV_E (IDVs), 02–05 (grants), 06/10 (direct payments), 07/08 (loans), 09/11 (insurance and other assistance), -1 (unspecified). Groups may be mixed here. Omit to aggregate every type.',
       ),
     agency_name: z.string().optional().describe('Awarding agency name filter'),
     recipient_id: z.string().optional().describe('Exact recipient hash ID to filter awards'),
@@ -35,6 +35,49 @@ const SpendingFiltersSchema = z
   })
   .optional()
   .describe('Optional filters to scope the spending aggregation');
+
+/**
+ * Every award type code `search/spending_by_geography/` accepts, minus the `no intersection`
+ * sentinel. Sent when the caller supplies no filters at all: the endpoint answers HTTP 500 to an
+ * empty `filters` object, and narrowing the default to contracts (A/B/C/D) would drop grants,
+ * direct payments, loans, and insurance — roughly 85% of total federal obligations — without
+ * telling the caller. The full set keeps "no filter" meaning "everything".
+ */
+const ALL_AWARD_TYPE_CODES = [
+  'A',
+  'B',
+  'C',
+  'D',
+  'IDV_A',
+  'IDV_B',
+  'IDV_B_A',
+  'IDV_B_B',
+  'IDV_B_C',
+  'IDV_C',
+  'IDV_D',
+  'IDV_E',
+  '02',
+  '03',
+  '04',
+  '05',
+  '06',
+  '07',
+  '08',
+  '09',
+  '10',
+  '11',
+  'F001',
+  'F002',
+  'F003',
+  'F004',
+  'F005',
+  'F006',
+  'F007',
+  'F008',
+  'F009',
+  'F010',
+  '-1',
+] as const;
 
 export const spendingByGeographyTool = tool('usaspending_spending_by_geography', {
   title: 'Spending by Geography',
@@ -54,6 +97,15 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
         'Geographic granularity: state (50 states), county (county-level), or district (congressional district)',
       ),
     filters: SpendingFiltersSchema,
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .default(50)
+      .describe(
+        'Maximum geographic areas to return, ranked by aggregated_amount descending (1–500). The upstream endpoint is not paginated — it returns every matching area in one response — so this caps client-side. A nationwide county query matches over 3,000 areas.',
+      ),
     subawards: z
       .boolean()
       .default(false)
@@ -93,9 +145,13 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       )
       .describe('Spending totals by geographic area'),
     total: z.number().describe('Number of geographic areas returned'),
+    total_areas_available: z
+      .number()
+      .describe('Number of geographic areas the filters matched, before limit was applied'),
   }),
 
-  // Agent-facing context: scope, layer, count, and an optional recovery notice for empty results.
+  // Agent-facing context: scope, layer, count, the applied filters, disclosure of the
+  // no-filter award-type default, the client-side cap, and a recovery notice for empty results.
   enrichment: {
     applied_scope: z
       .string()
@@ -115,6 +171,21 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       .optional()
       .describe('Start date filter applied (YYYY-MM-DD)'),
     applied_time_period_end: z.string().optional().describe('End date filter applied (YYYY-MM-DD)'),
+    applied_award_type_default: z
+      .string()
+      .optional()
+      .describe(
+        'Disclosure that no filters were supplied, so award_type_codes defaulted to the complete set. Absent when the caller supplied at least one filter.',
+      ),
+    truncated: z.boolean().optional().describe('True when the area list was capped at limit.'),
+    shown: z.number().optional().describe('Number of geographic areas returned.'),
+    cap: z.number().optional().describe('The limit that was applied.'),
+    truncationCeiling: z
+      .number()
+      .optional()
+      .describe(
+        'Obligation amount of the lowest-ranked area shown — an upper bound on omitted ones.',
+      ),
     notice: z
       .string()
       .optional()
@@ -149,6 +220,10 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
     const svc = getUSASpendingService();
 
     const filters = buildFilters(input.filters);
+    // The endpoint answers HTTP 500 to `filters: {}`; any one populated key satisfies it.
+    const defaultedAwardTypes = Object.keys(filters).length === 0;
+    if (defaultedAwardTypes) filters.award_type_codes = ALL_AWARD_TYPE_CODES;
+
     const data = await svc.spendingByGeography(
       {
         scope: input.scope,
@@ -159,7 +234,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       ctx,
     );
 
-    const results = (data.results ?? []).map((r) => ({
+    const areas = (data.results ?? []).map((r) => ({
       ...(r.shape_code ? { shape_code: r.shape_code } : {}),
       ...(r.display_name ? { display_name: r.display_name } : {}),
       ...(typeof r.aggregated_amount === 'number'
@@ -169,6 +244,10 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       ...(typeof r.per_capita === 'number' ? { per_capita: r.per_capita } : {}),
       ...(typeof r.award_count === 'number' ? { award_count: r.award_count } : {}),
     }));
+    // Upstream returns every matching area in one unordered page — rank before capping so the
+    // head answers "which areas got the most" and the omitted tail is bounded by the last row.
+    areas.sort((a, b) => (b.aggregated_amount ?? 0) - (a.aggregated_amount ?? 0));
+    const results = areas.slice(0, input.limit);
 
     ctx.enrich({
       applied_scope: input.scope,
@@ -187,7 +266,23 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       ...(input.filters?.time_period_end
         ? { applied_time_period_end: input.filters.time_period_end }
         : {}),
+      ...(defaultedAwardTypes
+        ? {
+            applied_award_type_default:
+              'No filters were supplied, so award_type_codes defaulted to the complete set — contracts, IDVs, grants, direct payments, loans, insurance, other financial assistance, and unspecified. The endpoint rejects an empty filter set.',
+          }
+        : {}),
     });
+
+    if (areas.length > results.length) {
+      const ceiling = results.at(-1)?.aggregated_amount;
+      ctx.enrich.truncated({
+        shown: results.length,
+        cap: input.limit,
+        ...(typeof ceiling === 'number' ? { ceiling } : {}),
+        guidance: `Showing the ${results.length} highest-obligation areas of ${areas.length}. Raise limit (max 500), or narrow with agency_name, keywords, or a coarser geo_layer to reach the rest.`,
+      });
+    }
 
     if (results.length === 0) {
       ctx.enrich.notice(
@@ -201,13 +296,14 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       geo_layer: input.geo_layer,
       results,
       total: results.length,
+      total_areas_available: areas.length,
     };
   },
 
   format: (result) => {
     const lines: string[] = [
       `## Federal Spending by Geography`,
-      `**Scope:** ${result.scope} | **Layer:** ${result.geo_layer} | **Areas:** ${result.total}`,
+      `**Scope:** ${result.scope} | **Layer:** ${result.geo_layer} | **Areas:** ${result.total} of ${result.total_areas_available} matched`,
       '',
       '| Area | Code | Obligation | Population | Per Capita | Awards |',
       '|:-----|:-----|:-----------|:-----------|:-----------|:-------|',

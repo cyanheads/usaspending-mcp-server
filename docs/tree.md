@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-07-27 19:26:23
+Generated on: 2026-07-27 20:51:52
 
 ```text
 usaspending-mcp-server/
@@ -139,6 +139,7 @@ usaspending-mcp-server/
 │   │           ├── autocomplete-filters.tool.ts
 │   │           ├── disaster-spending.tool.ts
 │   │           ├── filters.ts
+│   │           ├── formatting.ts
 │   │           ├── get-agency.tool.ts
 │   │           ├── get-award-federal-accounts.tool.ts
 │   │           ├── get-award-subawards.tool.ts
@@ -172,6 +173,7 @@ usaspending-mcp-server/
 │   ├── tools/
 │   │   ├── autocomplete-filters.tool.test.ts
 │   │   ├── disaster-spending.tool.test.ts
+│   │   ├── formatting.test.ts
 │   │   ├── get-agency.tool.test.ts
 │   │   ├── get-award-federal-accounts.tool.test.ts
 │   │   ├── get-award-subawards.tool.test.ts
@@ -182,6 +184,7 @@ usaspending-mcp-server/
 │   │   ├── get-idv-awards.tool.test.ts
 │   │   ├── get-recipient.tool.test.ts
 │   │   ├── list-agencies.tool.test.ts
+│   │   ├── pagination.test.ts
 │   │   ├── search-awards.tool.test.ts
 │   │   ├── search-federal-accounts.tool.test.ts
 │   │   ├── search-recipients.tool.test.ts

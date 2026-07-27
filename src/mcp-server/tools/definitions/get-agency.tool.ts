@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { RawBudgetaryResources, RawSubAgencyEntry } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 /** Sub-agency breakdown page size (the endpoint's natural page cap). */
@@ -229,6 +230,11 @@ export const getAgencyTool = tool('usaspending_get_agency', {
 
     const subMeta = subAgenciesData.page_metadata ?? {};
     const subPage = subMeta.page ?? input.page;
+    /**
+     * Direct read, verified: `agency/{code}/sub_agency/` was paged to the end of a
+     * 10-row result set at limits 1 and 5, reporting `hasNext` truthfully on the
+     * interior, exactly-full final, and past-the-end pages.
+     */
     const subHasNext = subMeta.hasNext ?? false;
     const subTotal = typeof subMeta.total === 'number' ? subMeta.total : undefined;
 
@@ -302,11 +308,11 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     if (typeof result.fiscal_year === 'number')
       lines.push(`**Fiscal Year:** ${result.fiscal_year}`);
     if (typeof result.budgetary_resources_amount === 'number')
-      lines.push(`**Budgetary Resources:** $${result.budgetary_resources_amount.toLocaleString()}`);
+      lines.push(`**Budgetary Resources:** ${formatCurrency(result.budgetary_resources_amount)}`);
     if (typeof result.obligated_amount === 'number')
-      lines.push(`**Obligated:** $${result.obligated_amount.toLocaleString()}`);
+      lines.push(`**Obligated:** ${formatCurrency(result.obligated_amount)}`);
     if (typeof result.outlay_amount === 'number')
-      lines.push(`**Outlays:** $${result.outlay_amount.toLocaleString()}`);
+      lines.push(`**Outlays:** ${formatCurrency(result.outlay_amount)}`);
     if (typeof result.subtier_agency_count === 'number')
       lines.push(`**Sub-agencies:** ${result.subtier_agency_count}`);
     if (result.website) lines.push(`**Website:** ${result.website}`);
@@ -321,9 +327,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       lines.push('|:-----------|:------------|:-------------|:-----------|');
       for (const s of result.sub_agencies) {
         const oblig =
-          typeof s.total_obligations === 'number'
-            ? `$${s.total_obligations.toLocaleString()}`
-            : 'N/A';
+          typeof s.total_obligations === 'number' ? formatCurrency(s.total_obligations) : 'N/A';
         const txns =
           typeof s.transaction_count === 'number' ? s.transaction_count.toLocaleString() : 'N/A';
         const newAwards =

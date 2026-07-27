@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
@@ -150,6 +151,12 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
     }));
 
     const pageMeta = data.page_metadata ?? {};
+    /**
+     * Direct read, verified: `subawards/` was paged to the end of a 3-row result set at
+     * limits 1 and 3, reporting `hasNext` truthfully on the interior, exactly-full
+     * final, and past-the-end pages. It publishes no `total`, so `hasNext` is the only
+     * continuation signal a caller gets — and it is a correct one.
+     */
     const hasNext = pageMeta.hasNext ?? false;
     const currentPage = pageMeta.page ?? input.page;
     if (typeof pageMeta.total === 'number') ctx.enrich.total(pageMeta.total);
@@ -187,7 +194,7 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       lines.push(`### ${s.recipient_name ?? s.subaward_number ?? 'Unknown'}`);
       if (s.id !== undefined) lines.push(`**ID:** ${s.id}`);
       if (s.subaward_number) lines.push(`**Subaward #:** ${s.subaward_number}`);
-      if (typeof s.amount === 'number') lines.push(`**Amount:** $${s.amount.toLocaleString()}`);
+      if (typeof s.amount === 'number') lines.push(`**Amount:** ${formatCurrency(s.amount)}`);
       if (s.action_date) lines.push(`**Date:** ${s.action_date}`);
       if (s.recipient_uei) lines.push(`**UEI:** ${s.recipient_uei}`);
       if (s.description) lines.push(`**Description:** ${s.description}`);

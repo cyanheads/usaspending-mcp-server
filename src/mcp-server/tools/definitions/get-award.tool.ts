@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 
 export const getAwardTool = tool('usaspending_get_award', {
   title: 'Get Award Details',
@@ -376,11 +377,11 @@ export const getAwardTool = tool('usaspending_get_award', {
     if (result.category) lines.push(`**Category:** ${result.category}`);
     if (result.description) lines.push(`**Description:** ${result.description}`);
     if (typeof result.total_obligation === 'number')
-      lines.push(`**Total Obligation:** $${result.total_obligation.toLocaleString()}`);
+      lines.push(`**Total Obligation:** ${formatCurrency(result.total_obligation)}`);
     if (typeof result.total_outlays === 'number')
-      lines.push(`**Total Outlays:** $${result.total_outlays.toLocaleString()}`);
+      lines.push(`**Total Outlays:** ${formatCurrency(result.total_outlays)}`);
     if (typeof result.base_and_all_options_value === 'number')
-      lines.push(`**Base + All Options:** $${result.base_and_all_options_value.toLocaleString()}`);
+      lines.push(`**Base + All Options:** ${formatCurrency(result.base_and_all_options_value)}`);
     if (result.date_signed) lines.push(`**Date Signed:** ${result.date_signed}`);
 
     if (result.period_of_performance) {
@@ -463,7 +464,7 @@ export const getAwardTool = tool('usaspending_get_award', {
       lines.push('\n### Disaster/Emergency Funding (DEF Codes)');
       for (const d of result.account_obligations_by_defc) {
         lines.push(
-          `- **${d.code ?? 'N/A'}:** ${typeof d.amount === 'number' ? `$${d.amount.toLocaleString()}` : 'N/A'}`,
+          `- **${d.code ?? 'N/A'}:** ${typeof d.amount === 'number' ? formatCurrency(d.amount) : 'N/A'}`,
         );
       }
     }

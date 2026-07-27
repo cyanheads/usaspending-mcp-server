@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { buildFilters } from './filters.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
@@ -142,6 +143,13 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     }));
 
     const pageMeta = data.page_metadata ?? {};
+    /**
+     * Direct read, verified: `search/spending_by_category/{category}/` reported
+     * `hasNext` truthfully on the interior, exactly-full final, and past-the-end pages
+     * of small result sets, and kept doing so at offsets 10,000 through 50,000 — it has
+     * no cutoff there, and answers HTTP 503 past ~200,000 rather than a misleading flag.
+     * The endpoint publishes no `total`, so the read below never fires against the live API.
+     */
     const page_metadata = {
       has_next: pageMeta.hasNext ?? false,
       page: pageMeta.page ?? input.page,
@@ -187,7 +195,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       lines.push('| Rank | ID | Name | Code | Obligation |');
       lines.push('|:-----|:---|:-----|:-----|:-----------|');
       result.results.forEach((r, i) => {
-        const amt = r.amount !== undefined ? `$${r.amount.toLocaleString()}` : 'N/A';
+        const amt = r.amount !== undefined ? formatCurrency(r.amount) : 'N/A';
         lines.push(
           `| ${i + 1} | ${r.id ?? 'N/A'} | ${r.name ?? 'N/A'} | ${r.code ?? 'N/A'} | ${amt} |`,
         );

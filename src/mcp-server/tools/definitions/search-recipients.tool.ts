@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const searchRecipientsTool = tool('usaspending_search_recipients', {
@@ -76,10 +77,12 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       .describe('Pagination metadata — page through with the page input to reach later matches'),
   }),
 
-  // Agent-facing search context: per-page count, total match count, current page, and
-  // an optional recovery notice. Populated via ctx.enrich() so it reaches both surfaces.
-  // The recipient endpoint returns a real total and a reliable hasNext, so continuation
-  // is disclosed by pagination state rather than a hit-the-cap heuristic.
+  /**
+   * Agent-facing search context: per-page count, total match count, current page, and
+   * an optional recovery notice. Populated via ctx.enrich() so it reaches both surfaces.
+   * The recipient endpoint publishes a real, uncapped total and a truthful hasNext, so
+   * continuation is disclosed by pagination state rather than a hit-the-cap heuristic.
+   */
   enrichment: {
     recipient_count: z.number().describe('Number of matching recipients returned on this page'),
     totalCount: z.number().optional().describe('Total matching recipients across all pages'),
@@ -139,6 +142,12 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     const meta = data.page_metadata ?? {};
     const total = typeof meta.total === 'number' ? meta.total : undefined;
     const currentPage = typeof meta.page === 'number' ? meta.page : input.page;
+    /**
+     * Direct read, verified: `recipient/` holds up at extreme depth — a 3,958,535-match
+     * keyword set answered correctly on its last interior page, its final full page, and
+     * the empty page past it, with none of the 10,000-offset cutoff that trips
+     * `search/spending_by_award/`.
+     */
     const hasNext = meta.hasNext ?? false;
 
     ctx.enrich({ recipient_count: results.length, page: currentPage, has_next: hasNext });
@@ -179,8 +188,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       if (r.uei) lines.push(`**UEI:** ${r.uei}`);
       if (r.duns) lines.push(`**DUNS:** ${r.duns}`);
       if (r.recipient_level) lines.push(`**Level:** ${r.recipient_level}`);
-      if (typeof r.amount === 'number')
-        lines.push(`**Award Amount:** $${r.amount.toLocaleString()}`);
+      if (typeof r.amount === 'number') lines.push(`**Award Amount:** ${formatCurrency(r.amount)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

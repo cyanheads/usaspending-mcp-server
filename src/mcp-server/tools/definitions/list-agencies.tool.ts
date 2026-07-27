@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 
 export const listAgenciesTool = tool('usaspending_list_agencies', {
   title: 'List Federal Agencies',
@@ -110,13 +111,10 @@ export const listAgenciesTool = tool('usaspending_list_agencies', {
     ];
     for (const a of result.results) {
       const budget =
-        a.budget_authority_amount !== undefined
-          ? `$${a.budget_authority_amount.toLocaleString()}`
-          : 'N/A';
+        a.budget_authority_amount !== undefined ? formatCurrency(a.budget_authority_amount) : 'N/A';
       const obligated =
-        a.obligated_amount !== undefined ? `$${a.obligated_amount.toLocaleString()}` : 'N/A';
-      const outlays =
-        a.outlay_amount !== undefined ? `$${a.outlay_amount.toLocaleString()}` : 'N/A';
+        a.obligated_amount !== undefined ? formatCurrency(a.obligated_amount) : 'N/A';
+      const outlays = a.outlay_amount !== undefined ? formatCurrency(a.outlay_amount) : 'N/A';
       lines.push(
         `| ${a.agency_name}${a.abbreviation ? ` (${a.abbreviation})` : ''} | ${a.toptier_code} | ${a.agency_slug ?? 'N/A'} | ${budget} | ${obligated} | ${outlays} |`,
       );

@@ -8,6 +8,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { buildFilters } from './filters.js';
+import { formatCurrency } from './formatting.js';
 
 export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   title: 'Spending Over Time',
@@ -235,14 +236,13 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       if (tp.quarter) period += ` Q${tp.quarter}`;
       if (tp.month) period += ` FM${tp.month}`;
       const fy = tp.fiscal_year ?? 'N/A';
-      const amt =
-        r.aggregated_amount !== undefined ? `$${r.aggregated_amount.toLocaleString()}` : 'N/A';
-      const c = r.contracts !== undefined ? `$${r.contracts.toLocaleString()}` : 'N/A';
-      const g = r.grants !== undefined ? `$${r.grants.toLocaleString()}` : 'N/A';
-      const dp = r.direct_payments !== undefined ? `$${r.direct_payments.toLocaleString()}` : 'N/A';
-      const idv = r.idvs !== undefined ? `$${r.idvs.toLocaleString()}` : 'N/A';
-      const l = r.loans !== undefined ? `$${r.loans.toLocaleString()}` : 'N/A';
-      const o = r.other !== undefined ? `$${r.other.toLocaleString()}` : 'N/A';
+      const amt = r.aggregated_amount !== undefined ? formatCurrency(r.aggregated_amount) : 'N/A';
+      const c = r.contracts !== undefined ? formatCurrency(r.contracts) : 'N/A';
+      const g = r.grants !== undefined ? formatCurrency(r.grants) : 'N/A';
+      const dp = r.direct_payments !== undefined ? formatCurrency(r.direct_payments) : 'N/A';
+      const idv = r.idvs !== undefined ? formatCurrency(r.idvs) : 'N/A';
+      const l = r.loans !== undefined ? formatCurrency(r.loans) : 'N/A';
+      const o = r.other !== undefined ? formatCurrency(r.other) : 'N/A';
       lines.push(`| ${period} | ${fy} | ${amt} | ${c} | ${g} | ${dp} | ${idv} | ${l} | ${o} |`);
     }
     return [{ type: 'text', text: lines.join('\n') }];

@@ -5,15 +5,21 @@
  */
 
 /**
- * Resolves the continuation flag for endpoints whose `hasNext` under-reports:
- * several USAspending endpoints return a full page while reporting `hasNext: false`,
- * which reads as a clean end-of-results and strands every remaining match. A full
- * page (`shown >= limit`) forces continuation; a short or empty page marks the end.
+ * Resolves the continuation flag for endpoints whose `hasNext` under-reports: one
+ * USAspending endpoint, `search/spending_by_award/`, returns a full page while
+ * reporting `hasNext: false`, which reads as a clean end-of-results and strands every
+ * remaining match. A full page (`shown >= limit`) forces continuation; a short or
+ * empty page marks the end.
  *
- * Keyed off page fullness rather than an offset threshold, because the endpoints
- * that under-report keep doing so on every subsequent page instead of recovering at
- * a fixed point. The tradeoff is an exactly-full final page reporting one page more
- * than exists — an extra round trip instead of silently truncated results.
+ * Keyed off page fullness rather than an offset threshold, because that endpoint keeps
+ * under-reporting on every subsequent page instead of recovering at a fixed point. The
+ * tradeoff is an exactly-full final page reporting one page more than exists — an extra
+ * round trip instead of silently truncated results.
+ *
+ * Apply it only where the flag is known to lie, or where no independent cross-check
+ * exists. Every other paginated endpoint on this server was verified truthful, and a
+ * fullness guard over a truthful flag yields a wrong `has_next: true` on any result set
+ * whose size is an exact multiple of `limit`.
  */
 export function resolveHasNext(
   upstreamHasNext: boolean | null | undefined,

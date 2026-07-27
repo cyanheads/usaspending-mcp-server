@@ -8,7 +8,18 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { RawDisasterResult, RawPageMetadata } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
+
+/**
+ * `disaster/recipient/spending/` reports this number as a ceiling, not a count.
+ * Unrelated broad `def_codes` filters all land on exactly 10,000 while a narrow one
+ * reports an honest 3,045, and the set is saturated at that point: with all five COVID
+ * codes the page at offset 9,900 comes back full with `hasNext: false` and the next page
+ * is empty. Rows past the 10,000th are unreachable, and a caller reading the total has no
+ * way to tell a cap from a count — hence the disclosure below.
+ */
+const RECIPIENT_TOTAL_CEILING = 10_000;
 
 export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   title: 'Disaster and Emergency Spending',
@@ -67,6 +78,16 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .describe('Total items for paginated dimensions (when available)'),
     current_page: z.number().optional().describe('Current page (non-overview dimensions)'),
     has_next_page: z.boolean().optional().describe('Whether there are more pages'),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when the upstream capped the reachable result set rather than counting it.'),
+    shown: z.number().optional().describe('Number of results returned on this page.'),
+    cap: z.number().optional().describe('The result-set ceiling the upstream applied.'),
+    notice: z
+      .string()
+      .optional()
+      .describe('Caveat explaining a capped total and how to bring the set under the cap.'),
   },
 
   output: z.object({
@@ -304,6 +325,13 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }));
 
     const pageMeta = rawResults.page_metadata ?? {};
+    /**
+     * Direct read, verified: the agency, cfda, and recipient breakdown endpoints were
+     * each paged to the end of a real result set and reported `hasNext` truthfully at
+     * every boundary — interior full page, exactly-full final page, and the empty page
+     * past it. Routing through `resolveHasNext()` would report a wrong `has_next: true`
+     * on any result set whose size is an exact multiple of `limit`.
+     */
     const hasNext = pageMeta.hasNext ?? false;
     const currentPage = pageMeta.page ?? input.page;
     if (typeof pageMeta.total === 'number') ctx.enrich.total(pageMeta.total);
@@ -312,6 +340,16 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       current_page: currentPage,
       has_next_page: hasNext,
     });
+
+    if (input.dimension === 'recipient' && pageMeta.total === RECIPIENT_TOTAL_CEILING) {
+      const ceiling = RECIPIENT_TOTAL_CEILING.toLocaleString();
+      ctx.enrich.truncated({
+        shown: results.length,
+        cap: RECIPIENT_TOTAL_CEILING,
+        guidance: `The recipient breakdown caps its reachable result set at ${ceiling} and reports that cap as the total, so this total is an upper bound rather than a count — recipients past the ${ceiling}th cannot be paged to. Narrow filters.def_codes to a single code or a smaller set to bring the result set under the cap and get a countable total.`,
+      });
+    }
+
     return {
       dimension: input.dimension,
       spending_type: input.spending_type,
@@ -333,24 +371,24 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     if (result.overview) {
       const o = result.overview;
       if (o.total_budget_authority !== undefined)
-        lines.push(`**Total Budget Authority:** $${o.total_budget_authority.toLocaleString()}`);
+        lines.push(`**Total Budget Authority:** ${formatCurrency(o.total_budget_authority)}`);
       if (o.total_obligations !== undefined)
-        lines.push(`**Total Obligations:** $${o.total_obligations.toLocaleString()}`);
+        lines.push(`**Total Obligations:** ${formatCurrency(o.total_obligations)}`);
       if (o.total_outlays !== undefined)
-        lines.push(`**Total Outlays:** $${o.total_outlays.toLocaleString()}`);
+        lines.push(`**Total Outlays:** ${formatCurrency(o.total_outlays)}`);
       if (o.award_obligations !== undefined)
-        lines.push(`**Award Obligations:** $${o.award_obligations.toLocaleString()}`);
+        lines.push(`**Award Obligations:** ${formatCurrency(o.award_obligations)}`);
       if (o.award_outlays !== undefined)
-        lines.push(`**Award Outlays:** $${o.award_outlays.toLocaleString()}`);
+        lines.push(`**Award Outlays:** ${formatCurrency(o.award_outlays)}`);
       if (o.face_value_of_loans !== undefined)
-        lines.push(`**Face Value of Loans:** $${o.face_value_of_loans.toLocaleString()}`);
+        lines.push(`**Face Value of Loans:** ${formatCurrency(o.face_value_of_loans)}`);
       if (o.unobligated_balance !== undefined)
-        lines.push(`**Unobligated Balance:** $${o.unobligated_balance.toLocaleString()}`);
+        lines.push(`**Unobligated Balance:** ${formatCurrency(o.unobligated_balance)}`);
 
       if (o.funding_by_def_code?.length) {
         lines.push('\n### Funding by DEF Code');
         for (const f of o.funding_by_def_code) {
-          const amt = f.amount !== undefined ? `$${f.amount.toLocaleString()}` : 'N/A';
+          const amt = f.amount !== undefined ? formatCurrency(f.amount) : 'N/A';
           lines.push(
             `- **${f.def_code ?? 'N/A'}** — ${f.label ?? 'N/A'} (${f.public_law ?? 'N/A'}): ${amt}`,
           );
@@ -384,14 +422,13 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         const id = r.id ?? 'N/A';
         const code = r.code ?? 'N/A';
         const shape = r.shape_code ?? 'N/A';
-        const oblig = r.obligation !== undefined ? `$${r.obligation.toLocaleString()}` : 'N/A';
-        const outlay = r.outlay !== undefined ? `$${r.outlay.toLocaleString()}` : 'N/A';
-        const agg =
-          r.aggregated_amount !== undefined ? `$${r.aggregated_amount.toLocaleString()}` : 'N/A';
+        const oblig = r.obligation !== undefined ? formatCurrency(r.obligation) : 'N/A';
+        const outlay = r.outlay !== undefined ? formatCurrency(r.outlay) : 'N/A';
+        const agg = r.aggregated_amount !== undefined ? formatCurrency(r.aggregated_amount) : 'N/A';
         const population = r.population !== undefined ? r.population.toLocaleString() : 'N/A';
-        const perCapita = r.per_capita !== undefined ? `$${r.per_capita.toLocaleString()}` : 'N/A';
+        const perCapita = r.per_capita !== undefined ? formatCurrency(r.per_capita) : 'N/A';
         const loans =
-          r.face_value_of_loan !== undefined ? `$${r.face_value_of_loan.toLocaleString()}` : 'N/A';
+          r.face_value_of_loan !== undefined ? formatCurrency(r.face_value_of_loan) : 'N/A';
         const awards = r.award_count !== undefined ? String(r.award_count) : 'N/A';
         lines.push(
           `| ${label} | ${id} | ${code} | ${shape} | ${oblig} | ${outlay} | ${agg} | ${population} | ${perCapita} | ${loans} | ${awards} |`,

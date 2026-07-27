@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const searchFederalAccountsTool = tool('usaspending_search_federal_accounts', {
@@ -151,6 +152,11 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
 
     const total = typeof data.count === 'number' ? data.count : undefined;
     const currentPage = typeof data.page === 'number' ? data.page : input.page;
+    /**
+     * Direct read, verified: `federal_accounts/` was walked to the real end of its
+     * unfiltered 2,261-account set, reporting `hasNext` truthfully on the interior,
+     * final full, and past-the-end pages. Its total arrives top-level as `count`.
+     */
     const hasNext = data.hasNext ?? false;
 
     if (total !== undefined) ctx.enrich.total(total);
@@ -201,7 +207,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
           `**Managing Agency:** ${a.managing_agency}${a.managing_agency_acronym ? ` (${a.managing_agency_acronym})` : ''}`,
         );
       if (typeof a.budgetary_resources === 'number')
-        lines.push(`**Budgetary Resources:** $${a.budgetary_resources.toLocaleString()}`);
+        lines.push(`**Budgetary Resources:** ${formatCurrency(a.budgetary_resources)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

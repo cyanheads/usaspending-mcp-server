@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 
 export const getRecipientTool = tool('usaspending_get_recipient', {
   title: 'Get Recipient Profile',
@@ -195,13 +196,13 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       lines.push('\n### Award Totals');
       if (typeof result.total_transaction_amount === 'number')
         lines.push(
-          `- **Total Transaction Amount:** $${result.total_transaction_amount.toLocaleString()}`,
+          `- **Total Transaction Amount:** ${formatCurrency(result.total_transaction_amount)}`,
         );
       if (typeof result.total_transactions === 'number')
         lines.push(`- **Total Transactions:** ${result.total_transactions.toLocaleString()}`);
       if (typeof result.total_face_value_loan_amount === 'number')
         lines.push(
-          `- **Face Value of Loans:** $${result.total_face_value_loan_amount.toLocaleString()}`,
+          `- **Face Value of Loans:** ${formatCurrency(result.total_face_value_loan_amount)}`,
         );
       if (typeof result.total_face_value_loan_transactions === 'number')
         lines.push(

@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { resolveHasNext } from './pagination.js';
 
 export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
@@ -192,9 +193,21 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
     const rawHasNext = pageMeta.hasNext ?? false;
     const hasPrevious = pageMeta.hasPrevious ?? false;
     const currentPage = typeof pageMeta.page === 'number' ? pageMeta.page : input.page;
-    // idvs/awards page_metadata omits a total and can report a stale hasNext, so a full
-    // page must disclose possible continuation even when upstream hasNext is false.
-    // pageIsFull is kept separately — it also gates the truncation disclosure below.
+    /**
+     * The guard is precautionary, not a description of observed behavior. Verified:
+     * `idvs/awards/` reported `hasNext` truthfully at every constructible boundary —
+     * interior full page, exactly-full final page, and the empty page past it, across
+     * IDVs with 6 and 16 children. Not verified: the deep-offset regime that breaks
+     * `search/spending_by_award/` past 10,000 results, which no IDV in the fleet's
+     * largest is big enough to reach. The guard trades one wrong `has_next: true` and an
+     * extra round trip, on any child count that is an exact multiple of `limit`, against
+     * silent truncation in that untested region — on an endpoint that publishes no
+     * total, leaving a caller no independent cross-check.
+     *
+     * pageIsFull stays a separate local: it gates the truncation disclosure below, which
+     * fires on a full page regardless of whether more results exist. Collapsing the two
+     * would couple an agent-facing disclosure to the continuation decision.
+     */
     const pageIsFull = results.length >= input.limit;
     const hasNext = resolveHasNext(rawHasNext, results.length, input.limit);
 
@@ -243,7 +256,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       if (a.piid) lines.push(`**PIID:** ${a.piid}`);
       if (a.award_type) lines.push(`**Type:** ${a.award_type}`);
       if (typeof a.obligated_amount === 'number')
-        lines.push(`**Obligated:** $${a.obligated_amount.toLocaleString()}`);
+        lines.push(`**Obligated:** ${formatCurrency(a.obligated_amount)}`);
       if (a.awarding_agency) lines.push(`**Awarding Agency:** ${a.awarding_agency}`);
       if (a.funding_agency) lines.push(`**Funding Agency:** ${a.funding_agency}`);
       if (a.period_of_performance_start_date || a.period_of_performance_current_end_date)

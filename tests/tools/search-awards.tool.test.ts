@@ -853,4 +853,21 @@ describe('searchAwardsTool', () => {
     expect(rendered).toContain('- For searches, time period start and end dates');
     expect(rendered).toContain('- The following filters from the request were not used');
   });
+
+  it('closes the API notices list so the next trailer entry gets its own line', () => {
+    // The framework joins trailer entries with a single '\n'. Without a blank line
+    // after the last bullet, the next entry (`**applied_keyword:** …`) lands on the
+    // line right below it, which a strict markdown renderer folds into that bullet
+    // as a lazy continuation.
+    const rendered = searchAwardsTool.enrichmentTrailer?.upstream_messages?.render?.([
+      "The following filters from the request were not used: {'recipient_id'}.",
+    ]);
+
+    expect(rendered?.endsWith('\n')).toBe(true);
+
+    const joined = [rendered, '**applied_keyword:** solar'].join('\n');
+    const lines = joined.split('\n');
+    expect(lines.at(-1)).toBe('**applied_keyword:** solar');
+    expect(lines.at(-2)).toBe('');
+  });
 });

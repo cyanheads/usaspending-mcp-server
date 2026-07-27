@@ -196,6 +196,31 @@ describe('spendingOverTimeTool', () => {
     expect(breakdownSum).toBeCloseTo(row.aggregated_amount ?? 0, 0);
   });
 
+  it('renders a negative obligation column with the sign outside the dollar sign', async () => {
+    // Same verbatim FY2023 negative Grant_Obligations as above, carried through
+    // format() rather than the handler: the rendered cell must read -$264,436.97,
+    // not $-264,436.97.
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [
+        {
+          aggregated_amount: -264_436.97,
+          time_period: { fiscal_year: '2023' },
+          Grant_Obligations: -264_436.97,
+        },
+      ],
+    });
+
+    const ctx = createMockContext();
+    const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
+    const result = await spendingOverTimeTool.handler(input, ctx);
+    const text = spendingOverTimeTool.format?.(result, ctx)?.[0];
+
+    expect(text).toMatchObject({ type: 'text' });
+    const rendered = (text as { text: string }).text;
+    expect(rendered).toContain('-$264,436.97');
+    expect(rendered).not.toContain('$-');
+  });
+
   it('maps Idv_Obligations into the idvs column on an IDV-scoped query', async () => {
     // Verbatim FY2023 row for award_type_codes ["IDV_A".."IDV_E"] — the entire
     // amount lands in Idv_Obligations, which previously had no output field.

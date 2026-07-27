@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { buildFilters } from './filters.js';
+import { formatCurrency } from './formatting.js';
 
 /** Common filter fields for spending analytics tools */
 const SpendingFiltersSchema = z
@@ -309,10 +310,9 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       '|:-----|:-----|:-----------|:-----------|:-----------|:-------|',
     ];
     for (const r of result.results) {
-      const amt =
-        r.aggregated_amount !== undefined ? `$${r.aggregated_amount.toLocaleString()}` : 'N/A';
+      const amt = r.aggregated_amount !== undefined ? formatCurrency(r.aggregated_amount) : 'N/A';
       const pop = r.population !== undefined ? r.population.toLocaleString() : 'N/A';
-      const perCap = r.per_capita !== undefined ? `$${r.per_capita.toLocaleString()}` : 'N/A';
+      const perCap = r.per_capita !== undefined ? formatCurrency(r.per_capita) : 'N/A';
       const awards = r.award_count !== undefined ? String(r.award_count) : 'N/A';
       lines.push(
         `| ${r.display_name ?? 'N/A'} | ${r.shape_code ?? 'N/A'} | ${amt} | ${pop} | ${perCap} | ${awards} |`,

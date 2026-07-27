@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 
 export const getFederalAccountTool = tool('usaspending_get_federal_account', {
   title: 'Get Federal Account',
@@ -158,13 +159,13 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       lines.push('\n### Financial Totals');
       if (typeof result.total_budgetary_resources === 'number')
         lines.push(
-          `- **Budgetary Resources:** $${result.total_budgetary_resources.toLocaleString()}`,
+          `- **Budgetary Resources:** ${formatCurrency(result.total_budgetary_resources)}`,
         );
       if (typeof result.total_obligated_amount === 'number')
-        lines.push(`- **Total Obligated:** $${result.total_obligated_amount.toLocaleString()}`);
+        lines.push(`- **Total Obligated:** ${formatCurrency(result.total_obligated_amount)}`);
       if (typeof result.total_gross_outlay_amount === 'number')
         lines.push(
-          `- **Total Gross Outlays:** $${result.total_gross_outlay_amount.toLocaleString()}`,
+          `- **Total Gross Outlays:** ${formatCurrency(result.total_gross_outlay_amount)}`,
         );
     }
 
@@ -174,16 +175,12 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       lines.push('|:----|:-----|:----------|:--------------|:--------------------|');
       for (const c of result.children) {
         const obligated =
-          typeof c.obligated_amount === 'number'
-            ? `$${c.obligated_amount.toLocaleString()}`
-            : 'N/A';
+          typeof c.obligated_amount === 'number' ? formatCurrency(c.obligated_amount) : 'N/A';
         const outlay =
-          typeof c.gross_outlay_amount === 'number'
-            ? `$${c.gross_outlay_amount.toLocaleString()}`
-            : 'N/A';
+          typeof c.gross_outlay_amount === 'number' ? formatCurrency(c.gross_outlay_amount) : 'N/A';
         const resources =
           typeof c.budgetary_resources_amount === 'number'
-            ? `$${c.budgetary_resources_amount.toLocaleString()}`
+            ? formatCurrency(c.budgetary_resources_amount)
             : 'N/A';
         lines.push(
           `| ${c.code ?? 'N/A'} | ${c.name ?? 'N/A'} | ${obligated} | ${outlay} | ${resources} |`,

@@ -292,6 +292,74 @@ describe('disasterSpendingTool', () => {
     expect(result.results[0].name).toBe('Small Biz Corp');
   });
 
+  /**
+   * `disaster/recipient/spending/` publishes a ceiling in its `total` field: unrelated
+   * broad def_codes filters all report exactly 10,000, the page at offset 9,900 comes
+   * back full with hasNext: false, and the next page is empty. Without a disclosure a
+   * caller reads 10,000 as a count and never learns the tail is unreachable.
+   */
+  it('discloses a saturated recipient total as a ceiling', async () => {
+    mockGetDisasterByRecipient.mockResolvedValueOnce({
+      results: [{ id: '1', name: 'Recipient A', obligation: 1, outlay: 1, award_count: 1 }],
+      page_metadata: { hasNext: false, page: 100, total: 10_000, limit: 100 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'recipient',
+      spending_type: 'award',
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
+      limit: 100,
+      page: 100,
+    });
+    const result = await disasterSpendingTool.handler(input, ctx);
+
+    // The upstream total still ships verbatim — the disclosure qualifies it, not replaces it.
+    expect(result.page_metadata?.total).toBe(10_000);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.cap).toBe(10_000);
+    expect(enrichment.shown).toBe(1);
+    expect(enrichment.notice).toContain('upper bound rather than a count');
+  });
+
+  it('leaves an honest recipient total undisclosed', async () => {
+    // A single DEF code stays under the cap and reports a real count (3,045 for "L").
+    mockGetDisasterByRecipient.mockResolvedValueOnce({
+      results: [{ id: '1', name: 'Recipient A', obligation: 1, outlay: 1, award_count: 1 }],
+      page_metadata: { hasNext: true, page: 1, total: 3045, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'recipient',
+      spending_type: 'award',
+      filters: { def_codes: ['L'] },
+    });
+    await disasterSpendingTool.handler(input, ctx);
+
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBeUndefined();
+    expect(enrichment.notice).toBeUndefined();
+  });
+
+  it('does not read the ceiling into other dimensions', async () => {
+    // Only the recipient breakdown saturates; an agency total of 10,000 is a real count.
+    mockGetDisasterByAgency.mockResolvedValueOnce({
+      results: [{ id: '1', code: '097', description: 'DoD', obligation: 1, outlay: 1 }],
+      page_metadata: { hasNext: false, page: 1, total: 10_000, limit: 10 },
+    });
+
+    const ctx = createMockContext();
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      filters: { def_codes: ['L'] },
+    });
+    await disasterSpendingTool.handler(input, ctx);
+
+    expect(getEnrichment(ctx).truncated).toBeUndefined();
+  });
+
   it('passes def_codes filter in filter body', async () => {
     mockGetDisasterByAgency.mockResolvedValueOnce({
       results: [],

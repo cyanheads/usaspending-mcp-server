@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_account_breakdown', {
@@ -134,6 +135,12 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
     const pageMeta = data.page_metadata ?? {};
     const total = typeof pageMeta.total === 'number' ? pageMeta.total : undefined;
     const currentPage = typeof pageMeta.page === 'number' ? pageMeta.page : input.page;
+    /**
+     * Direct read, verified: both breakdown routes (`program_activities/total` and
+     * `object_classes/total`) were paged to the end of 5- and 11-row result sets,
+     * reporting `hasNext` truthfully on the interior, exactly-full final, and
+     * past-the-end pages.
+     */
     const hasNext = pageMeta.hasNext ?? false;
     const hasPrevious = pageMeta.hasPrevious ?? false;
 
@@ -195,7 +202,7 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       );
       for (const r of result.results) {
         const obligations =
-          typeof r.obligations === 'number' ? `$${r.obligations.toLocaleString()}` : 'N/A';
+          typeof r.obligations === 'number' ? formatCurrency(r.obligations) : 'N/A';
         const row = `| ${r.code ?? 'N/A'} | ${r.name ?? 'N/A'} | ${obligations} |`;
         lines.push(hasType ? `${row} ${r.type ?? 'N/A'} |` : row);
       }

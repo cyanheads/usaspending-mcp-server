@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const getAwardTransactionsTool = tool('usaspending_get_award_transactions', {
@@ -144,6 +145,12 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
     }));
 
     const pageMeta = data.page_metadata ?? {};
+    /**
+     * Direct read, verified: `transactions/` was paged to the end of a 7-row result set
+     * at limits 1 and 7, reporting `hasNext` truthfully on the interior, exactly-full
+     * final, and past-the-end pages. It publishes no `total`, so `hasNext` is the only
+     * continuation signal a caller gets — and it is a correct one.
+     */
     const hasNext = pageMeta.hasNext ?? false;
     const currentPage = pageMeta.page ?? input.page;
     if (typeof pageMeta.total === 'number') ctx.enrich.total(pageMeta.total);
@@ -186,7 +193,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       if (t.action_type_description) lines.push(`**Action:** ${t.action_type_description}`);
       if (typeof t.federal_action_obligation === 'number')
         lines.push(
-          `**Obligation Change:** ${t.federal_action_obligation >= 0 ? '+' : ''}$${t.federal_action_obligation.toLocaleString()}`,
+          `**Obligation Change:** ${t.federal_action_obligation >= 0 ? '+' : ''}${formatCurrency(t.federal_action_obligation)}`,
         );
       if (t.description) lines.push(`**Description:** ${t.description}`);
       if (t.recipient_name) lines.push(`**Recipient:** ${t.recipient_name}`);

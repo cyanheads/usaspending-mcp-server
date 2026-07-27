@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { resolveHasNext } from './pagination.js';
 
 /** Award search default fields — covers summary + chaining IDs. */
@@ -320,7 +321,15 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   // would otherwise sit unattributed between the surrounding `**key:** value` lines.
   enrichmentTrailer: {
     upstream_messages: {
-      render: (msgs) => ['**API notices:**', ...(msgs ?? []).map((m) => `- ${m}`)].join('\n'),
+      /**
+       * The trailing empty element closes the bullet list with a blank line. The
+       * framework joins trailer entries with a single `\n`, so without it the next
+       * entry (`**applied_keyword:** …` and friends, which follow this key in the
+       * enrichment insertion order) lands on the line directly after the last
+       * bullet, where a strict markdown renderer reads it as a lazy continuation
+       * of that bullet instead of its own line.
+       */
+      render: (msgs) => ['**API notices:**', ...(msgs ?? []).map((m) => `- ${m}`), ''].join('\n'),
     },
   },
 
@@ -589,9 +598,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         lines.push(`**Chain ID (for get_award):** ${r.generated_internal_id}`);
       if (r.agency_slug) lines.push(`**Agency Slug (for get_agency):** ${r.agency_slug}`);
       if (typeof r.award_amount === 'number')
-        lines.push(`**Amount:** $${r.award_amount.toLocaleString()}`);
+        lines.push(`**Amount:** ${formatCurrency(r.award_amount)}`);
       if (typeof r.total_outlays === 'number')
-        lines.push(`**Outlays:** $${r.total_outlays.toLocaleString()}`);
+        lines.push(`**Outlays:** ${formatCurrency(r.total_outlays)}`);
       if (r.award_type) lines.push(`**Type:** ${r.award_type}`);
       if (r.awarding_agency)
         lines.push(

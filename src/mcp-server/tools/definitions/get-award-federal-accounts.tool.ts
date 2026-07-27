@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_accounts', {
@@ -156,6 +157,12 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
     const pageMeta = data.page_metadata ?? {};
     const total = typeof pageMeta.count === 'number' ? pageMeta.count : undefined;
     const currentPage = typeof pageMeta.page === 'number' ? pageMeta.page : input.page;
+    /**
+     * Direct read, verified: `awards/accounts/` was paged to the end of a 5-row result
+     * set at limits 2 and 5, reporting `hasNext` truthfully on the interior,
+     * exactly-full final, and past-the-end pages. Its total arrives as `count`, not
+     * `total`, which is why the read above names that field.
+     */
     const hasNext = pageMeta.hasNext ?? false;
     const hasPrevious = pageMeta.hasPrevious ?? false;
 
@@ -204,7 +211,7 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
         lines.push(`**Account Code (for get_federal_account):** ${a.federal_account}`);
       if (typeof a.total_transaction_obligated_amount === 'number')
         lines.push(
-          `**Obligated from this account:** $${a.total_transaction_obligated_amount.toLocaleString()}`,
+          `**Obligated from this account:** ${formatCurrency(a.total_transaction_obligated_amount)}`,
         );
       if (a.funding_agency_name)
         lines.push(

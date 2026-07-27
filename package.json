@@ -1,7 +1,7 @@
 {
   "name": "@cyanheads/usaspending-mcp-server",
   "mcpName": "io.github.cyanheads/usaspending-mcp-server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP. STDIO or Streamable HTTP.",
   "type": "module",
   "main": "dist/index.js",
@@ -26,7 +26,8 @@
     "audit:refresh": "rm -f bun.lock && bun install && bun audit",
     "tree": "bun run scripts/tree.ts",
     "list-skills": "bun run scripts/list-skills.ts",
-    "format": "biome check --write --unsafe .",
+    "format": "biome check --write .",
+    "format:unsafe": "biome check --write --unsafe .",
     "lint:mcp": "bun run scripts/lint-mcp.ts",
     "lint:packaging": "bun run scripts/lint-packaging.ts",
     "bundle": "bun run build && npx -y @anthropic-ai/mcpb pack . dist/usaspending-mcp-server.mcpb && bun run scripts/clean-mcpb.ts dist/usaspending-mcp-server.mcpb",
@@ -86,18 +87,18 @@
   },
   "trustedDependencies": ["@socketsecurity/bun-security-scanner"],
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.10.14",
+    "@cyanheads/mcp-ts-core": "^0.11.0",
     "pino-pretty": "^13.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
+    "@biomejs/biome": "^2.5.5",
     "@socketsecurity/bun-security-scanner": "^1.1.2",
     "@types/node": "^26.0.0",
     "depcheck": "^1.4.7",
     "ignore": "^7.0.5",
     "tsc-alias": "^1.8.17",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   }
 }

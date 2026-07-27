@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-07-27
+
+@cyanheads/mcp-ts-core ^0.10.14 → ^0.11.0 (TypeScript 7, fetch-timeout Timeout reclassification, canonical error-data fields); every tool gains an api_timeout error contract entry; the two unreachable award_not_found contracts are removed; the changelog build now rejects leaked control markup in an entry body.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-07-17
 
 Federal account drill-down: usaspending_get_award_federal_accounts links an award to the accounts that funded it, usaspending_get_federal_account_breakdown adds the program-activity and object-class axes, and usaspending_get_federal_account now maps its per-Treasury-Account-Symbol children.

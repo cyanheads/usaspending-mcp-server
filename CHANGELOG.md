@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-08-24 · ⚠️ Breaking
+
+Adopts mcp-ts-core ^0.12.3 (SDK v2): tool inputs are now strict, the advertised outputSchema declares the error envelope, protocol revision 2026-07-28 is served everywhere, and session mode is pinned to stateless on every surface.
+
 ## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-07-27
 
 Bounds the service's retry loop under one wall-clock deadline, audits nine paginated tools' hasNext reads against the live API, fixes a currency sign-placement bug and an enrichment-trailer spacing bug, and corrects a misdocumented NAICS autocomplete example.

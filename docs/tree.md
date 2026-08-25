@@ -1,10 +1,9 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-07-27 20:51:52
+Generated on: 2026-08-25 02:20:46
 
 ```text
 usaspending-mcp-server/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -15,6 +14,8 @@ usaspending-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
@@ -164,6 +165,8 @@ usaspending-mcp-server/
 │   │       └── usaspending-service.ts
 │   └── index.ts
 ├── tests/
+│   ├── config/
+│   │   └── session-mode.test.ts
 │   ├── scripts/
 │   │   └── build-changelog.test.ts
 │   ├── security/
@@ -190,7 +193,8 @@ usaspending-mcp-server/
 │   │   ├── search-recipients.tool.test.ts
 │   │   ├── spending-by-category.tool.test.ts
 │   │   ├── spending-by-geography.tool.test.ts
-│   │   └── spending-over-time.tool.test.ts
+│   │   ├── spending-over-time.tool.test.ts
+│   │   └── tool-contract.test.ts
 │   └── utils/
 │       └── filters.test.ts
 ├── .dockerignore

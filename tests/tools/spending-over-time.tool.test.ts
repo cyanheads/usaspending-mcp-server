@@ -32,15 +32,15 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
     expect(result.group).toBe('fiscal_year');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].time_period.fiscal_year).toBe('2022');
-    expect(result.results[0].aggregated_amount).toBe(500_000_000_000);
-    expect(result.results[0].contracts).toBe(300_000_000_000);
+    expect(result.results[0]!.time_period.fiscal_year).toBe('2022');
+    expect(result.results[0]!.aggregated_amount).toBe(500_000_000_000);
+    expect(result.results[0]!.contracts).toBe(300_000_000_000);
     expect(result.total_periods).toBe(2);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.time_group).toBe('fiscal_year');
@@ -50,7 +50,7 @@ describe('spendingOverTimeTool', () => {
   it('returns structured empty response with notice when API returns no periods', async () => {
     mockSpendingOverTime.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({
       group: 'quarter',
       filters: { keywords: ['nonexistent_xyz_123'] },
@@ -71,7 +71,7 @@ describe('spendingOverTimeTool', () => {
       results: [{ time_period: { fiscal_year: '2024' }, aggregated_amount: 100_000_000 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
     await spendingOverTimeTool.handler(input, ctx);
 
@@ -102,12 +102,12 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'quarter' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
-    expect(result.results[0].time_period.quarter).toBe('1');
-    expect(result.results[0].time_period.fiscal_year).toBe('2023');
+    expect(result.results[0]!.time_period.quarter).toBe('1');
+    expect(result.results[0]!.time_period.fiscal_year).toBe('2023');
   });
 
   it('passes the fiscal-month ordinal through unconverted', async () => {
@@ -120,14 +120,14 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'month' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
     expect(result.group).toBe('month');
-    expect(result.results[0].time_period.month).toBe('1');
-    expect(result.results[0].time_period.fiscal_year).toBe('2025');
-    expect(result.results[1].time_period.month).toBe('2');
+    expect(result.results[0]!.time_period.month).toBe('1');
+    expect(result.results[0]!.time_period.fiscal_year).toBe('2025');
+    expect(result.results[1]!.time_period.month).toBe('2');
   });
 
   it('emits no calendar_year on any exposed group mode', async () => {
@@ -139,12 +139,12 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'month' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
-    expect(result.results[0].time_period).toStrictEqual({ fiscal_year: '2025', month: '1' });
-    expect(result.results[0].time_period).not.toHaveProperty('calendar_year');
+    expect(result.results[0]!.time_period).toStrictEqual({ fiscal_year: '2025', month: '1' });
+    expect(result.results[0]!.time_period).not.toHaveProperty('calendar_year');
   });
 
   it('maps every award breakdown column from the upstream key set', async () => {
@@ -174,11 +174,11 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
-    const row = result.results[0];
+    const row = result.results[0]!;
     expect(row.contracts).toBe(0);
     expect(row.direct_payments).toBe(2_856_870_495_687.04);
     expect(row.grants).toBe(-264_436.97);
@@ -210,10 +210,10 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
     const result = await spendingOverTimeTool.handler(input, ctx);
-    const text = spendingOverTimeTool.format?.(result, ctx)?.[0];
+    const text = spendingOverTimeTool.format?.(result)?.[0];
 
     expect(text).toMatchObject({ type: 'text' });
     const rendered = (text as { text: string }).text;
@@ -239,15 +239,15 @@ describe('spendingOverTimeTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({
       group: 'fiscal_year',
       filters: { award_type_codes: ['IDV_A', 'IDV_B', 'IDV_C', 'IDV_D', 'IDV_E'] },
     });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
-    expect(result.results[0].idvs).toBe(135_257_049.76);
-    expect(result.results[0].aggregated_amount).toBe(135_257_049.76);
+    expect(result.results[0]!.idvs).toBe(135_257_049.76);
+    expect(result.results[0]!.aggregated_amount).toBe(135_257_049.76);
   });
 
   it('omits breakdown columns the upstream did not return', async () => {
@@ -255,13 +255,13 @@ describe('spendingOverTimeTool', () => {
       results: [{ time_period: { fiscal_year: '2023' }, aggregated_amount: 600_000_000 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year' });
     const result = await spendingOverTimeTool.handler(input, ctx);
 
-    expect(result.results[0].direct_payments).toBeUndefined();
-    expect(result.results[0].idvs).toBeUndefined();
-    expect(result.results[0].loans).toBeUndefined();
+    expect(result.results[0]!.direct_payments).toBeUndefined();
+    expect(result.results[0]!.idvs).toBeUndefined();
+    expect(result.results[0]!.loans).toBeUndefined();
   });
 
   it('subawards=true is forwarded to service', async () => {
@@ -269,7 +269,7 @@ describe('spendingOverTimeTool', () => {
       results: [{ time_period: { fiscal_year: '2023' }, aggregated_amount: 100_000 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year', subawards: true });
     await spendingOverTimeTool.handler(input, ctx);
 

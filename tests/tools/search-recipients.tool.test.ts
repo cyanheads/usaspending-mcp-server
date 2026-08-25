@@ -29,15 +29,15 @@ describe('searchRecipientsTool', () => {
       page_metadata: { page: 1, total: 1, limit: 10, hasNext: false, hasPrevious: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchRecipientsTool.errors });
     const input = searchRecipientsTool.input.parse({ keyword: 'Acme' });
     const result = await searchRecipientsTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].id).toBe('abc123-P');
-    expect(result.results[0].name).toBe('Acme Corporation');
-    expect(result.results[0].uei).toBe('ACMEAAAAAAAA');
-    expect(result.results[0].amount).toBe(5_000_000);
+    expect(result.results[0]!.id).toBe('abc123-P');
+    expect(result.results[0]!.name).toBe('Acme Corporation');
+    expect(result.results[0]!.uei).toBe('ACMEAAAAAAAA');
+    expect(result.results[0]!.amount).toBe(5_000_000);
     expect(result.page_metadata.total).toBe(1);
     expect(result.page_metadata.page).toBe(1);
     expect(result.page_metadata.has_next).toBe(false);
@@ -54,7 +54,7 @@ describe('searchRecipientsTool', () => {
       page_metadata: { page: 2, total: 150, limit: 1, hasNext: true, hasPrevious: true },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchRecipientsTool.errors });
     const input = searchRecipientsTool.input.parse({ keyword: 'corp', page: 2, limit: 1 });
     const result = await searchRecipientsTool.handler(input, ctx);
 
@@ -76,7 +76,7 @@ describe('searchRecipientsTool', () => {
       page_metadata: { page: 1, total: 5000, limit: 100, hasNext: true, hasPrevious: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchRecipientsTool.errors });
     const input = searchRecipientsTool.input.parse({ keyword: 'a', limit: 100 });
     await searchRecipientsTool.handler(input, ctx);
 
@@ -95,7 +95,7 @@ describe('searchRecipientsTool', () => {
       page_metadata: { page: 1, total: 0, limit: 10, hasNext: false, hasPrevious: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchRecipientsTool.errors });
     const input = searchRecipientsTool.input.parse({ keyword: 'NoSuchCompanyXYZ' });
     const result = await searchRecipientsTool.handler(input, ctx);
 
@@ -111,7 +111,7 @@ describe('searchRecipientsTool', () => {
       page_metadata: { page: 1, total: 0, limit: 10, hasNext: false, hasPrevious: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchRecipientsTool.errors });
     const input = searchRecipientsTool.input.parse({ keyword: 'Acme', award_type: 'contracts' });
     await searchRecipientsTool.handler(input, ctx);
 
@@ -143,14 +143,14 @@ describe('searchRecipientsTool', () => {
       page_metadata: { page: 1, total: 1, limit: 10, hasNext: false, hasPrevious: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchRecipientsTool.errors });
     const input = searchRecipientsTool.input.parse({ keyword: 'minimal' });
     const result = await searchRecipientsTool.handler(input, ctx);
 
-    expect(result.results[0].id).toBe('sparse-id-P');
-    expect(result.results[0].name).toBe('Minimal Corp');
-    expect(result.results[0].uei).toBeUndefined();
-    expect(result.results[0].duns).toBeUndefined();
+    expect(result.results[0]!.id).toBe('sparse-id-P');
+    expect(result.results[0]!.name).toBe('Minimal Corp');
+    expect(result.results[0]!.uei).toBeUndefined();
+    expect(result.results[0]!.duns).toBeUndefined();
   });
 
   it('formats output with recipient IDs, amounts, and pagination', () => {

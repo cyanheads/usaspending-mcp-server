@@ -51,7 +51,7 @@ describe('disasterSpendingTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({ dimension: 'overview' });
     const result = await disasterSpendingTool.handler(input, ctx);
 
@@ -79,7 +79,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
       spending_type: 'award',
@@ -89,9 +89,9 @@ describe('disasterSpendingTool', () => {
 
     expect(result.dimension).toBe('agency');
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].id).toBe('517');
-    expect(result.results[0].name).toBe('Department of Defense');
-    expect(result.results[0].obligation).toBe(200_000_000_000);
+    expect(result.results[0]!.id).toBe('517');
+    expect(result.results[0]!.name).toBe('Department of Defense');
+    expect(result.results[0]!.obligation).toBe(200_000_000_000);
     expect(result.page_metadata?.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.applied_dimension).toBe('agency');
@@ -105,7 +105,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
       spending_type: 'total',
@@ -144,7 +144,7 @@ describe('disasterSpendingTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
       filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
@@ -155,12 +155,12 @@ describe('disasterSpendingTool', () => {
     expect(result.spending_type).toBe('obligation');
     expect(result.results).toHaveLength(2);
     // `amount` is surfaced as aggregated_amount; the phantom aggregated_amount is gone.
-    expect(result.results[0].aggregated_amount).toBe(167_052_572_147.29);
-    expect(result.results[0].population).toBe(39_538_223);
-    expect(result.results[0].per_capita).toBe(4225.09);
-    expect(result.results[0].award_count).toBe(2_655_932);
-    expect(result.results[0].shape_code).toBe('CA');
-    expect(result.results[0].display_name).toBe('California');
+    expect(result.results[0]!.aggregated_amount).toBe(167_052_572_147.29);
+    expect(result.results[0]!.population).toBe(39_538_223);
+    expect(result.results[0]!.per_capita).toBe(4225.09);
+    expect(result.results[0]!.award_count).toBe(2_655_932);
+    expect(result.results[0]!.shape_code).toBe('CA');
+    expect(result.results[0]!.display_name).toBe('California');
 
     // Without spending_type in the body the endpoint returns HTTP 422 — assert it is sent.
     const geoBody = mockGetDisasterByGeography.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -176,18 +176,18 @@ describe('disasterSpendingTool', () => {
       results: [{ shape_code: 'CA', display_name: 'California', aggregated_amount: 999 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
       filters: { def_codes: ['L'] },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
-    expect(result.results[0].aggregated_amount).toBeUndefined();
+    expect(result.results[0]!.aggregated_amount).toBeUndefined();
   });
 
   it('throws ValidationError when def_codes is omitted for non-overview dimension', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({ dimension: 'agency' });
     await expect(disasterSpendingTool.handler(input, ctx)).rejects.toMatchObject({
       message: expect.stringContaining('def_codes is required'),
@@ -247,7 +247,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'cfda',
       spending_type: 'award',
@@ -257,10 +257,10 @@ describe('disasterSpendingTool', () => {
 
     expect(result.dimension).toBe('cfda');
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].id).toBe('301');
-    expect(result.results[0].code).toBe('10.001');
-    expect(result.results[0].name).toBe('Agriculture Research');
-    expect(result.results[0].obligation).toBe(50_000_000);
+    expect(result.results[0]!.id).toBe('301');
+    expect(result.results[0]!.code).toBe('10.001');
+    expect(result.results[0]!.name).toBe('Agriculture Research');
+    expect(result.results[0]!.obligation).toBe(50_000_000);
   });
 
   it('returns recipient breakdown with face_value_of_loan field', async () => {
@@ -279,7 +279,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'award',
@@ -288,8 +288,8 @@ describe('disasterSpendingTool', () => {
     const result = await disasterSpendingTool.handler(input, ctx);
 
     expect(result.dimension).toBe('recipient');
-    expect(result.results[0].face_value_of_loan).toBe(350_000);
-    expect(result.results[0].name).toBe('Small Biz Corp');
+    expect(result.results[0]!.face_value_of_loan).toBe(350_000);
+    expect(result.results[0]!.name).toBe('Small Biz Corp');
   });
 
   /**
@@ -304,7 +304,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 100, total: 10_000, limit: 100 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'award',
@@ -330,7 +330,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: true, page: 1, total: 3045, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'award',
@@ -350,7 +350,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 10_000, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
       filters: { def_codes: ['L'] },
@@ -366,7 +366,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
       filters: { def_codes: ['L', 'M'] },
@@ -394,16 +394,16 @@ describe('disasterSpendingTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
       filters: { def_codes: ['L'], geo_layer: 'county' },
     });
     const result = await disasterSpendingTool.handler(input, ctx);
 
-    expect(result.results[0].shape_code).toBe('06037');
-    expect(result.results[0].display_name).toBe('Los Angeles');
-    expect(result.results[0].aggregated_amount).toBe(40_408_945_418.74);
+    expect(result.results[0]!.shape_code).toBe('06037');
+    expect(result.results[0]!.display_name).toBe('Los Angeles');
+    expect(result.results[0]!.aggregated_amount).toBe(40_408_945_418.74);
     expect(mockGetDisasterByGeography).toHaveBeenCalledWith(
       expect.objectContaining({ geo_layer: 'county', spending_type: 'obligation' }),
       ctx,
@@ -445,7 +445,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: true, page: 2, total: 38, limit: 2 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'agency',
       spending_type: 'award',
@@ -468,7 +468,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: true, page: 3, total: 387, limit: 5 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'cfda',
       filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
@@ -489,7 +489,7 @@ describe('disasterSpendingTool', () => {
       page_metadata: { hasNext: true, page: 1, total: 10_000, limit: 2 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'award',
@@ -526,11 +526,11 @@ describe('disasterSpendingTool', () => {
     };
     const page1 = await disasterSpendingTool.handler(
       disasterSpendingTool.input.parse({ ...base, page: 1 }),
-      createMockContext(),
+      createMockContext({ errors: disasterSpendingTool.errors }),
     );
     const page2 = await disasterSpendingTool.handler(
       disasterSpendingTool.input.parse({ ...base, page: 2 }),
-      createMockContext(),
+      createMockContext({ errors: disasterSpendingTool.errors }),
     );
 
     const call1Body = mockGetDisasterByAgency.mock.calls[0]?.[1] as Record<string, unknown>;

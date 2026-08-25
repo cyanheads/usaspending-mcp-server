@@ -34,15 +34,15 @@ describe('getAwardTransactionsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTransactionsTool.errors });
     const input = getAwardTransactionsTool.input.parse({ award_id: 'CONT_AWD_TEST' });
     const result = await getAwardTransactionsTool.handler(input, ctx);
 
     expect(result.award_id).toBe('CONT_AWD_TEST');
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].id).toBe(1);
-    expect(result.results[0].modification_number).toBe('M0001');
-    expect(result.results[0].federal_action_obligation).toBe(250_000);
+    expect(result.results[0]!.id).toBe(1);
+    expect(result.results[0]!.modification_number).toBe('M0001');
+    expect(result.results[0]!.federal_action_obligation).toBe(250_000);
     expect(result.page_metadata.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.queried_award_id).toBe('CONT_AWD_TEST');
@@ -57,7 +57,7 @@ describe('getAwardTransactionsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTransactionsTool.errors });
     const input = getAwardTransactionsTool.input.parse({ award_id: 'CONT_AWD_EMPTY' });
     const result = await getAwardTransactionsTool.handler(input, ctx);
 
@@ -92,7 +92,7 @@ describe('getAwardTransactionsTool', () => {
       page_metadata: { hasNext: false, page: 2, total: 15, limit: 5 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTransactionsTool.errors });
     const input = getAwardTransactionsTool.input.parse({
       award_id: 'CONT_AWD_TEST',
       sort: 'federal_action_obligation',

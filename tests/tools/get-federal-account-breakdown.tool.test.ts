@@ -45,7 +45,7 @@ describe('getFederalAccountBreakdownTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountBreakdownTool.errors });
     const input = getFederalAccountBreakdownTool.input.parse({
       account_code: '097-0100',
       dimension: 'program_activity',
@@ -56,10 +56,10 @@ describe('getFederalAccountBreakdownTool', () => {
     expect(result.account_code).toBe('097-0100');
     expect(result.dimension).toBe('program_activity');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].code).toBe('0004');
-    expect(result.results[0].name).toBe('ADMINISTRATION AND SERVICE-WIDE ACTIVITIES');
-    expect(result.results[0].obligations).toBe(288_208_446_567.76);
-    expect(result.results[0].type).toBe('PAC/PAN');
+    expect(result.results[0]!.code).toBe('0004');
+    expect(result.results[0]!.name).toBe('ADMINISTRATION AND SERVICE-WIDE ACTIVITIES');
+    expect(result.results[0]!.obligations).toBe(288_208_446_567.76);
+    expect(result.results[0]!.type).toBe('PAC/PAN');
 
     // page_metadata.total — this endpoint family reports `total`, not `count`.
     expect(result.page_metadata.total).toBe(32);
@@ -102,7 +102,7 @@ describe('getFederalAccountBreakdownTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountBreakdownTool.errors });
     const input = getFederalAccountBreakdownTool.input.parse({
       account_code: '097-0100',
       dimension: 'object_class',
@@ -111,10 +111,10 @@ describe('getFederalAccountBreakdownTool', () => {
     const result = await getFederalAccountBreakdownTool.handler(input, ctx);
 
     expect(result.dimension).toBe('object_class');
-    expect(result.results[0].code).toBe('25.2');
-    expect(result.results[0].obligations).toBe(99_427_954_049.93);
+    expect(result.results[0]!.code).toBe('25.2');
+    expect(result.results[0]!.obligations).toBe(99_427_954_049.93);
     // type must stay absent rather than be invented for this dimension.
-    expect(result.results[0].type).toBeUndefined();
+    expect(result.results[0]!.type).toBeUndefined();
     expect(result.page_metadata.total).toBe(35);
   });
 
@@ -127,7 +127,7 @@ describe('getFederalAccountBreakdownTool', () => {
         account_code: '097-0100',
         dimension: 'program_activity',
       }),
-      createMockContext(),
+      createMockContext({ errors: getFederalAccountBreakdownTool.errors }),
     );
     expect(mockProgramActivities).toHaveBeenCalledTimes(1);
     expect(mockObjectClasses).not.toHaveBeenCalled();
@@ -143,7 +143,7 @@ describe('getFederalAccountBreakdownTool', () => {
         account_code: '097-0100',
         dimension: 'object_class',
       }),
-      createMockContext(),
+      createMockContext({ errors: getFederalAccountBreakdownTool.errors }),
     );
     expect(mockObjectClasses).toHaveBeenCalledTimes(1);
     expect(mockProgramActivities).toHaveBeenCalledTimes(1);
@@ -164,7 +164,7 @@ describe('getFederalAccountBreakdownTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountBreakdownTool.errors });
     const input = getFederalAccountBreakdownTool.input.parse({
       account_code: '097-0100',
       dimension: 'object_class',
@@ -229,17 +229,17 @@ describe('getFederalAccountBreakdownTool', () => {
       page_metadata: { page: 1, hasNext: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountBreakdownTool.errors });
     const input = getFederalAccountBreakdownTool.input.parse({
       account_code: '097-0100',
       dimension: 'program_activity',
     });
     const result = await getFederalAccountBreakdownTool.handler(input, ctx);
 
-    expect(result.results[0].code).toBe('0001');
-    expect(result.results[0].name).toBeUndefined();
-    expect(result.results[0].obligations).toBeUndefined();
-    expect(result.results[0].type).toBeUndefined();
+    expect(result.results[0]!.code).toBe('0001');
+    expect(result.results[0]!.name).toBeUndefined();
+    expect(result.results[0]!.obligations).toBeUndefined();
+    expect(result.results[0]!.type).toBeUndefined();
     // No upstream total — must not be invented.
     expect(result.page_metadata.total).toBeUndefined();
     expect(getEnrichment(ctx).totalCount).toBeUndefined();

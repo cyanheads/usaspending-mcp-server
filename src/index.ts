@@ -17,6 +17,16 @@ await createApp({
   resources: [],
   prompts: [],
   landing: { requireAuth: false },
+  /**
+   * The tool surface is compiled in — 18 static definitions, no dynamic
+   * registration, no auth scopes filtering the list per caller — so it changes
+   * only on a redeploy and is byte-identical for every client. An hour of
+   * client-side caching on `tools/list` is well inside the release cadence.
+   * Only 2026-07-28 clients read this; 2025-era responses are unaffected.
+   */
+  cacheHints: {
+    'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
+  },
   instructions:
     'USAspending.gov MCP server — federal award, recipient, agency, and spending data from the US Treasury DATA Act platform.\n' +
     '- Start with usaspending_list_agencies or usaspending_autocomplete_filters to discover agency codes and NAICS/PSC codes\n' +

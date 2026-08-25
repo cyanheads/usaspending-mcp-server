@@ -5,6 +5,7 @@
  * @module tests/security/input-validation.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { autocompleteFiltersTool } from '@/mcp-server/tools/definitions/autocomplete-filters.tool.js';
@@ -15,6 +16,7 @@ import { getAwardSubawardsTool } from '@/mcp-server/tools/definitions/get-award-
 import { getAwardTransactionsTool } from '@/mcp-server/tools/definitions/get-award-transactions.tool.js';
 import { getFederalAccountTool } from '@/mcp-server/tools/definitions/get-federal-account.tool.js';
 import { getRecipientTool } from '@/mcp-server/tools/definitions/get-recipient.tool.js';
+import { allToolDefinitions } from '@/mcp-server/tools/definitions/index.js';
 import { listAgenciesTool } from '@/mcp-server/tools/definitions/list-agencies.tool.js';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 import { searchRecipientsTool } from '@/mcp-server/tools/definitions/search-recipients.tool.js';
@@ -388,6 +390,7 @@ describe('Security — injection strings do not break tool format output', () =>
       scope: 'place_of_performance',
       geo_layer: 'state',
       results: [{ shape_code: '53', display_name: injection, aggregated_amount: 1000 }],
+      total_areas_available: 1,
       total: 1,
     };
     expect(() => spendingByGeographyTool.format!(output)).not.toThrow();
@@ -460,7 +463,7 @@ describe('Security — no secrets in tool output or error messages', () => {
 
 describe('disasterSpendingTool — cfda and recipient dimensions', () => {
   it('returns cfda breakdown for dimension=cfda', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'cfda',
       spending_type: 'award',
@@ -472,7 +475,7 @@ describe('disasterSpendingTool — cfda and recipient dimensions', () => {
   });
 
   it('returns recipient breakdown for dimension=recipient', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'recipient',
       spending_type: 'total',
@@ -485,7 +488,7 @@ describe('disasterSpendingTool — cfda and recipient dimensions', () => {
 
 describe('searchAwardsTool — additional input paths', () => {
   it('passes location filter fields through to service', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       location_filter: {
         country: 'USA',
@@ -500,7 +503,7 @@ describe('searchAwardsTool — additional input paths', () => {
   });
 
   it('passes time_period filter through to service', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       keyword: 'defense',
       time_period: { start_date: '2022-01-01', end_date: '2022-12-31' },
@@ -510,7 +513,7 @@ describe('searchAwardsTool — additional input paths', () => {
   });
 
   it('generates notice mentioning agency filter when results are empty', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ agency_name: 'Nonexistent Agency' });
     await searchAwardsTool.handler(input, ctx);
     const { getEnrichment } = await import('@cyanheads/mcp-ts-core/testing');
@@ -522,7 +525,7 @@ describe('searchAwardsTool — additional input paths', () => {
 
 describe('spendingOverTimeTool — subawards flag', () => {
   it('passes subawards=true through to service call', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingOverTimeTool.errors });
     const input = spendingOverTimeTool.input.parse({ group: 'fiscal_year', subawards: true });
     expect(input.subawards).toBe(true);
     // Handler still resolves (mock returns one period)
@@ -533,7 +536,7 @@ describe('spendingOverTimeTool — subawards flag', () => {
 
 describe('spendingByGeographyTool — county and district layers', () => {
   it('accepts county geo_layer without throwing', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'county',
@@ -543,7 +546,7 @@ describe('spendingByGeographyTool — county and district layers', () => {
   });
 
   it('accepts district geo_layer without throwing', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'recipient_location',
       geo_layer: 'district',
@@ -555,7 +558,7 @@ describe('spendingByGeographyTool — county and district layers', () => {
 
 describe('getAwardTool — additional sparse payload cases', () => {
   it('handles award with parent_award data', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'IDV_AWARD_001' });
     // Mock returns full fixture via service mock already set up above — just confirm no throw
     const result = await getAwardTool.handler(input, ctx);
@@ -576,8 +579,11 @@ describe('listAgenciesTool — sort and filter combinations', () => {
     }
   });
 
-  it('accepts fiscal_year filter', () => {
-    expect(() => listAgenciesTool.input.parse({ fiscal_year: 2023 })).not.toThrow();
+  it('rejects an undeclared filter key by name', () => {
+    // Tool inputs are strict: an argument the schema does not declare is rejected
+    // rather than stripped, so a caller passing an unsupported filter learns it was
+    // never applied instead of reading unfiltered results as filtered ones.
+    expect(() => listAgenciesTool.input.parse({ fiscal_year: 2023 })).toThrow(/Unrecognized key/i);
   });
 });
 
@@ -615,7 +621,7 @@ describe('getRecipientTool — all valid award_type values', () => {
 
 describe('disasterSpendingTool — def_codes filter propagation', () => {
   it('passes def_codes filter correctly in overview dimension (ignored)', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'overview',
       filters: { def_codes: ['L', 'M'] },
@@ -626,7 +632,7 @@ describe('disasterSpendingTool — def_codes filter propagation', () => {
   });
 
   it('passes geo_layer filter for geography dimension', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
     const input = disasterSpendingTool.input.parse({
       dimension: 'geography',
       filters: { def_codes: ['L'], geo_layer: 'county' },
@@ -768,5 +774,43 @@ describe('Security — path traversal strings do not affect output', () => {
   it('getRecipientTool input accepts path-like recipient_id without file I/O', () => {
     const pathLike = '../../config.env';
     expect(() => getRecipientTool.input.parse({ recipient_id: pathLike })).not.toThrow();
+  });
+});
+
+// --- Strict tool inputs ---
+
+describe('Security — undeclared argument keys are rejected, not stripped', () => {
+  /**
+   * Tool inputs are strict: an argument key the schema does not declare is
+   * rejected by name before the handler runs. Stripping it instead turned a
+   * caller's misspelled or unsupported filter into a wrong answer they could not
+   * detect — the value vanished and the unfiltered result read as filtered.
+   */
+  it.each(allToolDefinitions.map((t) => [t.name, t] as const))(
+    '%s rejects an unrecognized root key',
+    (_name, definition) => {
+      const result = definition.input.safeParse({ __undeclared_key__: 'x' });
+      expect(result.success).toBe(false);
+      const codes = result.success ? [] : result.error.issues.map((issue) => issue.code);
+      expect(codes).toContain('unrecognized_keys');
+    },
+  );
+
+  it.each(allToolDefinitions.map((t) => [t.name, t] as const))(
+    '%s advertises additionalProperties: false',
+    (_name, definition) => {
+      // The advertised schema must match the runtime behavior, or a client
+      // generates arguments the server then rejects.
+      const emitted = z.toJSONSchema(definition.input, { io: 'input' });
+      expect(emitted.additionalProperties).toBe(false);
+    },
+  );
+
+  it('still strips an unknown key nested inside an input object', () => {
+    // Strictness is root-level only, matching `.strict()` itself.
+    const parsed = searchAwardsTool.input.parse({
+      filters: { keywords: ['solar'], __nested_unknown__: 'x' },
+    });
+    expect(parsed.filters).not.toHaveProperty('__nested_unknown__');
   });
 });

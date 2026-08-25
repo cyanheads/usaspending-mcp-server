@@ -31,7 +31,7 @@ describe('getFederalAccountTool', () => {
       fiscal_year: 2026,
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountTool.errors });
     const input = getFederalAccountTool.input.parse({ account_code: '097-0100' });
     const result = await getFederalAccountTool.handler(input, ctx);
 
@@ -68,7 +68,7 @@ describe('getFederalAccountTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountTool.errors });
     const input = getFederalAccountTool.input.parse({ account_code: '080-0120' });
     const result = await getFederalAccountTool.handler(input, ctx);
 
@@ -91,7 +91,7 @@ describe('getFederalAccountTool', () => {
       children: [],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountTool.errors });
     const input = getFederalAccountTool.input.parse({ account_code: '097-0200' });
     const result = await getFederalAccountTool.handler(input, ctx);
 
@@ -105,7 +105,7 @@ describe('getFederalAccountTool', () => {
       children: [{ code: '097-2021/2025-0100-000' }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountTool.errors });
     const input = getFederalAccountTool.input.parse({ account_code: '097-0200' });
     const result = await getFederalAccountTool.handler(input, ctx);
 
@@ -124,7 +124,7 @@ describe('getFederalAccountTool', () => {
       agency_identifier: '097',
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFederalAccountTool.errors });
     const input = getFederalAccountTool.input.parse({ account_code: '097-0200' });
     const result = await getFederalAccountTool.handler(input, ctx);
 

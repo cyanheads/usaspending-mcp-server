@@ -28,15 +28,15 @@ describe('spendingByCategoryTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 2, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByCategoryTool.errors });
     const input = spendingByCategoryTool.input.parse({ category: 'naics', limit: 10 });
     const result = await spendingByCategoryTool.handler(input, ctx);
 
     expect(result.category).toBe('naics');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].code).toBe('541512');
-    expect(result.results[0].name).toBe('Computer Systems Design Services');
-    expect(result.results[0].amount).toBe(2_000_000_000);
+    expect(result.results[0]!.code).toBe('541512');
+    expect(result.results[0]!.name).toBe('Computer Systems Design Services');
+    expect(result.results[0]!.amount).toBe(2_000_000_000);
     expect(result.page_metadata.has_next).toBe(false);
   });
 
@@ -46,7 +46,7 @@ describe('spendingByCategoryTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByCategoryTool.errors });
     const input = spendingByCategoryTool.input.parse({ category: 'psc' });
     const result = await spendingByCategoryTool.handler(input, ctx);
 
@@ -64,7 +64,7 @@ describe('spendingByCategoryTool', () => {
       page_metadata: { hasNext: true, page: 1, total: 50, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByCategoryTool.errors });
     const input = spendingByCategoryTool.input.parse({ category: 'naics', limit: 10 });
     await spendingByCategoryTool.handler(input, ctx);
 
@@ -88,7 +88,7 @@ describe('spendingByCategoryTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByCategoryTool.errors });
     const input = spendingByCategoryTool.input.parse({
       category: 'awarding_agency',
       filters: {

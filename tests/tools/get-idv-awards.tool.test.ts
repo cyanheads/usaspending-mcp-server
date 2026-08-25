@@ -41,21 +41,23 @@ describe('getIdvAwardsTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_NNK14MA74C_8000' });
     const result = await getIdvAwardsTool.handler(input, ctx);
 
     expect(result.award_id).toBe('CONT_IDV_NNK14MA74C_8000');
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].generated_unique_award_id).toBe(
+    expect(result.results[0]!.generated_unique_award_id).toBe(
       'CONT_AWD_80KSC024FA106_8000_NNK14MA74C_8000',
     );
-    expect(result.results[0].piid).toBe('80KSC024FA106');
-    expect(result.results[0].award_type).toBe('DELIVERY ORDER');
-    expect(result.results[0].obligated_amount).toBe(295048.0);
-    expect(result.results[0].awarding_agency).toBe('National Aeronautics and Space Administration');
+    expect(result.results[0]!.piid).toBe('80KSC024FA106');
+    expect(result.results[0]!.award_type).toBe('DELIVERY ORDER');
+    expect(result.results[0]!.obligated_amount).toBe(295048.0);
+    expect(result.results[0]!.awarding_agency).toBe(
+      'National Aeronautics and Space Administration',
+    );
     // last_date_to_order is null — should be omitted from output
-    expect(result.results[0].last_date_to_order).toBeUndefined();
+    expect(result.results[0]!.last_date_to_order).toBeUndefined();
     expect(result.page_metadata.has_next).toBe(true);
     expect(result.page_metadata.has_previous).toBe(false);
 
@@ -73,7 +75,7 @@ describe('getIdvAwardsTool', () => {
       })),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_FULLPAGE_000', limit: 2 });
     await getIdvAwardsTool.handler(input, ctx);
 
@@ -98,7 +100,7 @@ describe('getIdvAwardsTool', () => {
       })),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_STALE_000', limit: 2 });
     const result = await getIdvAwardsTool.handler(input, ctx);
 
@@ -117,7 +119,7 @@ describe('getIdvAwardsTool', () => {
       results: [{ generated_unique_award_id: 'CONT_AWD_LAST_001' }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_END_000', limit: 2, page: 2 });
     const result = await getIdvAwardsTool.handler(input, ctx);
 
@@ -140,7 +142,7 @@ describe('getIdvAwardsTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({
       award_id: 'CONT_IDV_FA862115D6276_9700',
       limit: 2,
@@ -162,7 +164,7 @@ describe('getIdvAwardsTool', () => {
       results: [{ generated_unique_award_id: 'CONT_AWD_SHORT_001' }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_SHORT_000', limit: 2 });
     const result = await getIdvAwardsTool.handler(input, ctx);
 
@@ -177,7 +179,7 @@ describe('getIdvAwardsTool', () => {
       results: [],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({
       award_id: 'CONT_IDV_NOSUBS_0000',
       type: 'child_idvs',
@@ -202,17 +204,17 @@ describe('getIdvAwardsTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
     const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_SPARSE_000' });
     const result = await getIdvAwardsTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].generated_unique_award_id).toBe('CONT_AWD_SPARSE_001');
-    expect(result.results[0].piid).toBeUndefined();
-    expect(result.results[0].award_type).toBeUndefined();
-    expect(result.results[0].obligated_amount).toBeUndefined();
-    expect(result.results[0].awarding_agency).toBeUndefined();
-    expect(result.results[0].last_date_to_order).toBeUndefined();
+    expect(result.results[0]!.generated_unique_award_id).toBe('CONT_AWD_SPARSE_001');
+    expect(result.results[0]!.piid).toBeUndefined();
+    expect(result.results[0]!.award_type).toBeUndefined();
+    expect(result.results[0]!.obligated_amount).toBeUndefined();
+    expect(result.results[0]!.awarding_agency).toBeUndefined();
+    expect(result.results[0]!.last_date_to_order).toBeUndefined();
   });
 
   it('throws when service call fails', async () => {

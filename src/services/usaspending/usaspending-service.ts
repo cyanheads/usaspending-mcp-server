@@ -11,7 +11,6 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import {
   type FetchWithTimeoutOptions,
   fetchWithTimeout,
-  type RequestContext,
   withRetry,
 } from '@cyanheads/mcp-ts-core/utils';
 import type { ServerConfig } from '@/config/server-config.js';
@@ -100,6 +99,12 @@ export class USASpendingService {
    * `USASPENDING_TIMEOUT_MS` to its 120000 ceiling and leaves the budget derived
    * — where the unbounded loop ran roughly eight minutes.
    *
+   * `this.timeoutMs` bounds the whole exchange, not just the header phase: a 2xx
+   * carrying a body comes back as a passthrough wrapper that keeps that deadline
+   * armed until the body closes, so the `await response.text()` below is covered
+   * too and a peer that answers headers and then stalls the stream cannot hold
+   * an attempt open past its timeout.
+   *
    * Deadline expiry reaches this frame two ways, neither coherent on its own.
    * Aborted mid-fetch, `fetchWithTimeout` throws its `FetchAborted`
    * `InternalError` ("was aborted") and `withRetry` re-throws it verbatim,
@@ -122,18 +127,16 @@ export class USASpendingService {
     try {
       return await withRetry(
         async () => {
-          const response = await fetchWithTimeout(
-            url,
-            this.timeoutMs,
-            ctx as unknown as RequestContext,
-            { ...init, signal },
-          );
+          const response = await fetchWithTimeout(url, this.timeoutMs, ctx, {
+            ...init,
+            signal,
+          });
           const text = await response.text();
           return this.parseJson<T>(text, url);
         },
         {
           operation,
-          context: ctx as unknown as RequestContext,
+          context: ctx,
           baseDelayMs: RETRY_BASE_DELAY_MS,
           signal,
         },

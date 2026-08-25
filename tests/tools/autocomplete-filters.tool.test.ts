@@ -41,14 +41,14 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'software' });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
     expect(result.type).toBe('naics');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].code).toBe('513210');
-    expect(result.results[0].name).toBe('Software Publishers');
+    expect(result.results[0]!.code).toBe('513210');
+    expect(result.results[0]!.name).toBe('Software Publishers');
     expect(result.total).toBe(2);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.lookup_type).toBe('naics');
@@ -64,7 +64,7 @@ describe('autocompleteFiltersTool', () => {
       })),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'naics',
       search_text: 'soft',
@@ -83,12 +83,12 @@ describe('autocompleteFiltersTool', () => {
       results: [{ product_or_service_code: 'AC60', psc_description: 'R&D-ELECTRONICS & COMM EQ' }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({ type: 'psc', search_text: 'electronics' });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
-    expect(result.results[0].code).toBe('AC60');
-    expect(result.results[0].name).toBe('R&D-ELECTRONICS & COMM EQ');
+    expect(result.results[0]!.code).toBe('AC60');
+    expect(result.results[0]!.name).toBe('R&D-ELECTRONICS & COMM EQ');
   });
 
   it('maps cfda field names correctly', async () => {
@@ -102,12 +102,12 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({ type: 'cfda', search_text: 'housing' });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
-    expect(result.results[0].code).toBe('10.405');
-    expect(result.results[0].name).toBe('Farm Labor Housing Loans and Grants');
+    expect(result.results[0]!.code).toBe('10.405');
+    expect(result.results[0]!.name).toBe('Farm Labor Housing Loans and Grants');
   });
 
   it('maps awarding_agency nested toptier_agency.name', async () => {
@@ -126,15 +126,15 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'awarding_agency',
       search_text: 'defense',
     });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
-    expect(result.results[0].id).toBe('1173');
-    expect(result.results[0].name).toBe('Department of Defense');
+    expect(result.results[0]!.id).toBe('1173');
+    expect(result.results[0]!.name).toBe('Department of Defense');
   });
 
   it('maps recipient_name to name for recipient type', async () => {
@@ -144,15 +144,15 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({ type: 'recipient', search_text: 'acme' });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
-    expect(result.results[0].name).toBe('Acme Corporation');
+    expect(result.results[0]!.name).toBe('Acme Corporation');
     // recipient_id / legal_business_name don't exist on this endpoint — id stays unset
-    expect(result.results[0].id).toBeUndefined();
-    expect(result.results[0].uei).toBeUndefined();
-    expect(result.results[0].duns).toBeUndefined();
+    expect(result.results[0]!.id).toBeUndefined();
+    expect(result.results[0]!.uei).toBeUndefined();
+    expect(result.results[0]!.duns).toBeUndefined();
   });
 
   it('surfaces uei and duns for recipient matches', async () => {
@@ -167,17 +167,17 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'recipient',
       search_text: 'microsoft',
     });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
-    expect(result.results[0].name).toBe('MICROSOFT CORPORATION');
-    expect(result.results[0].uei).toBe('FMVPEWNJGLM1');
-    expect(result.results[0].duns).toBe('081466849');
-    expect(result.results[0].id).toBeUndefined();
+    expect(result.results[0]!.name).toBe('MICROSOFT CORPORATION');
+    expect(result.results[0]!.uei).toBe('FMVPEWNJGLM1');
+    expect(result.results[0]!.duns).toBe('081466849');
+    expect(result.results[0]!.id).toBeUndefined();
   });
 
   it('caps the recipient union at limit when upstream returns one bucket per match type', async () => {
@@ -203,7 +203,7 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'recipient',
       search_text: 'a',
@@ -239,7 +239,7 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'recipient',
       search_text: 'a',
@@ -258,7 +258,7 @@ describe('autocompleteFiltersTool', () => {
       })),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'naics',
       search_text: 'computer',
@@ -279,7 +279,7 @@ describe('autocompleteFiltersTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'recipient',
       search_text: 'lockheed',
@@ -331,7 +331,7 @@ describe('autocompleteFiltersTool', () => {
       results: [{ naics: '513210', naics_description: 'Software Publishers' }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
     const input = autocompleteFiltersTool.input.parse({
       type: 'naics',
       search_text: 'soft',

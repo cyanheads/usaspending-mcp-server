@@ -40,7 +40,7 @@ describe('getRecipientTool', () => {
       alternate_names: ['ACME CORP', 'Acme Inc'],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getRecipientTool.errors });
     const input = getRecipientTool.input.parse({ recipient_id: 'abc123-P' });
     const result = await getRecipientTool.handler(input, ctx);
 
@@ -84,7 +84,7 @@ describe('getRecipientTool', () => {
   it('passes fiscal_year and award_type through to service', async () => {
     mockGetRecipient.mockResolvedValueOnce({ name: 'Acme', total_transaction_amount: 100 });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getRecipientTool.errors });
     const input = getRecipientTool.input.parse({
       recipient_id: 'abc123-P',
       fiscal_year: 2023,
@@ -105,7 +105,7 @@ describe('getRecipientTool', () => {
       uei: 'MINIMALAAAAA',
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getRecipientTool.errors });
     const input = getRecipientTool.input.parse({ recipient_id: 'minimal-id' });
     const result = await getRecipientTool.handler(input, ctx);
 

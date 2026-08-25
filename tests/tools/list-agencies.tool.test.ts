@@ -38,15 +38,15 @@ describe('listAgenciesTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: listAgenciesTool.errors });
     const input = listAgenciesTool.input.parse({});
     const result = await listAgenciesTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].agency_name).toBe('Department of Agriculture');
-    expect(result.results[0].toptier_code).toBe('012');
-    expect(result.results[0].agency_slug).toBe('department-of-agriculture');
-    expect(result.results[0].budget_authority_amount).toBe(150_000_000_000);
+    expect(result.results[0]!.agency_name).toBe('Department of Agriculture');
+    expect(result.results[0]!.toptier_code).toBe('012');
+    expect(result.results[0]!.agency_slug).toBe('department-of-agriculture');
+    expect(result.results[0]!.budget_authority_amount).toBe(150_000_000_000);
     expect(result.total).toBe(2);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.agency_count).toBe(2);
@@ -55,7 +55,7 @@ describe('listAgenciesTool', () => {
   it('returns empty results when no agencies are found', async () => {
     mockListAgencies.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: listAgenciesTool.errors });
     const input = listAgenciesTool.input.parse({});
     const result = await listAgenciesTool.handler(input, ctx);
 
@@ -74,7 +74,7 @@ describe('listAgenciesTool', () => {
   it('passes sort and order params through', async () => {
     mockListAgencies.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: listAgenciesTool.errors });
     const input = listAgenciesTool.input.parse({
       sort: 'budget_authority_amount',
       order: 'desc',

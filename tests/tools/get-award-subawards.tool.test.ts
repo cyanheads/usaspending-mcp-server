@@ -35,16 +35,16 @@ describe('getAwardSubawardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardSubawardsTool.errors });
     const input = getAwardSubawardsTool.input.parse({ award_id: 'CONT_AWD_PRIME_001' });
     const result = await getAwardSubawardsTool.handler(input, ctx);
 
     expect(result.award_id).toBe('CONT_AWD_PRIME_001');
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].subaward_number).toBe('SUB-001');
-    expect(result.results[0].amount).toBe(150_000);
-    expect(result.results[0].recipient_name).toBe('SubCo LLC');
-    expect(result.results[0].place_of_performance?.city).toBe('Portland');
+    expect(result.results[0]!.subaward_number).toBe('SUB-001');
+    expect(result.results[0]!.amount).toBe(150_000);
+    expect(result.results[0]!.recipient_name).toBe('SubCo LLC');
+    expect(result.results[0]!.place_of_performance?.city).toBe('Portland');
     expect(result.page_metadata.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.prime_award_id).toBe('CONT_AWD_PRIME_001');
@@ -59,7 +59,7 @@ describe('getAwardSubawardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardSubawardsTool.errors });
     const input = getAwardSubawardsTool.input.parse({ award_id: 'CONT_AWD_NO_SUBS' });
     const result = await getAwardSubawardsTool.handler(input, ctx);
 
@@ -98,12 +98,12 @@ describe('getAwardSubawardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardSubawardsTool.errors });
     const input = getAwardSubawardsTool.input.parse({ award_id: 'CONT_AWD_SPARSE' });
     const result = await getAwardSubawardsTool.handler(input, ctx);
 
-    expect(result.results[0].place_of_performance).toBeUndefined();
-    expect(result.results[0].amount).toBe(75_000);
+    expect(result.results[0]!.place_of_performance).toBeUndefined();
+    expect(result.results[0]!.amount).toBe(75_000);
   });
 
   it('formats output with subaward details', () => {

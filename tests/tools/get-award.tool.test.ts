@@ -67,7 +67,7 @@ describe('getAwardTool', () => {
   it('returns full award details for a valid award ID', async () => {
     mockGetAward.mockResolvedValueOnce(fullAwardFixture);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_FA862118F6251_9700' });
     const result = await getAwardTool.handler(input, ctx);
 
@@ -91,7 +91,7 @@ describe('getAwardTool', () => {
   it('drops the time component from potential_end_date so period dates share one shape', async () => {
     mockGetAward.mockResolvedValueOnce(fullAwardFixture);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_FA862118F6251_9700' });
     const result = await getAwardTool.handler(input, ctx);
 
@@ -115,7 +115,7 @@ describe('getAwardTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_FA862118F6251_9700' });
     const result = await getAwardTool.handler(input, ctx);
 
@@ -152,7 +152,7 @@ describe('getAwardTool', () => {
       latest_transaction_assistance_data: { cfda_number: '10.001', cfda_title: 'Farm Income' },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'ASST_AWD_GRANT_001' });
     const result = await getAwardTool.handler(input, ctx);
 
@@ -178,7 +178,7 @@ describe('getAwardTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'IDV_AWD_GWAC_001' });
     const result = await getAwardTool.handler(input, ctx);
 
@@ -204,7 +204,7 @@ describe('getAwardTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'ASST_AWD_LOAN_001' });
     const result = await getAwardTool.handler(input, ctx);
 
@@ -227,7 +227,7 @@ describe('getAwardTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardTool.errors });
     const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_REC_ID' });
     const result = await getAwardTool.handler(input, ctx);
 

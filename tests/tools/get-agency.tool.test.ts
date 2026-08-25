@@ -79,7 +79,7 @@ describe('getAgencyTool', () => {
     mockGetAgency.mockResolvedValueOnce(agencyFixture);
     mockGetAgencySubAgencies.mockResolvedValueOnce(subAgenciesFixture);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAgencyTool.errors });
     const input = getAgencyTool.input.parse({ toptier_code: '097' });
     const result = await getAgencyTool.handler(input, ctx);
 
@@ -95,8 +95,8 @@ describe('getAgencyTool', () => {
     expect(result).not.toHaveProperty('budget_authority_amount');
     expect(result).not.toHaveProperty('transactions_count');
     expect(result.sub_agencies).toHaveLength(2);
-    expect(result.sub_agencies![0].name).toBe('Department of the Army');
-    expect(result.sub_agencies![0].total_obligations).toBe(200_000_000_000);
+    expect(result.sub_agencies![0]!.name).toBe('Department of the Army');
+    expect(result.sub_agencies![0]!.total_obligations).toBe(200_000_000_000);
     // #29b: sub-agency pagination metadata is surfaced (was discarded), and the page input
     // is threaded through to the service.
     expect(result.sub_agency_page_metadata).toEqual({
@@ -126,7 +126,7 @@ describe('getAgencyTool', () => {
     mockGetAgency.mockResolvedValueOnce(agencyFixture);
     mockGetAgencySubAgencies.mockResolvedValueOnce(subAgenciesFixture);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAgencyTool.errors });
     const input = getAgencyTool.input.parse({ agency_slug: 'department-of-defense' });
     const result = await getAgencyTool.handler(input, ctx);
 
@@ -170,7 +170,7 @@ describe('getAgencyTool', () => {
     mockGetAgency.mockResolvedValueOnce(agencyFixture);
     mockGetAgencySubAgencies.mockRejectedValueOnce(new Error('Sub-agencies service down'));
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAgencyTool.errors });
     const input = getAgencyTool.input.parse({ toptier_code: '097' });
     const result = await getAgencyTool.handler(input, ctx);
 
@@ -189,7 +189,7 @@ describe('getAgencyTool', () => {
     });
     mockGetAgencySubAgencies.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAgencyTool.errors });
     const input = getAgencyTool.input.parse({ toptier_code: '097' });
     const result = await getAgencyTool.handler(input, ctx);
 

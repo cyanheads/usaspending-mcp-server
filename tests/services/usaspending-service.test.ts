@@ -33,6 +33,30 @@ const stubFetch = (status: number, body: string) => {
 };
 
 /**
+ * Stubs a 200 whose headers arrive immediately and whose body then stalls — the
+ * shape of a peer that answers promptly and never finishes streaming. The body
+ * errors when the request signal aborts, as a runtime's own fetch body does, so
+ * the deadline the framework hands to the body has something to cancel.
+ */
+const stubStalledBodyFetch = () => {
+  const fetchMock = vi.fn(
+    async (_url: string, init: RequestInit) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            init.signal?.addEventListener('abort', () => {
+              controller.error(init.signal?.reason);
+            });
+          },
+        }),
+        { status: 200 },
+      ),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+};
+
+/**
  * Stubs a fetch that never answers and only settles when its signal aborts —
  * the shape of an endpoint that cannot respond inside any budget.
  */
@@ -431,6 +455,23 @@ describe('USASpendingService request budget', () => {
     });
     // 1.5x the timeout, versus four attempts plus 1s/2s/4s of backoff unbounded.
     expect(Date.now() - started).toBeLessThan(1600);
+  });
+
+  /**
+   * `timeoutMs` bounds the whole exchange, not just the header phase: a 2xx
+   * carrying a body comes back as a passthrough wrapper that keeps the deadline
+   * armed until the body closes. Before that, a peer that answered headers and
+   * then stalled the stream held the request open past every budget.
+   */
+  it('times out a 200 whose body never closes', async () => {
+    const fetchMock = stubStalledBodyFetch();
+    const svc = newServiceWith({ timeoutMs: 100, retryBudgetMs: 400 });
+
+    await expect(svc.getDisasterOverview(ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+    });
+    // The header phase succeeded every time — only the body read timed out.
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it('leaves a caller-initiated abort classified as a caller abort', async () => {

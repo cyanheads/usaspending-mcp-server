@@ -39,7 +39,7 @@ describe('getAwardFederalAccountsTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardFederalAccountsTool.errors });
     const input = getAwardFederalAccountsTool.input.parse({
       award_id: 'CONT_AWD_GSFC0198106DNAS526555_8000_-NONE-_-NONE-',
     });
@@ -48,22 +48,22 @@ describe('getAwardFederalAccountsTool', () => {
     expect(result.award_id).toBe('CONT_AWD_GSFC0198106DNAS526555_8000_-NONE-_-NONE-');
     expect(result.results).toHaveLength(1);
     // federal_account is the chaining value into usaspending_get_federal_account.
-    expect(result.results[0].federal_account).toBe('080-0120');
-    expect(result.results[0].account_title).toBe(
+    expect(result.results[0]!.federal_account).toBe('080-0120');
+    expect(result.results[0]!.account_title).toBe(
       'Science, National Aeronautics and Space Administration',
     );
-    expect(result.results[0].total_transaction_obligated_amount).toBe(667_042_581.81);
-    expect(result.results[0].funding_agency_name).toBe(
+    expect(result.results[0]!.total_transaction_obligated_amount).toBe(667_042_581.81);
+    expect(result.results[0]!.funding_agency_name).toBe(
       'National Aeronautics and Space Administration',
     );
-    expect(result.results[0].funding_agency_abbreviation).toBe('NASA');
-    expect(result.results[0].funding_agency_slug).toBe(
+    expect(result.results[0]!.funding_agency_abbreviation).toBe('NASA');
+    expect(result.results[0]!.funding_agency_slug).toBe(
       'national-aeronautics-and-space-administration',
     );
     // Both agency IDs are part of the fixed upstream shape — the issue's original
     // field list omitted them.
-    expect(result.results[0].funding_agency_id).toBe(862);
-    expect(result.results[0].funding_toptier_agency_id).toBe(72);
+    expect(result.results[0]!.funding_agency_id).toBe(862);
+    expect(result.results[0]!.funding_toptier_agency_id).toBe(72);
 
     expect(result.page_metadata.count).toBe(1);
     expect(result.page_metadata.has_next).toBe(false);
@@ -84,7 +84,7 @@ describe('getAwardFederalAccountsTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardFederalAccountsTool.errors });
     const input = getAwardFederalAccountsTool.input.parse({
       award_id: 'CONT_AWD_DEAC0500OR22725_8900_-NONE-_-NONE-',
       limit: 2,
@@ -115,7 +115,7 @@ describe('getAwardFederalAccountsTool', () => {
       page_metadata: { page: 2, count: 29, next: 3, previous: 1, hasNext: true, hasPrevious: true },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardFederalAccountsTool.errors });
     const input = getAwardFederalAccountsTool.input.parse({
       award_id: 'CONT_AWD_DEAC0500OR22725_8900_-NONE-_-NONE-',
       limit: 2,
@@ -141,7 +141,7 @@ describe('getAwardFederalAccountsTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardFederalAccountsTool.errors });
     const input = getAwardFederalAccountsTool.input.parse({
       award_id: 'CONT_AWD_DEAC0500OR22725_8900_-NONE-_-NONE-',
       limit: 2,
@@ -201,16 +201,16 @@ describe('getAwardFederalAccountsTool', () => {
       page_metadata: { page: 1, count: 1, hasNext: false, hasPrevious: false },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardFederalAccountsTool.errors });
     const input = getAwardFederalAccountsTool.input.parse({ award_id: 'CONT_AWD_SPARSE_001' });
     const result = await getAwardFederalAccountsTool.handler(input, ctx);
 
-    expect(result.results[0].federal_account).toBe('080-0120');
-    expect(result.results[0].account_title).toBeUndefined();
-    expect(result.results[0].total_transaction_obligated_amount).toBeUndefined();
-    expect(result.results[0].funding_agency_name).toBeUndefined();
-    expect(result.results[0].funding_agency_id).toBeUndefined();
-    expect(result.results[0].funding_toptier_agency_id).toBeUndefined();
+    expect(result.results[0]!.federal_account).toBe('080-0120');
+    expect(result.results[0]!.account_title).toBeUndefined();
+    expect(result.results[0]!.total_transaction_obligated_amount).toBeUndefined();
+    expect(result.results[0]!.funding_agency_name).toBeUndefined();
+    expect(result.results[0]!.funding_agency_id).toBeUndefined();
+    expect(result.results[0]!.funding_toptier_agency_id).toBeUndefined();
   });
 
   it('omits count when the upstream page_metadata carries none', async () => {
@@ -219,7 +219,7 @@ describe('getAwardFederalAccountsTool', () => {
       page_metadata: {},
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getAwardFederalAccountsTool.errors });
     const input = getAwardFederalAccountsTool.input.parse({ award_id: 'CONT_AWD_NOCOUNT_001' });
     const result = await getAwardFederalAccountsTool.handler(input, ctx);
 

@@ -44,16 +44,16 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'IT services', limit: 10 });
     const result = await searchAwardsTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].award_id).toBe('CONT_AWD_TEST');
-    expect(result.results[0].generated_internal_id).toBe('CONT_AWD_TEST_ID');
-    expect(result.results[0].recipient_name).toBe('Acme Corp');
-    expect(result.results[0].award_amount).toBe(1_000_000);
-    expect(result.results[0].awarding_agency).toBe('Department of Defense');
+    expect(result.results[0]!.award_id).toBe('CONT_AWD_TEST');
+    expect(result.results[0]!.generated_internal_id).toBe('CONT_AWD_TEST_ID');
+    expect(result.results[0]!.recipient_name).toBe('Acme Corp');
+    expect(result.results[0]!.award_amount).toBe(1_000_000);
+    expect(result.results[0]!.awarding_agency).toBe('Department of Defense');
     expect(result.page_metadata.has_next).toBe(false);
     expect(result.page_metadata.page).toBe(1);
     expect(result.page_metadata.limit).toBe(10);
@@ -72,7 +72,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: true, page: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'IT services', limit: 10 });
     await searchAwardsTool.handler(input, ctx);
 
@@ -91,7 +91,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'nonexistent_xyz_123' });
     const result = await searchAwardsTool.handler(input, ctx);
 
@@ -115,7 +115,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       award_type_codes: ['A', 'B'],
       limit: 5,
@@ -136,7 +136,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'artificial intelligence' });
     await searchAwardsTool.handler(input, ctx);
 
@@ -154,7 +154,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ recipient_name: 'Lockheed' });
     await searchAwardsTool.handler(input, ctx);
 
@@ -172,7 +172,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ naics_codes: ['541512', '541511'] });
     await searchAwardsTool.handler(input, ctx);
 
@@ -190,7 +190,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       location_filter: { country: 'USA', state: 'WA' },
     });
@@ -212,7 +212,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ limit: 5 });
     const result = await searchAwardsTool.handler(input, ctx);
 
@@ -296,7 +296,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       keyword: 'cyber',
       agency_name: 'Department of Defense',
@@ -319,7 +319,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ limit: 5 });
     await searchAwardsTool.handler(input, ctx);
 
@@ -337,7 +337,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     // recipient_id is not part of the nested schema — Zod strips it, and the handler must
     // never forward it (search/spending_by_award/ silently ignores it).
     const input = searchAwardsTool.input.parse({
@@ -355,7 +355,7 @@ describe('searchAwardsTool', () => {
     });
     await searchAwardsTool.handler(input, ctx);
 
-    const sent = mockSearchAwards.mock.calls[0][0].filters;
+    const sent = mockSearchAwards.mock.calls[0]![0]!.filters;
     expect(sent).toEqual({
       keywords: ['solar'],
       award_type_codes: ['IDV_A', 'IDV_B'],
@@ -379,7 +379,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       keyword: 'flatword',
       agency_name: 'Department of Flat',
@@ -388,7 +388,7 @@ describe('searchAwardsTool', () => {
     });
     await searchAwardsTool.handler(input, ctx);
 
-    const sent = mockSearchAwards.mock.calls[0][0].filters;
+    const sent = mockSearchAwards.mock.calls[0]![0]!.filters;
     // nested wins for keywords + agency
     expect(sent.keywords).toEqual(['nestedword']);
     expect(sent.agencies).toEqual([
@@ -407,7 +407,7 @@ describe('searchAwardsTool', () => {
       messages: [droppedFilterMessage],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'x' });
     await searchAwardsTool.handler(input, ctx);
 
@@ -429,7 +429,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const result = await searchAwardsTool.handler(
       searchAwardsTool.input.parse({ keyword: 'mars' }),
       ctx,
@@ -440,7 +440,7 @@ describe('searchAwardsTool', () => {
       expect.objectContaining({ fields: expect.arrayContaining(['agency_slug']) }),
       ctx,
     );
-    expect(result.results[0].agency_slug).toBe('national-aeronautics-and-space-administration');
+    expect(result.results[0]!.agency_slug).toBe('national-aeronautics-and-space-administration');
 
     const text = (searchAwardsTool.format!(result)[0] as { text: string }).text;
     expect(text).toContain('Agency Slug (for get_agency)');
@@ -453,7 +453,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const result = await searchAwardsTool.handler(
       searchAwardsTool.input.parse({ keyword: 'y' }),
       ctx,
@@ -470,7 +470,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 1, limit: 2 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       last_record_sort_value: '4257135886768',
       last_record_unique_id: 295527116,
@@ -478,7 +478,7 @@ describe('searchAwardsTool', () => {
     });
     await searchAwardsTool.handler(input, ctx);
 
-    const sent = mockSearchAwards.mock.calls[0][0];
+    const sent = mockSearchAwards.mock.calls[0]![0];
     expect(sent.last_record_sort_value).toBe('4257135886768');
     expect(sent.last_record_unique_id).toBe(295527116);
     expect(sent).not.toHaveProperty('page');
@@ -498,13 +498,13 @@ describe('searchAwardsTool', () => {
 
     const page1 = await searchAwardsTool.handler(
       searchAwardsTool.input.parse({ limit: 1 }),
-      createMockContext(),
+      createMockContext({ errors: searchAwardsTool.errors }),
     );
-    expect(page1.results[0].generated_internal_id).toBe('AWD_A');
+    expect(page1.results[0]!.generated_internal_id).toBe('AWD_A');
     expect(page1.page_metadata.last_record_sort_value).toBe('SV1');
     expect(page1.page_metadata.last_record_unique_id).toBe(111);
     // page 1 used page-number pagination
-    expect(mockSearchAwards.mock.calls[0][0]).toHaveProperty('page', 1);
+    expect(mockSearchAwards.mock.calls[0]![0]).toHaveProperty('page', 1);
 
     mockSearchAwards.mockResolvedValueOnce({
       results: [{ generated_internal_id: 'AWD_B' }],
@@ -523,15 +523,15 @@ describe('searchAwardsTool', () => {
         last_record_sort_value: page1.page_metadata.last_record_sort_value,
         last_record_unique_id: page1.page_metadata.last_record_unique_id,
       }),
-      createMockContext(),
+      createMockContext({ errors: searchAwardsTool.errors }),
     );
 
-    const sent2 = mockSearchAwards.mock.calls[1][0];
+    const sent2 = mockSearchAwards.mock.calls[1]![0];
     expect(sent2.last_record_sort_value).toBe('SV1');
     expect(sent2.last_record_unique_id).toBe(111);
     expect(sent2).not.toHaveProperty('page');
     // distinct row past the cursor
-    expect(page2.results[0].generated_internal_id).toBe('AWD_B');
+    expect(page2.results[0]!.generated_internal_id).toBe('AWD_B');
   });
 
   it('renders the next-page cursor in format only when has_next (#37)', () => {
@@ -643,7 +643,7 @@ describe('searchAwardsTool', () => {
   });
 
   it('rejects a lone cursor value — both cursor fields are required together (#37)', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ last_record_sort_value: 'SV_only' });
     await expect(searchAwardsTool.handler(input, ctx)).rejects.toThrow();
     expect(mockSearchAwards).not.toHaveBeenCalled();
@@ -654,7 +654,7 @@ describe('searchAwardsTool', () => {
       results: [{ generated_internal_id: 'AWD_T' }],
       page_metadata: { hasNext: true, page: 1, limit: 10 },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const result = await searchAwardsTool.handler(searchAwardsTool.input.parse({ limit: 10 }), ctx);
     expect(result.page_metadata).not.toHaveProperty('total');
     expect(getEnrichment(ctx).totalCount).toBeUndefined();
@@ -678,7 +678,7 @@ describe('searchAwardsTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({
       keyword: 'lunar regolith excavation robotics',
       limit: 2,
@@ -703,7 +703,7 @@ describe('searchAwardsTool', () => {
       },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const result = await searchAwardsTool.handler(searchAwardsTool.input.parse({ limit: 1 }), ctx);
 
     expect(() => searchAwardsTool.output.parse(result)).not.toThrow();
@@ -733,7 +733,7 @@ describe('searchAwardsTool', () => {
       page_metadata: boundaryPageMetadata(100),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 100, limit: 100 });
     const result = await searchAwardsTool.handler(input, ctx);
 
@@ -759,7 +759,7 @@ describe('searchAwardsTool', () => {
       page_metadata: boundaryPageMetadata(101),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 101, limit: 100 });
     const result = await searchAwardsTool.handler(input, ctx);
 
@@ -773,7 +773,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 7, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 7, limit: 10 });
     const result = await searchAwardsTool.handler(input, ctx);
 
@@ -787,7 +787,7 @@ describe('searchAwardsTool', () => {
       page_metadata: { hasNext: false, page: 8, limit: 10 },
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const input = searchAwardsTool.input.parse({ keyword: 'defense', page: 8, limit: 10 });
     const result = await searchAwardsTool.handler(input, ctx);
 

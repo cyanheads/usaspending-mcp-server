@@ -36,7 +36,7 @@ describe('spendingByGeographyTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',
@@ -47,10 +47,10 @@ describe('spendingByGeographyTool', () => {
     expect(result.geo_layer).toBe('state');
     expect(result.results).toHaveLength(2);
     // Ranked by aggregated_amount descending, so California leads despite arriving second.
-    expect(result.results[0].shape_code).toBe('06');
-    expect(result.results[0].display_name).toBe('California');
-    expect(result.results[0].aggregated_amount).toBe(35_000_000_000);
-    expect(result.results[1].display_name).toBe('Washington');
+    expect(result.results[0]!.shape_code).toBe('06');
+    expect(result.results[0]!.display_name).toBe('California');
+    expect(result.results[0]!.aggregated_amount).toBe(35_000_000_000);
+    expect(result.results[1]!.display_name).toBe('Washington');
     expect(result.total).toBe(2);
     expect(result.total_areas_available).toBe(2);
     const enrichment = getEnrichment(ctx);
@@ -63,7 +63,7 @@ describe('spendingByGeographyTool', () => {
   it('returns structured empty response with notice when API returns no results', async () => {
     mockSpendingByGeography.mockResolvedValueOnce({ results: [] });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',
@@ -104,16 +104,16 @@ describe('spendingByGeographyTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',
     });
     const result = await spendingByGeographyTool.handler(input, ctx);
 
-    expect(result.results[0].population).toBeUndefined();
-    expect(result.results[0].per_capita).toBeUndefined();
-    expect(result.results[0].aggregated_amount).toBe(4_500_000_000);
+    expect(result.results[0]!.population).toBeUndefined();
+    expect(result.results[0]!.per_capita).toBeUndefined();
+    expect(result.results[0]!.aggregated_amount).toBe(4_500_000_000);
   });
 
   it('forwards subawards=true to service', async () => {
@@ -121,7 +121,7 @@ describe('spendingByGeographyTool', () => {
       results: [{ shape_code: '53', display_name: 'Washington', aggregated_amount: 1_000_000 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',
@@ -144,7 +144,7 @@ describe('spendingByGeographyTool', () => {
       })),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'county',
@@ -176,7 +176,7 @@ describe('spendingByGeographyTool', () => {
       })),
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'county',
@@ -193,7 +193,7 @@ describe('spendingByGeographyTool', () => {
       results: [{ shape_code: '53', display_name: 'Washington', aggregated_amount: 1_000_000 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',
@@ -217,7 +217,7 @@ describe('spendingByGeographyTool', () => {
       results: [{ shape_code: '53', display_name: 'Washington', aggregated_amount: 1_000_000 }],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: spendingByGeographyTool.errors });
     const input = spendingByGeographyTool.input.parse({
       scope: 'place_of_performance',
       geo_layer: 'state',

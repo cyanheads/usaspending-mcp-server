@@ -33,16 +33,16 @@ describe('searchFederalAccountsTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFederalAccountsTool.errors });
     const input = searchFederalAccountsTool.input.parse({ keyword: 'defense', limit: 5 });
     const result = await searchFederalAccountsTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].account_number).toBe('097-8097');
-    expect(result.results[0].account_name).toBe('Department of Defense Military Retirement Fund');
-    expect(result.results[0].managing_agency).toBe('Department of Defense');
-    expect(result.results[0].managing_agency_acronym).toBe('DOD');
-    expect(result.results[0].budgetary_resources).toBe(257716000000.0);
+    expect(result.results[0]!.account_number).toBe('097-8097');
+    expect(result.results[0]!.account_name).toBe('Department of Defense Military Retirement Fund');
+    expect(result.results[0]!.managing_agency).toBe('Department of Defense');
+    expect(result.results[0]!.managing_agency_acronym).toBe('DOD');
+    expect(result.results[0]!.budgetary_resources).toBe(257716000000.0);
     expect(result.page_metadata.count).toBe(42);
     expect(result.page_metadata.has_next).toBe(true);
 
@@ -60,7 +60,7 @@ describe('searchFederalAccountsTool', () => {
       results: [],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFederalAccountsTool.errors });
     const input = searchFederalAccountsTool.input.parse({
       keyword: 'zzznomatch',
       agency_identifier: '999',
@@ -87,16 +87,16 @@ describe('searchFederalAccountsTool', () => {
       ],
     });
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchFederalAccountsTool.errors });
     const input = searchFederalAccountsTool.input.parse({ keyword: 'sparse' });
     const result = await searchFederalAccountsTool.handler(input, ctx);
 
     expect(result.results).toHaveLength(1);
-    expect(result.results[0].account_number).toBe('012-3456');
-    expect(result.results[0].agency_identifier).toBeUndefined();
-    expect(result.results[0].managing_agency).toBeUndefined();
-    expect(result.results[0].managing_agency_acronym).toBeUndefined();
-    expect(result.results[0].budgetary_resources).toBeUndefined();
+    expect(result.results[0]!.account_number).toBe('012-3456');
+    expect(result.results[0]!.agency_identifier).toBeUndefined();
+    expect(result.results[0]!.managing_agency).toBeUndefined();
+    expect(result.results[0]!.managing_agency_acronym).toBeUndefined();
+    expect(result.results[0]!.budgetary_resources).toBeUndefined();
   });
 
   it('throws when service call fails', async () => {

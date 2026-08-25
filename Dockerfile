@@ -3,8 +3,17 @@
 #
 # This stage installs all dependencies (including dev), builds the TypeScript
 # source code into JavaScript, and prepares the production assets.
+#
+# Pinned to $BUILDPLATFORM — the build host's native architecture — rather than
+# the target. `bun run build` is `tsc` + `tsc-alias`, so its output is
+# platform-independent JavaScript, and the production stage below copies only
+# `dist/`; nothing architecture-specific crosses the stage boundary. Emulating
+# this stage buys nothing and costs correctness: Bun 1.4.0 aborts under QEMU's
+# linux/amd64 emulation (`qemu: uncaught target signal 6`, exit 134), so a
+# multi-arch build from an arm64 host dies here. Cross-compiling sidesteps the
+# emulator entirely and drops a slow emulated TypeScript compile per target.
 # ==============================================================================
-FROM oven/bun:1.4.0 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
 
 WORKDIR /usr/src/app
 

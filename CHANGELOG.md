@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.3](changelog/0.4.x/0.4.3.md) — 2026-09-20
+
+Adopts mcp-ts-core ^0.13.6: the framework skill tree moves to framework-skills/, the stateless session posture is declared in src/, and every error-contract entry the service layer throws is marked thrownBy: 'service' while handler-local throws forward their declared recovery hint.
+
 ## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-08-24 · ⚠️ Breaking
 
 Adopts mcp-ts-core ^0.12.3 (SDK v2): tool inputs are now strict, the advertised outputSchema declares the error envelope, protocol revision 2026-07-28 is served everywhere, and session mode is pinned to stateless on every surface.

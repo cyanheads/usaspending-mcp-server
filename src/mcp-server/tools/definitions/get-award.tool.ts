@@ -166,6 +166,7 @@ export const getAwardTool = tool('usaspending_get_award', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -173,6 +174,7 @@ export const getAwardTool = tool('usaspending_get_award', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery:
         'Retry the request; award detail is a single record, so there is nothing to narrow.',
     },
@@ -184,11 +186,11 @@ export const getAwardTool = tool('usaspending_get_award', {
     const r = await svc.getAward(input.award_id, ctx);
 
     if (!r || (!r.generated_unique_award_id && !r.piid && !r.fain)) {
-      throw ctx.fail('award_not_found', `Award not found: ${input.award_id}`, {
-        recovery: {
-          hint: 'Use generated_internal_id from usaspending_search_awards results — not display Award IDs.',
-        },
-      });
+      throw ctx.fail(
+        'award_not_found',
+        `Award not found: ${input.award_id}`,
+        ctx.recoveryFor('award_not_found'),
+      );
     }
 
     const contractData = r.latest_transaction_contract_data;

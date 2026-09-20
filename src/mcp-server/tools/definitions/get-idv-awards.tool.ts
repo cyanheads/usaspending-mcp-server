@@ -125,6 +125,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -132,6 +133,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'Retry with a smaller limit so the upstream assembles a lighter page.',
     },
   ],

@@ -79,6 +79,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -86,6 +87,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery:
         'Retry the request; account detail is a single record, so there is nothing to narrow.',
     },
@@ -98,11 +100,11 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
     const account = await svc.getFederalAccount(input.account_code, ctx);
 
     if (!account?.account_title) {
-      throw ctx.fail('account_not_found', `Federal account not found: ${input.account_code}`, {
-        recovery: {
-          hint: 'Search for the account with usaspending_search_federal_accounts and pass the account_number it returns. Format: AGENCY-MAIN (e.g., 097-0100).',
-        },
-      });
+      throw ctx.fail(
+        'account_not_found',
+        `Federal account not found: ${input.account_code}`,
+        ctx.recoveryFor('account_not_found'),
+      );
     }
 
     const children = (account.children ?? []).map((c) => ({

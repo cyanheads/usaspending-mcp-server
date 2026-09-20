@@ -89,6 +89,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -96,6 +97,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'Retry with a single fiscal_year set to scope the profile to one year.',
     },
   ],
@@ -113,11 +115,11 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
     );
 
     if (!r?.name) {
-      throw ctx.fail('recipient_not_found', `Recipient not found: ${input.recipient_id}`, {
-        recovery: {
-          hint: 'Search for the recipient name with usaspending_search_recipients to find the correct ID.',
-        },
-      });
+      throw ctx.fail(
+        'recipient_not_found',
+        `Recipient not found: ${input.recipient_id}`,
+        ctx.recoveryFor('recipient_not_found'),
+      );
     }
 
     return {

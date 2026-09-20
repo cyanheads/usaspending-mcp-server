@@ -339,6 +339,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -346,6 +347,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery:
         'Narrow the search — a shorter time_period, fewer award_type_codes, or a smaller limit — then retry.',
     },
@@ -391,11 +393,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail(
         'pagination_limit_exceeded',
         `Requested page ${input.page} at limit ${input.limit} exceeds this endpoint's ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window.`,
-        {
-          recovery: {
-            hint: `Continue via keyset pagination with last_record_sort_value and last_record_unique_id. The endpoint only returns that pair while page × limit stays under ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so re-page from within that window to capture it.`,
-          },
-        },
+        ctx.recoveryFor('pagination_limit_exceeded'),
       );
     }
 
@@ -428,11 +426,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail(
         'date_before_earliest',
         `Start date ${startDate} precedes ${EARLIEST_SEARCH_DATE}, the earliest date this endpoint can search.`,
-        {
-          recovery: {
-            hint: `Re-request with a start date of ${EARLIEST_SEARCH_DATE} or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.`,
-          },
-        },
+        ctx.recoveryFor('date_before_earliest'),
       );
     }
 

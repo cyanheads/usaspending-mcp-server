@@ -107,7 +107,7 @@ export class USASpendingService {
    *
    * Deadline expiry reaches this frame two ways, neither coherent on its own.
    * Aborted mid-fetch, `fetchWithTimeout` throws its `FetchAborted`
-   * `InternalError` ("was aborted") and `withRetry` re-throws it verbatim,
+   * `RequestCancelled` ("was aborted") and `withRetry` re-throws it verbatim,
    * naming no deadline. Aborted mid-backoff, `withRetry`'s internal sleep
    * rejects with the raw abort reason, which bypasses its error-enrichment path
    * entirely and surfaces a bare `AbortError`. Both are normalized here into one

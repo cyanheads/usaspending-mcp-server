@@ -179,6 +179,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -186,6 +187,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'Narrow the query — fewer DEF codes in filters, or a smaller limit — then retry.',
     },
   ],

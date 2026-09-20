@@ -16,6 +16,10 @@ import { describe, expect, it } from 'vitest';
 const read = (file: string) => readFileSync(resolve(file), 'utf-8');
 
 describe('MCP_SESSION_MODE is stateless on every surface', () => {
+  it('createApp declares it in src/, the durable form', () => {
+    expect(read('src/index.ts')).toMatch(/sessionMode:\s*'stateless'/);
+  });
+
   it('the Dockerfile sets it explicitly', () => {
     expect(read('Dockerfile')).toContain('ENV MCP_SESSION_MODE="stateless"');
   });

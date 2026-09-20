@@ -392,7 +392,7 @@ describe('USASpendingService POST', () => {
  * The retry loop runs under one wall-clock budget, so a per-attempt timeout is
  * not re-paid on every attempt (#52). Deadline expiry reaches the caller through
  * two different framework paths, each incoherent on its own — mid-fetch it is
- * `fetchWithTimeout`'s `FetchAborted` InternalError ("was aborted"), mid-backoff
+ * `fetchWithTimeout`'s `FetchAborted` RequestCancelled ("was aborted"), mid-backoff
  * it is the raw `AbortError` DOMException `withRetry`'s sleep rejects with,
  * which never passes through the enrichment path. Both must land as one Timeout
  * naming the budget.
@@ -483,8 +483,10 @@ describe('USASpendingService request budget', () => {
     const pending = svc.getDisasterOverview(callerCtx).catch((e: unknown) => e);
     caller.abort();
 
+    // RequestCancelled, never the budget Timeout: the caller went away, so the
+    // deadline never fired and there is no budget to name.
     expect(await pending).toMatchObject({
-      code: JsonRpcErrorCode.InternalError,
+      code: JsonRpcErrorCode.RequestCancelled,
       data: { errorSource: 'FetchAborted' },
     });
   });

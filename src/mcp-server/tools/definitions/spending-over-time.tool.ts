@@ -130,6 +130,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -137,6 +138,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery:
         'Narrow the filters — a shorter time_period or a coarser group — then retry the aggregation.',
     },

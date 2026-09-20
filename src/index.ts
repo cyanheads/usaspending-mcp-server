@@ -27,6 +27,14 @@ await createApp({
   cacheHints: {
     'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
   },
+  /**
+   * Every tool answers from the USAspending.gov response alone — no handler
+   * calls `ctx.requestInput`, so none needs a session to be resumed into.
+   * Declaring the posture here keeps it with the code rather than only in
+   * `.env.example` and the Dockerfile; `MCP_SESSION_MODE` still wins when it
+   * carries a meaningful value.
+   */
+  sessionMode: 'stateless',
   instructions:
     'USAspending.gov MCP server — federal award, recipient, agency, and spending data from the US Treasury DATA Act platform.\n' +
     '- Start with usaspending_list_agencies or usaspending_autocomplete_filters to discover agency codes and NAICS/PSC codes\n' +

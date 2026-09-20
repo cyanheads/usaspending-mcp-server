@@ -132,13 +132,14 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'Neither toptier_code nor agency_slug was provided.',
       recovery:
-        'Provide either a toptier_code (e.g., 097) or agency_slug (e.g., department-of-defense).',
+        'Provide either a toptier_code (e.g., 097) or agency_slug (e.g., department-of-defense) — usaspending_list_agencies lists both.',
     },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -146,17 +147,18 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'Retry the request; the sub-agency page is the slow part, so request one page.',
     },
   ],
 
   async handler(input, ctx) {
     if (!input.toptier_code?.trim() && !input.agency_slug?.trim()) {
-      throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required', {
-        recovery: {
-          hint: 'Call usaspending_list_agencies to find the correct toptier_code or agency_slug.',
-        },
-      });
+      throw ctx.fail(
+        'missing_input',
+        'Either toptier_code or agency_slug is required',
+        ctx.recoveryFor('missing_input'),
+      );
     }
 
     const svc = getUSASpendingService();
@@ -173,22 +175,22 @@ export const getAgencyTool = tool('usaspending_get_agency', {
           a.agency_name?.toLowerCase().replace(/\s+/g, '-') === slug,
       );
       if (!match?.toptier_code) {
-        throw ctx.fail('agency_not_found', `No agency found with slug: ${input.agency_slug}`, {
-          recovery: {
-            hint: 'Call usaspending_list_agencies to browse available agency slugs and toptier codes.',
-          },
-        });
+        throw ctx.fail(
+          'agency_not_found',
+          `No agency found with slug: ${input.agency_slug}`,
+          ctx.recoveryFor('agency_not_found'),
+        );
       }
       toptierCode = match.toptier_code;
     }
 
     ctx.log.info('usaspending_get_agency', { toptier_code: toptierCode });
     if (!toptierCode) {
-      throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required', {
-        recovery: {
-          hint: 'Call usaspending_list_agencies to find the correct toptier_code or agency_slug.',
-        },
-      });
+      throw ctx.fail(
+        'missing_input',
+        'Either toptier_code or agency_slug is required',
+        ctx.recoveryFor('missing_input'),
+      );
     }
     const [detail, subAgenciesData, budgetData] = await Promise.all([
       svc.getAgency(toptierCode, ctx),
@@ -201,11 +203,11 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     ]);
 
     if (!detail?.name) {
-      throw ctx.fail('agency_not_found', `Agency not found: ${toptierCode}`, {
-        recovery: {
-          hint: 'Call usaspending_list_agencies to browse available agency toptier codes and slugs.',
-        },
-      });
+      throw ctx.fail(
+        'agency_not_found',
+        `Agency not found: ${toptierCode}`,
+        ctx.recoveryFor('agency_not_found'),
+      );
     }
 
     // Budget totals live on the budgetary-resources endpoint, not the agency overview.

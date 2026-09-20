@@ -103,6 +103,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'The API may be temporarily down. Retry the request after a few seconds.',
     },
     {
@@ -110,6 +111,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       code: JsonRpcErrorCode.Timeout,
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
+      thrownBy: 'service',
       recovery: 'Retry with an agency_identifier set and a smaller limit to lighten the query.',
     },
   ],

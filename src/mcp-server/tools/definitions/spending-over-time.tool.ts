@@ -7,6 +7,13 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import {
+  ANALYTICS_DATE_FIELDS,
+  filledBoundNotice,
+  floorViolationMessage,
+  invertedRangeMessage,
+  optionalIsoDate,
+} from './dates.js';
 import { buildFilters } from './filters.js';
 import { formatCurrency } from './formatting.js';
 
@@ -34,8 +41,12 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
         agency_name: z.string().optional().describe('Awarding agency name filter'),
         recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
         naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
-        time_period_start: z.string().optional().describe('Start of the time window (YYYY-MM-DD)'),
-        time_period_end: z.string().optional().describe('End of the time window (YYYY-MM-DD)'),
+        time_period_start: optionalIsoDate(
+          'Start of the time window (YYYY-MM-DD), 2007-10-01 or later. Given alone, the window runs through today (UTC).',
+        ),
+        time_period_end: optionalIsoDate(
+          'End of the time window (YYYY-MM-DD). Given alone, the window starts at 2007-10-01, the earliest searchable date.',
+        ),
       })
       .optional()
       .describe(
@@ -114,13 +125,16 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     applied_time_period_start: z
       .string()
       .optional()
-      .describe('Start date filter applied (YYYY-MM-DD)'),
-    applied_time_period_end: z.string().optional().describe('End date filter applied (YYYY-MM-DD)'),
+      .describe('Start of the time window sent (YYYY-MM-DD), including a filled-in start'),
+    applied_time_period_end: z
+      .string()
+      .optional()
+      .describe('End of the time window sent (YYYY-MM-DD), including a filled-in end'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when no periods are returned — suggests broadening filters. Absent when results are present.',
+        'Names a time-window bound that was filled in because only the other was supplied, and suggests broadening filters when no periods are returned. Absent when neither applies.',
       ),
   },
 
@@ -142,6 +156,21 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       recovery:
         'Narrow the filters — a shorter time_period or a coarser group — then retry the aggregation.',
     },
+    {
+      reason: 'date_range_inverted',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'Both filters.time_period_start and filters.time_period_end were supplied and the start falls after the end.',
+      retryable: false,
+      recovery: 'Swap the two dates so the start date is on or before the end date, then retry.',
+    },
+    {
+      reason: 'date_before_earliest',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The resolved start date precedes the 2007-10-01 earliest date this endpoint can search.',
+      retryable: false,
+      recovery:
+        'Re-request with a start date of 2007-10-01 or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -154,7 +183,16 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
         ? input.filters.award_type_codes
         : ['A', 'B', 'C', 'D'],
     };
-    const filters = buildFilters(filtersInput);
+    const { filters, timePeriod } = buildFilters(filtersInput);
+    const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
+    if (inverted) {
+      throw ctx.fail('date_range_inverted', inverted, ctx.recoveryFor('date_range_inverted'));
+    }
+    // Upstream answers a start before the floor with an undeclared 422.
+    const beforeFloor = floorViolationMessage(timePeriod);
+    if (beforeFloor) {
+      throw ctx.fail('date_before_earliest', beforeFloor, ctx.recoveryFor('date_before_earliest'));
+    }
     const data = await svc.spendingOverTime(
       { group: input.group, filters, subawards: input.subawards },
       ctx,
@@ -194,19 +232,23 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       ...(input.filters?.naics_codes?.length
         ? { applied_naics_codes: input.filters.naics_codes.join(', ') }
         : {}),
-      ...(input.filters?.time_period_start
-        ? { applied_time_period_start: input.filters.time_period_start }
-        : {}),
-      ...(input.filters?.time_period_end
-        ? { applied_time_period_end: input.filters.time_period_end }
+      ...(timePeriod
+        ? {
+            applied_time_period_start: timePeriod.start_date,
+            applied_time_period_end: timePeriod.end_date,
+          }
         : {}),
     });
 
+    // enrich.notice is last-wins, so every notice source joins into one string.
+    const notices = [filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS)];
     if (results.length === 0) {
-      ctx.enrich.notice(
+      notices.push(
         'No spending data periods returned. Try a broader time period or remove keyword/agency filters to get more data points.',
       );
     }
+    const notice = notices.filter(Boolean).join(' ');
+    if (notice) ctx.enrich.notice(notice);
 
     return { group: input.group, results, total_periods: results.length };
   },

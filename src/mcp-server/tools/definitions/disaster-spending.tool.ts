@@ -6,7 +6,11 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
-import type { RawDisasterResult, RawPageMetadata } from '@/services/usaspending/types.js';
+import type {
+  RawDisasterBreakdownResponse,
+  RawDisasterResult,
+  RawDisasterTotals,
+} from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
@@ -20,6 +24,38 @@ import { formatPaginationLine } from './pagination.js';
  * way to tell a cap from a count — hence the disclosure below.
  */
 const RECIPIENT_TOTAL_CEILING = 10_000;
+
+/**
+ * Keeps the upstream breakdown totals that are real numbers. Members vary by
+ * dimension and spending_type, and none is ever derived from the page of rows —
+ * an absent or null member stays absent, and an empty set yields no totals.
+ */
+function mapTotals(totals: RawDisasterTotals | null | undefined) {
+  if (!totals) return;
+  const mapped = {
+    ...(typeof totals.obligation === 'number' ? { obligation: totals.obligation } : {}),
+    ...(typeof totals.outlay === 'number' ? { outlay: totals.outlay } : {}),
+    ...(typeof totals.total_budgetary_resources === 'number'
+      ? { total_budgetary_resources: totals.total_budgetary_resources }
+      : {}),
+    ...(typeof totals.award_count === 'number' ? { award_count: totals.award_count } : {}),
+  };
+  return Object.keys(mapped).length > 0 ? mapped : undefined;
+}
+
+/**
+ * One usable id per row. `disaster/recipient/spending/` sends an array of
+ * recipient hash IDs (a child-level `-C` beside a recipient-level `-R`, for
+ * one); the `-R` entry is what `usaspending_get_recipient` resolves, so it wins,
+ * else the first entry. A scalar id passes through as a string.
+ */
+function rowId(id: RawDisasterResult['id']): string | undefined {
+  if (Array.isArray(id)) {
+    const ids = id.map(String);
+    return ids.find((entry) => entry.endsWith('-R')) ?? ids[0];
+  }
+  return id == null ? undefined : String(id);
+}
 
 export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   title: 'Disaster and Emergency Spending',
@@ -37,7 +73,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .enum(['award', 'total'])
       .default('award')
       .describe(
-        'Data type for the agency and recipient dimensions: award (award-level obligations and outlays) or total (includes direct non-award spending). Ignored for cfda and overview; the geography dimension is not user-controllable and always reports obligation-based amounts.',
+        'Data type for the agency dimension: award (award-level obligations and outlays) or total (includes direct non-award spending, plus total budgetary resources). Ignored for cfda, recipient, and overview, which report award-level amounts either way; the geography dimension is not user-controllable and always reports obligation-based amounts.',
       ),
     filters: z
       .object({
@@ -95,7 +131,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     spending_type: z
       .string()
       .describe(
-        'Data type returned — award/total for agency, cfda, and recipient; obligation for geography; spending for overview',
+        'Data type returned — award/total for agency; the requested value echoed for cfda and recipient, whose amounts do not vary with it; obligation for geography; spending for overview',
       ),
     overview: z
       .object({
@@ -125,15 +161,51 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       })
       .optional()
       .describe('Top-level overview totals (dimension=overview only)'),
+    totals: z
+      .object({
+        obligation: z
+          .number()
+          .optional()
+          .describe('Obligations in USD across the whole matching result set'),
+        outlay: z
+          .number()
+          .optional()
+          .describe('Outlays in USD across the whole matching result set'),
+        total_budgetary_resources: z
+          .number()
+          .optional()
+          .describe(
+            'Total budgetary resources in USD across the result set (agency dimension with spending_type total)',
+          ),
+        award_count: z
+          .number()
+          .optional()
+          .describe('Number of awards across the result set (award-level breakdowns)'),
+      })
+      .optional()
+      .describe(
+        'Totals across every matching row, as reported upstream — not a sum of this page. Present for the agency, cfda, and recipient dimensions; the members depend on dimension and spending_type. Absent for overview and geography.',
+      ),
     results: z
       .array(
         z
           .object({
-            id: z.string().optional().describe('Item ID'),
+            id: z
+              .string()
+              .optional()
+              .describe(
+                'Item ID. On the recipient dimension, a recipient hash ID for usaspending_get_recipient — the recipient-level (-R) ID when the recipient has several.',
+              ),
             code: z.string().optional().describe('Code (agency code, CFDA number, DEF code, etc.)'),
             name: z.string().optional().describe('Item name or description'),
             obligation: z.number().optional().describe('Obligation amount in USD'),
             outlay: z.number().optional().describe('Outlay amount in USD'),
+            total_budgetary_resources: z
+              .number()
+              .optional()
+              .describe(
+                'Total budgetary resources in USD for this row (agency dimension with spending_type total)',
+              ),
             award_count: z.number().optional().describe('Number of awards'),
             face_value_of_loan: z
               .number()
@@ -188,7 +260,8 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
       thrownBy: 'service',
-      recovery: 'Narrow the query — fewer DEF codes in filters, or a smaller limit — then retry.',
+      recovery:
+        'By dimension — agency, cfda, recipient: pass fewer filters.def_codes or a smaller limit, then retry. geography: pass fewer filters.def_codes, then retry. overview: the upstream endpoint can run past the request budget on its own, so retry later, or call dimension "agency" with filters.def_codes (e.g. ["L", "M", "N", "O", "P"] for COVID-19), spending_type "total", and limit 100 for per-agency obligations and outlays plus overall totals.',
     },
   ],
 
@@ -262,17 +335,14 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     // top-level limit/page are silently ignored (upstream always returns its default page).
     const paginationBody = { ...baseBody, pagination: { page: input.page, limit: input.limit } };
 
-    let rawResults: { results: RawDisasterResult[]; page_metadata: RawPageMetadata };
+    let rawResults: RawDisasterBreakdownResponse;
 
     if (input.dimension === 'agency') {
-      const data = await svc.getDisasterByAgency(input.spending_type, paginationBody, ctx);
-      rawResults = { results: data.results ?? [], page_metadata: data.page_metadata ?? {} };
+      rawResults = await svc.getDisasterByAgency(input.spending_type, paginationBody, ctx);
     } else if (input.dimension === 'cfda') {
-      const data = await svc.getDisasterByCfda(paginationBody, ctx);
-      rawResults = { results: data.results ?? [], page_metadata: data.page_metadata ?? {} };
+      rawResults = await svc.getDisasterByCfda(paginationBody, ctx);
     } else if (input.dimension === 'recipient') {
-      const data = await svc.getDisasterByRecipient(input.spending_type, paginationBody, ctx);
-      rawResults = { results: data.results ?? [], page_metadata: data.page_metadata ?? {} };
+      rawResults = await svc.getDisasterByRecipient(input.spending_type, paginationBody, ctx);
     } else {
       // geography — this endpoint requires a spending_type from a vocabulary distinct from
       // the breakdown dimensions (obligation | outlay | face_value_of_loan); omitting it
@@ -315,16 +385,20 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }
 
     const results = (rawResults.results ?? []).map((r) => ({
-      ...(r.id != null ? { id: String(r.id) } : {}),
+      ...(rowId(r.id) !== undefined ? { id: rowId(r.id) } : {}),
       ...(r.code ? { code: r.code } : {}),
       ...(r.name || r.description ? { name: r.name ?? r.description ?? undefined } : {}),
       ...(typeof r.obligation === 'number' ? { obligation: r.obligation } : {}),
       ...(typeof r.outlay === 'number' ? { outlay: r.outlay } : {}),
+      ...(typeof r.total_budgetary_resources === 'number'
+        ? { total_budgetary_resources: r.total_budgetary_resources }
+        : {}),
       ...(typeof r.award_count === 'number' ? { award_count: r.award_count } : {}),
       ...(typeof r.face_value_of_loan === 'number'
         ? { face_value_of_loan: r.face_value_of_loan }
         : {}),
     }));
+    const totals = mapTotals(rawResults.totals);
 
     const pageMeta = rawResults.page_metadata ?? {};
     /**
@@ -355,6 +429,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     return {
       dimension: input.dimension,
       spending_type: input.spending_type,
+      ...(totals ? { totals } : {}),
       results,
       page_metadata: {
         has_next: hasNext,
@@ -398,6 +473,19 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       }
     }
 
+    if (result.totals) {
+      const t = result.totals;
+      const parts = [
+        t.obligation !== undefined ? `Obligation ${formatCurrency(t.obligation)}` : undefined,
+        t.outlay !== undefined ? `Outlay ${formatCurrency(t.outlay)}` : undefined,
+        t.total_budgetary_resources !== undefined
+          ? `Budgetary Resources ${formatCurrency(t.total_budgetary_resources)}`
+          : undefined,
+        t.award_count !== undefined ? `Awards ${t.award_count.toLocaleString()}` : undefined,
+      ].filter(Boolean);
+      lines.push(`**Totals:** ${parts.join(' · ')} _(all matching rows, not this page)_`);
+    }
+
     if (result.page_metadata) {
       lines.push(formatPaginationLine(result.page_metadata));
     }
@@ -409,12 +497,15 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         );
       }
     } else {
+      // Only the agency breakdown under spending_type total carries per-row budgetary
+      // resources; elsewhere the column would be all N/A.
+      const showBudgetary = result.results.some((r) => r.total_budgetary_resources !== undefined);
       lines.push('');
       lines.push(
-        '| Name/Display | ID | Code | Shape | Obligation | Outlay | Aggregated | Population | Per Capita | Loans | Awards |',
+        `| Name/Display | ID | Code | Shape | Obligation | Outlay |${showBudgetary ? ' Budgetary Resources |' : ''} Aggregated | Population | Per Capita | Loans | Awards |`,
       );
       lines.push(
-        '|:-------------|:---|:-----|:------|:-----------|:-------|:-----------|:-----------|:-----------|:------|:-------|',
+        `|:-------------|:---|:-----|:------|:-----------|:-------|${showBudgetary ? ':--------------------|' : ''}:-----------|:-----------|:-----------|:------|:-------|`,
       );
       for (const r of result.results) {
         const label =
@@ -426,6 +517,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         const shape = r.shape_code ?? 'N/A';
         const oblig = r.obligation !== undefined ? formatCurrency(r.obligation) : 'N/A';
         const outlay = r.outlay !== undefined ? formatCurrency(r.outlay) : 'N/A';
+        const budgetary = showBudgetary
+          ? ` ${r.total_budgetary_resources !== undefined ? formatCurrency(r.total_budgetary_resources) : 'N/A'} |`
+          : '';
         const agg = r.aggregated_amount !== undefined ? formatCurrency(r.aggregated_amount) : 'N/A';
         const population = r.population !== undefined ? r.population.toLocaleString() : 'N/A';
         const perCapita = r.per_capita !== undefined ? formatCurrency(r.per_capita) : 'N/A';
@@ -433,7 +527,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           r.face_value_of_loan !== undefined ? formatCurrency(r.face_value_of_loan) : 'N/A';
         const awards = r.award_count !== undefined ? String(r.award_count) : 'N/A';
         lines.push(
-          `| ${label} | ${id} | ${code} | ${shape} | ${oblig} | ${outlay} | ${agg} | ${population} | ${perCapita} | ${loans} | ${awards} |`,
+          `| ${label} | ${id} | ${code} | ${shape} | ${oblig} | ${outlay} |${budgetary} ${agg} | ${population} | ${perCapita} | ${loans} | ${awards} |`,
         );
       }
     }

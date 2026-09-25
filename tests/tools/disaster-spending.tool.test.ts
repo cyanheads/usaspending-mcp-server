@@ -3,7 +3,7 @@
  * @module tests/tools/disaster-spending.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
 
@@ -290,6 +290,51 @@ describe('disasterSpendingTool', () => {
     expect(result.dimension).toBe('recipient');
     expect(result.results[0]!.face_value_of_loan).toBe(350_000);
     expect(result.results[0]!.name).toBe('Small Biz Corp');
+  });
+
+  describe('recipient id from an upstream array (#65)', () => {
+    const HASH = 'fc4f80c3-8d23-149a-daef-5faf394ef076';
+    const runRecipient = async (id: unknown) => {
+      mockGetDisasterByRecipient.mockResolvedValueOnce({
+        results: [
+          { id, code: '617565247', description: 'ABT GLOBAL LLC', obligation: 0, outlay: 0 },
+        ],
+        page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
+      });
+      return runToolContract(disasterSpendingTool, {
+        dimension: 'recipient',
+        filters: { def_codes: ['Z'] },
+      });
+    };
+    const idOf = (result: Awaited<ReturnType<typeof runRecipient>>) =>
+      (result.structuredContent as { results: { id?: string }[] }).results[0]?.id;
+    const textOf = (result: Awaited<ReturnType<typeof runRecipient>>) =>
+      result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+
+    it('picks the recipient-level -R entry from a child + recipient pair', async () => {
+      const result = await runRecipient([`${HASH}-C`, `${HASH}-R`]);
+
+      expect(idOf(result)).toBe(`${HASH}-R`);
+      const text = textOf(result);
+      expect(text).toContain(`${HASH}-R`);
+      expect(text).not.toContain(`${HASH}-C`);
+    });
+
+    it('takes the first entry when none is recipient-level', async () => {
+      const result = await runRecipient([`${HASH}-C`, `${HASH}-P`]);
+      expect(idOf(result)).toBe(`${HASH}-C`);
+    });
+
+    it('passes a plain string id through unchanged', async () => {
+      const result = await runRecipient(`${HASH}-R`);
+      expect(idOf(result)).toBe(`${HASH}-R`);
+    });
+
+    it('omits the id for an empty array', async () => {
+      const result = await runRecipient([]);
+      expect(result.isError).toBeFalsy();
+      expect(idOf(result)).toBeUndefined();
+    });
   });
 
   /**
@@ -602,5 +647,204 @@ describe('disasterSpendingTool', () => {
     const text = (disasterSpendingTool.format!(output)[0] as { text: string }).text;
     expect(text).toContain('**Total items:** ~38');
     expect(text).not.toContain(' of ~');
+  });
+});
+
+/**
+ * The service attaches this entry's text to every timeout the tool sees (#57),
+ * so it has to name a lever that actually exists for each dimension: overview
+ * applies neither def_codes nor limit, and geography is not paginated.
+ */
+describe('disasterSpendingTool api_timeout recovery (#57)', () => {
+  const hint = () => {
+    const entry = disasterSpendingTool.errors?.find((e) => e.reason === 'api_timeout');
+    if (!entry) throw new Error('api_timeout is not declared');
+    return entry.recovery;
+  };
+  const clause = (from: string, to?: string) => {
+    const text = hint();
+    const start = text.indexOf(from);
+    expect(start).toBeGreaterThanOrEqual(0);
+    return text.slice(start, to ? text.indexOf(to) : undefined);
+  };
+
+  it('points agency, cfda, and recipient at fewer def_codes or a smaller limit', () => {
+    const text = clause('agency, cfda, recipient:', 'geography:');
+    expect(text).toContain('fewer filters.def_codes');
+    expect(text).toContain('smaller limit');
+  });
+
+  it('points geography at fewer def_codes only — it is not paginated', () => {
+    const text = clause('geography:', 'overview:');
+    expect(text).toContain('fewer filters.def_codes');
+    expect(text).not.toMatch(/limit/);
+  });
+
+  it('points overview at a later retry or the agency breakdown, never at narrowing', () => {
+    const text = clause('overview:');
+    expect(text).not.toMatch(/fewer|smaller/);
+    expect(text).toContain('retry later');
+    expect(text).toContain('dimension "agency"');
+    expect(text).toContain('spending_type "total"');
+    expect(text).toContain('limit 100');
+  });
+});
+
+/**
+ * The breakdown endpoints return a `totals` object beside the page of rows, and
+ * the agency endpoint adds per-row `total_budgetary_resources`. Shapes below are
+ * the live responses: `spending_type: total` totals carry budgetary resources,
+ * award-level totals carry an award count instead, and geography has none (#63).
+ */
+describe('disasterSpendingTool breakdown totals (#63)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const text = (output: Parameters<NonNullable<typeof disasterSpendingTool.format>>[0]) =>
+    (disasterSpendingTool.format!(output)[0] as { text: string }).text;
+
+  it('surfaces spending_type=total totals and per-row budgetary resources on both surfaces', async () => {
+    mockGetDisasterByAgency.mockResolvedValueOnce({
+      totals: {
+        obligation: 2_926_824_638_265.76,
+        outlay: 2_912_646_493_659.59,
+        total_budgetary_resources: 3_050_104_300_214.82,
+      },
+      results: [
+        {
+          id: 1522,
+          code: '077',
+          description: 'U.S. International Development Finance Corporation',
+          award_count: null,
+          obligation: 99_043.63,
+          outlay: 99_043.63,
+          total_budgetary_resources: 99_043.63,
+          children: [],
+        },
+      ],
+      page_metadata: { page: 1, total: 39, limit: 1, hasNext: true },
+    });
+
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      spending_type: 'total',
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
+      limit: 1,
+    });
+    const result = disasterSpendingTool.output.parse(
+      await disasterSpendingTool.handler(input, ctx),
+    );
+
+    expect(result.totals).toEqual({
+      obligation: 2_926_824_638_265.76,
+      outlay: 2_912_646_493_659.59,
+      total_budgetary_resources: 3_050_104_300_214.82,
+    });
+    expect(result.results[0]!.total_budgetary_resources).toBe(99_043.63);
+
+    const rendered = text(result);
+    expect(rendered).toContain('**Totals:**');
+    expect(rendered).toContain('Obligation $2,926,824,638,265.76');
+    expect(rendered).toContain('Outlay $2,912,646,493,659.59');
+    expect(rendered).toContain('Budgetary Resources $3,050,104,300,214.82');
+    expect(rendered).toContain('| Budgetary Resources |');
+    expect(rendered).toContain('$99,043.63 |');
+  });
+
+  it('surfaces award-level totals with their award count and no budgetary column', async () => {
+    mockGetDisasterByCfda.mockResolvedValueOnce({
+      totals: {
+        obligation: 1_512_344_945_679.33,
+        outlay: 1_497_013_666_503.08,
+        award_count: 21_178_482,
+      },
+      results: [
+        {
+          id: 2246,
+          code: '98.008',
+          description: 'Food for Peace Emergency Program (EP)',
+          award_count: 1,
+          obligation: 5,
+          outlay: 5,
+        },
+      ],
+      page_metadata: { page: 1, total: 400, limit: 1, hasNext: true },
+    });
+
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'cfda',
+      filters: { def_codes: ['L', 'M', 'N', 'O', 'P'] },
+      limit: 1,
+    });
+    const result = disasterSpendingTool.output.parse(
+      await disasterSpendingTool.handler(input, ctx),
+    );
+
+    expect(result.totals).toEqual({
+      obligation: 1_512_344_945_679.33,
+      outlay: 1_497_013_666_503.08,
+      award_count: 21_178_482,
+    });
+    expect(result.results[0]).not.toHaveProperty('total_budgetary_resources');
+
+    const rendered = text(result);
+    expect(rendered).toContain('**Totals:**');
+    expect(rendered).toContain('21,178,482');
+    expect(rendered).not.toContain('Budgetary Resources');
+  });
+
+  it('drops null totals members and null per-row budgetary resources instead of zeroing them', async () => {
+    mockGetDisasterByAgency.mockResolvedValueOnce({
+      totals: { obligation: 10, outlay: null, award_count: null },
+      results: [
+        {
+          id: 882,
+          code: '086',
+          description: 'HUD',
+          obligation: 10,
+          total_budgetary_resources: null,
+        },
+      ],
+      page_metadata: { page: 1, total: 1, limit: 10, hasNext: false },
+    });
+
+    const ctx = createMockContext({ errors: disasterSpendingTool.errors });
+    const input = disasterSpendingTool.input.parse({
+      dimension: 'agency',
+      filters: { def_codes: ['L'] },
+    });
+    const result = await disasterSpendingTool.handler(input, ctx);
+
+    expect(result.totals).toEqual({ obligation: 10 });
+    expect(result.results[0]).not.toHaveProperty('total_budgetary_resources');
+  });
+
+  it('omits totals when the response carries none (geography, overview, sparse breakdown)', async () => {
+    mockGetDisasterByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: 'CA', display_name: 'California', amount: 1 }],
+    });
+    mockGetDisasterByRecipient.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { page: 1, total: 0, limit: 10, hasNext: false },
+    });
+    mockGetDisasterOverview.mockResolvedValueOnce({ total_budget_authority: 1, spending: {} });
+
+    const run = async (args: Record<string, unknown>) =>
+      disasterSpendingTool.handler(
+        disasterSpendingTool.input.parse(args),
+        createMockContext({ errors: disasterSpendingTool.errors }),
+      );
+
+    const geo = await run({ dimension: 'geography', filters: { def_codes: ['L'] } });
+    const recipient = await run({ dimension: 'recipient', filters: { def_codes: ['L'] } });
+    const overview = await run({ dimension: 'overview' });
+
+    for (const result of [geo, recipient, overview]) {
+      expect(result).not.toHaveProperty('totals');
+      expect(text(result)).not.toContain('**Totals:**');
+    }
   });
 });

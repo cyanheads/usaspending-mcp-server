@@ -22,7 +22,9 @@ export interface RawAwardSummary {
   'Funding Sub Agency'?: string | null;
   'Funding Sub Agency Code'?: string | null;
   generated_internal_id?: string;
+  'Issued Date'?: string | null;
   'Last Modified Date'?: string | null;
+  'Loan Value'?: number | null;
   'Place of Performance City Code'?: string | null;
   'Place of Performance Country Code'?: string | null;
   'Place of Performance State Code'?: string | null;
@@ -34,6 +36,7 @@ export interface RawAwardSummary {
   'Recipient State Code'?: string | null;
   'Recipient Zip Code'?: string | null;
   'Start Date'?: string | null;
+  'Subsidy Cost'?: number | null;
   'Total Outlays'?: number | string | null;
   [key: string]: unknown;
 }
@@ -483,7 +486,31 @@ export interface RawDisasterOverview {
   total_budget_authority?: number | null;
 }
 
-/** Raw disaster breakdown result (agency/cfda/recipient) */
+/**
+ * Result-set totals the disaster agency, cfda, and recipient breakdowns return
+ * beside the page of rows. Members vary by request: `spending_type: total` on
+ * the agency breakdown carries `total_budgetary_resources`; award-level
+ * responses (agency `award`, cfda, recipient) carry `award_count` instead. The
+ * geography breakdown returns no totals at all.
+ */
+export interface RawDisasterTotals {
+  award_count?: number | null;
+  obligation?: number | null;
+  outlay?: number | null;
+  total_budgetary_resources?: number | null;
+}
+
+/** Raw disaster breakdown response (agency/cfda/recipient) */
+export interface RawDisasterBreakdownResponse {
+  page_metadata?: RawPageMetadata;
+  results?: RawDisasterResult[];
+  totals?: RawDisasterTotals | null;
+}
+
+/**
+ * Raw disaster breakdown result (agency/cfda/recipient). `total_budgetary_resources`
+ * is populated only on agency rows under `spending_type: total` (null under `award`).
+ */
 export interface RawDisasterResult {
   award_count?: number | null;
   children?: unknown[] | null;
@@ -491,7 +518,8 @@ export interface RawDisasterResult {
   count?: number | null;
   description?: string | null;
   face_value_of_loan?: number | null;
-  id?: number | string | null;
+  /** A number or string on agency/cfda rows; an array of recipient hash IDs on recipient rows. */
+  id?: number | string | Array<number | string> | null;
   name?: string | null;
   obligated_amount?: number | null;
   obligation?: number | null;

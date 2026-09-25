@@ -6,7 +6,12 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { McpError, serviceUnavailable, timeout } from '@cyanheads/mcp-ts-core/errors';
+import {
+  JsonRpcErrorCode,
+  McpError,
+  serviceUnavailable,
+  timeout,
+} from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import {
   type FetchWithTimeoutOptions,
@@ -23,9 +28,9 @@ import type {
   RawAwardSummary,
   RawBudgetaryResources,
   RawCfdaAutocomplete,
+  RawDisasterBreakdownResponse,
   RawDisasterGeoResult,
   RawDisasterOverview,
-  RawDisasterResult,
   RawFederalAccount,
   RawFederalAccountBreakdownResponse,
   RawFederalAccountSearchResponse,
@@ -66,6 +71,113 @@ const ENTITY_MISS_STATUSES = new Set([400, 404]);
 
 /** Backoff before the first retry; subsequent waits double from here. */
 const RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * Bytes of a non-2xx body read for diagnostics. The framework's default
+ * 500-byte capture elides a longer body mid-string, which leaves a 4xx `detail`
+ * (the loan-sort 400 runs 1,430 bytes, the largest seen) unparseable; 4 KiB
+ * clears it with headroom. The framework also logs the body it reads on every
+ * non-2xx, HTML 5xx pages included, so the bound stays small. Past it only a
+ * head and a tail of the body are kept, so a detail in the middle is lost and
+ * the status-line message stands.
+ */
+const ERROR_BODY_READ_BYTES = 4_096;
+
+/** Bytes of that body kept on `data.body`, matching the framework's default capture. */
+const ERROR_BODY_KEEP_BYTES = 500;
+
+/** Share of {@link ERROR_BODY_KEEP_BYTES} kept from the head of an over-budget body, as the framework does. */
+const ERROR_BODY_HEAD_SHARE = 0.4;
+
+/** Characters of an upstream 4xx `detail` carried into the error message, ellipsis included. */
+const DETAIL_MESSAGE_CAP = 500;
+
+/** Contract reasons every tool declares for upstream failures the service classifies. */
+type UpstreamFailureReason = 'api_timeout' | 'api_unavailable';
+
+/**
+ * The `data` fields that turn a service-classified upstream failure into the
+ * calling tool's declared contract entry: the reason, whether a retry can help,
+ * and the tool's own recovery text. The handler ctx carries the calling tool's
+ * contract, so `recoveryFor` resolves that tool's wording (and `{}` for a
+ * caller with no contract).
+ */
+function upstreamFailure(reason: UpstreamFailureReason, ctx: Context, retryable = true) {
+  return { reason, retryable, ...ctx.recoveryFor(reason) };
+}
+
+/** Re-bounds a diagnostic body to the framework's default capture, head + tail. */
+function boundBody(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength <= ERROR_BODY_KEEP_BYTES) return text;
+  const head = Math.floor(ERROR_BODY_KEEP_BYTES * ERROR_BODY_HEAD_SHARE);
+  const tail = ERROR_BODY_KEEP_BYTES - head;
+  const decoder = new TextDecoder();
+  return `${decoder.decode(bytes.subarray(0, head))}…[${bytes.byteLength - ERROR_BODY_KEEP_BYTES} bytes elided]…${decoder.decode(bytes.subarray(bytes.byteLength - tail))}`;
+}
+
+/**
+ * The explanation USAspending puts in a 4xx JSON body: its `detail` string, or
+ * a `message` string when there is no detail — the mixed-award-type 422 carries
+ * only `message`, beside an `award_type_groups` map that stays in `data.body`.
+ */
+function extractDetail(body: unknown): string | undefined {
+  if (typeof body !== 'string') return;
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown } | null;
+    for (const value of [parsed?.detail, parsed?.message]) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return;
+  } catch {
+    return;
+  }
+}
+
+/**
+ * Maps a failure that escaped the retry loop onto the tool contract (#57) and
+ * the caller-readable 4xx message (#58):
+ *
+ * - `Timeout` (a per-attempt timeout or an upstream 504 that exhausted the
+ *   retries) → `api_timeout`.
+ * - `ServiceUnavailable` (5xx, network failure, HTML or invalid-JSON body) →
+ *   `api_unavailable`. A 501 keeps the framework's `retryable: false`.
+ * - 4xx with a JSON `detail` (or, lacking one, a string `message`) → that
+ *   text, capped, replaces the status-line message. The code and every `data`
+ *   field are kept.
+ *
+ * Status-mapped errors had their body read at {@link ERROR_BODY_READ_BYTES};
+ * the rebuilt `data.body` is bounded back to the usual capture so error
+ * payloads do not grow. Anything else (a non-`McpError`) passes through.
+ */
+function classifyUpstreamError(err: unknown, operation: string, ctx: Context): unknown {
+  if (!(err instanceof McpError)) return err;
+  const httpBody = err.data?.errorSource === 'FetchHttpError' ? err.data.body : undefined;
+  const data =
+    typeof httpBody === 'string'
+      ? { ...err.data, body: boundBody(httpBody), responseBody: boundBody(httpBody) }
+      : err.data;
+  const rebuild = (message: string, next: Record<string, unknown> | undefined) =>
+    new McpError(err.code, message, next, { cause: err });
+
+  if (err.code === JsonRpcErrorCode.Timeout) {
+    return rebuild(err.message, { ...data, ...upstreamFailure('api_timeout', ctx) });
+  }
+  if (err.code === JsonRpcErrorCode.ServiceUnavailable) {
+    return rebuild(err.message, {
+      ...data,
+      ...upstreamFailure('api_unavailable', ctx, data?.retryable !== false),
+    });
+  }
+  const status = data?.status;
+  const detail = extractDetail(httpBody);
+  if (typeof status === 'number' && status >= 400 && status < 500 && detail) {
+    const capped =
+      detail.length > DETAIL_MESSAGE_CAP ? `${detail.slice(0, DETAIL_MESSAGE_CAP - 1)}…` : detail;
+    return rebuild(`USAspending rejected ${operation} (HTTP ${status}): ${capped}`, data);
+  }
+  return data === err.data ? err : rebuild(err.message, data);
+}
 
 export class USASpendingService {
   private readonly baseUrl: string;
@@ -113,6 +225,11 @@ export class USASpendingService {
    * entirely and surfaces a bare `AbortError`. Both are normalized here into one
    * `Timeout` naming the budget it exhausted. A caller-initiated abort is left
    * untouched.
+   *
+   * Every other failure goes through {@link classifyUpstreamError}, so a
+   * `Timeout` or `ServiceUnavailable` reaches the caller as the calling tool's
+   * declared `api_timeout` / `api_unavailable`, and a 4xx carries upstream's
+   * `detail` (or `message`) in its message.
    */
   private async request<T>(
     operation: string,
@@ -130,6 +247,7 @@ export class USASpendingService {
           const response = await fetchWithTimeout(url, this.timeoutMs, ctx, {
             ...init,
             signal,
+            errorBodyLimit: ERROR_BODY_READ_BYTES,
           });
           const text = await response.text();
           return this.parseJson<T>(text, url);
@@ -142,7 +260,8 @@ export class USASpendingService {
         },
       );
     } catch (err) {
-      if (deadline.signal.aborted && !ctx.signal?.aborted) {
+      if (ctx.signal?.aborted) throw err;
+      if (deadline.signal.aborted) {
         throw timeout(
           `USAspending did not answer ${operation} within the ${this.retryBudgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`,
           {
@@ -151,11 +270,12 @@ export class USASpendingService {
             budgetMs: this.retryBudgetMs,
             timeoutMs: this.timeoutMs,
             errorSource: 'RequestBudgetExhausted',
+            ...upstreamFailure('api_timeout', ctx),
           },
           { cause: err },
         );
       }
-      throw err;
+      throw classifyUpstreamError(err, operation, ctx);
     } finally {
       clearTimeout(timer);
     }
@@ -445,7 +565,7 @@ export class USASpendingService {
     spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
-  ): Promise<{ results: RawDisasterResult[]; page_metadata: RawPageMetadata }> {
+  ): Promise<RawDisasterBreakdownResponse> {
     ctx.log.debug('getDisasterByAgency', { spendingType });
     return this.post('disaster/agency/spending/', { ...body, spending_type: spendingType }, ctx);
   }
@@ -453,7 +573,7 @@ export class USASpendingService {
   getDisasterByCfda(
     body: Record<string, unknown>,
     ctx: Context,
-  ): Promise<{ results: RawDisasterResult[]; page_metadata: RawPageMetadata }> {
+  ): Promise<RawDisasterBreakdownResponse> {
     ctx.log.debug('getDisasterByCfda');
     return this.post('disaster/cfda/spending/', body, ctx);
   }
@@ -462,7 +582,7 @@ export class USASpendingService {
     spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
-  ): Promise<{ results: RawDisasterResult[]; page_metadata: RawPageMetadata }> {
+  ): Promise<RawDisasterBreakdownResponse> {
     ctx.log.debug('getDisasterByRecipient', { spendingType });
     return this.post('disaster/recipient/spending/', { ...body, spending_type: spendingType }, ctx);
   }

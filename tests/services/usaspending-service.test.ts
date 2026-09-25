@@ -6,12 +6,31 @@
  */
 
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
+import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
 import { USASpendingService } from '@/services/usaspending/usaspending-service.js';
+
+/**
+ * Every test starts with a fetch that rejects, so a test that forgets to stub
+ * the upstream fails loudly instead of reaching the live API. Per-test stubs
+ * below replace it; `vi.unstubAllGlobals()` restores the real fetch afterwards.
+ */
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      throw new Error(`Unmocked fetch in usaspending-service.test: ${url}`);
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 /** The service ignores appConfig and storage — only serverConfig is read. */
 const serverConfig: ServerConfig = {
@@ -489,5 +508,379 @@ describe('USASpendingService request budget', () => {
       code: JsonRpcErrorCode.RequestCancelled,
       data: { errorSource: 'FetchAborted' },
     });
+  });
+});
+
+/** Fails the test when a request expected to reject resolves instead. */
+const failIfResolved = (): never => {
+  throw new Error('Expected the request to fail');
+};
+
+/** The declared recovery text for one of the disaster tool's contract reasons. */
+const disasterRecovery = (reason: 'api_timeout' | 'api_unavailable') => {
+  const entry = disasterSpendingTool.errors?.find((e) => e.reason === reason);
+  if (!entry) throw new Error(`disaster tool declares no ${reason}`);
+  return entry.recovery;
+};
+
+/** Stubs fetch with a scripted sequence of responders, one per attempt (last repeats). */
+const stubSequence = (...responders: Array<(init: RequestInit) => Promise<Response>>) => {
+  const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+    const responder = responders[Math.min(fetchMock.mock.calls.length - 1, responders.length - 1)];
+    if (!responder) throw new Error('stubSequence needs at least one responder');
+    return responder(init);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+};
+
+const respond = (status: number, body: string) => async () => new Response(body, { status });
+
+const hang = (init: RequestInit) =>
+  new Promise<Response>((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+  });
+
+/**
+ * Every tool declares `api_timeout` and `api_unavailable` as service-thrown
+ * reasons. The service is where the upstream failure is classified, so it is
+ * where the reason, the retryable flag, and the calling tool's recovery text are
+ * attached (#57). The handler ctx arrives with the tool's contract already bound
+ * (the framework's typed-fail wiring mutates that ctx in place), which a
+ * contract-bearing mock context reproduces.
+ *
+ * Retry ladders run under fake timers so the backoff (1s/2s/4s with jitter) is
+ * walked in full without spending real seconds — each case asserts the attempt
+ * count to prove the loop actually ran past the first attempt.
+ */
+describe('USASpendingService upstream-failure contract (#57)', () => {
+  const contractCtx = () => createMockContext({ errors: disasterSpendingTool.errors });
+  let ctx: ReturnType<typeof contractCtx>;
+
+  beforeEach(() => {
+    ctx = contractCtx();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Runs a request to completion while advancing fake time through every backoff. */
+  const settle = async (pending: Promise<unknown>) => {
+    const outcome = pending.then(failIfResolved, (e: unknown) => e as McpError);
+    await vi.advanceTimersByTimeAsync(120_000);
+    return await outcome;
+  };
+
+  it('tags a budget that expires on a later attempt as api_timeout with the tool recovery', async () => {
+    // First attempt fails fast with a transient 503; the second hangs until the
+    // shared deadline fires mid-fetch.
+    const fetchMock = stubSequence(respond(503, '{"detail":"Service Unavailable"}'), hang);
+    const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 5_000 });
+
+    const err = await settle(svc.getDisasterOverview(ctx));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message:
+        'USAspending did not answer GET disaster/overview/ within the 5000ms request budget (60000ms per attempt, retries included).',
+      data: {
+        reason: 'api_timeout',
+        retryable: true,
+        recovery: { hint: disasterRecovery('api_timeout') },
+        errorSource: 'RequestBudgetExhausted',
+        budgetMs: 5_000,
+        timeoutMs: 60_000,
+      },
+    });
+  });
+
+  it('tags per-attempt timeouts that exhaust the retries before the budget as api_timeout', async () => {
+    // Reachable when USASPENDING_RETRY_BUDGET_MS exceeds four attempts plus backoff:
+    // every attempt times out on its own clock and withRetry gives up first.
+    const fetchMock = stubSequence(hang);
+    const svc = newServiceWith({ timeoutMs: 100, retryBudgetMs: 60_000 });
+
+    const err = await settle(svc.getDisasterOverview(ctx));
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+    expect(err.message).toContain('timed out');
+    expect(err.message).toContain('(failed after 4 attempts)');
+    expect(err.data).toMatchObject({
+      reason: 'api_timeout',
+      retryable: true,
+      recovery: { hint: disasterRecovery('api_timeout') },
+      errorSource: 'FetchTimeout',
+      retryAttempts: 4,
+    });
+  });
+
+  it('tags an upstream 504 that exhausts the retries as api_timeout', async () => {
+    const fetchMock = stubSequence(respond(504, '<html><body>504 Gateway Time-out</body></html>'));
+    const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+    const err = await settle(svc.getDisasterOverview(ctx));
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', retryable: true, status: 504 },
+    });
+  });
+
+  it.each([
+    ['a 5xx status', () => respond(503, '{"detail":"Service Unavailable"}'), 'Status: 503'],
+    [
+      'a network failure',
+      () => async () => {
+        throw new TypeError('fetch failed');
+      },
+      'Network error',
+    ],
+    [
+      'an HTML body on a 200',
+      () => respond(200, '<!DOCTYPE html><html><body>Maintenance</body></html>'),
+      'returned HTML instead of JSON',
+    ],
+    ['an invalid JSON body on a 200', () => respond(200, '{"results": ['), 'invalid JSON'],
+  ])(
+    'tags %s that exhausts the retries as api_unavailable',
+    async (_label, makeResponder, messagePart) => {
+      const fetchMock = stubSequence(makeResponder());
+      const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+      const err = await settle(svc.getDisasterOverview(ctx));
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(err.message).toContain(messagePart);
+      expect(err.message).toContain('(failed after 4 attempts)');
+      expect(err.data).toMatchObject({
+        reason: 'api_unavailable',
+        retryable: true,
+        recovery: { hint: disasterRecovery('api_unavailable') },
+      });
+    },
+  );
+
+  it('keeps a caller-initiated abort as RequestCancelled with no reason', async () => {
+    stubSequence(hang);
+    const caller = new AbortController();
+    const callerCtx = createMockContext({
+      errors: disasterSpendingTool.errors,
+      signal: caller.signal,
+    });
+    const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+    const pending = svc
+      .getDisasterOverview(callerCtx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+    caller.abort();
+    const err = await pending;
+
+    expect(err.code).toBe(JsonRpcErrorCode.RequestCancelled);
+    expect(err.data?.reason).toBeUndefined();
+    expect(err.data?.recovery).toBeUndefined();
+  });
+
+  it('adds no api_* reason to a 4xx', async () => {
+    stubSequence(respond(422, '{"detail":"Field \'def_codes\' is required"}'));
+    const svc = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+    const err = await settle(svc.getDisasterByCfda({}, ctx));
+
+    expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(err.data?.reason).toBeUndefined();
+    expect(err.data?.recovery).toBeUndefined();
+  });
+
+  it('still resolves a getEntity 400/404 miss to undefined under a contract ctx', async () => {
+    stubSequence(respond(404, '{"detail":"Agency with a toptier code of \'999\' does not exist"}'));
+    await expect(newService().getAgency('999', ctx)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * USAspending explains every 4xx in a `detail` string naming the offending
+ * field. The framework's captured `data.body` is elided at 500 bytes, which
+ * breaks a longer body mid-string, so the service reads the whole body and puts
+ * the (capped) detail into the message itself (#58).
+ */
+describe('USASpendingService 4xx detail (#58)', () => {
+  let ctx: ReturnType<typeof createMockContext>;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  it('puts the upstream detail into the message, keeping the code and status', async () => {
+    stubFetch(
+      422,
+      JSON.stringify({
+        detail:
+          "Invalid value in 'filters|time_period|start_date': Date must be in YYYY-MM-DD format",
+      }),
+    );
+    const err = await newService()
+      .searchAwards({ filters: {}, fields: ['Award ID'], sort: 'Award Amount', limit: 1 }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(err.message).toBe(
+      "USAspending rejected POST search/spending_by_award/ (HTTP 422): Invalid value in 'filters|time_period|start_date': Date must be in YYYY-MM-DD format",
+    );
+    expect(err.data).toMatchObject({ status: 422, errorSource: 'FetchHttpError' });
+  });
+
+  it('extracts a detail from a body past the 500-byte capture and caps it with an ellipsis', async () => {
+    // Verbatim shape of the 1,430-byte loan-sort 400 (the mapping list is long).
+    const mappings = Array.from({ length: 60 }, (_, i) => `'Mapped Field ${i + 1}'`).join(', ');
+    const detail = `Sort value 'Award Amount' not found in Loan Award mappings: [${mappings}]`;
+    const body = JSON.stringify({ detail });
+    expect(body.length).toBeGreaterThan(1_000);
+    stubFetch(400, body);
+
+    const err = await newService()
+      .searchAwards({ filters: {}, fields: ['Award ID'], sort: 'Award Amount', limit: 1 }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.code).toBe(JsonRpcErrorCode.InvalidParams);
+    const prefix = 'USAspending rejected POST search/spending_by_award/ (HTTP 400): ';
+    expect(
+      err.message.startsWith(`${prefix}Sort value 'Award Amount' not found in Loan Award mappings`),
+    ).toBe(true);
+    expect(err.message.endsWith('…')).toBe(true);
+    expect(err.message.length).toBe(prefix.length + 500);
+    // The body on the wire stays at the framework's bounded capture.
+    expect(err.data?.status).toBe(400);
+    expect(String(err.data?.body)).toContain('bytes elided');
+    expect(new TextEncoder().encode(String(err.data?.body)).byteLength).toBeLessThan(560);
+  });
+
+  /**
+   * The read bound is 4,096 bytes: well past the largest 4xx `detail` body seen
+   * (the 1,430-byte loan-sort 400), and the framework logs the body it scans at
+   * that size on every non-2xx, so it stays small.
+   */
+  it('reads a detail from a body just under the 4,096-byte read bound', async () => {
+    const body = JSON.stringify({ detail: 'the detail', padding: 'x'.repeat(3_900) });
+    expect(body.length).toBeLessThan(4_096);
+    stubFetch(400, body);
+
+    const err = await newService()
+      .spendingOverTime({ group: 'month', filters: {} }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.message).toBe(
+      'USAspending rejected POST search/spending_over_time/ (HTTP 400): the detail',
+    );
+  });
+
+  it('loses a detail that sits past the 4,096-byte read bound', async () => {
+    // Past the bound only a head and a tail of the body are kept, so a detail in
+    // the middle of a long body is elided and the status line stands.
+    const body = JSON.stringify({
+      padding: 'x'.repeat(2_000),
+      detail: 'the detail',
+      more: 'y'.repeat(4_000),
+    });
+    stubFetch(400, body);
+
+    const err = await newService()
+      .spendingOverTime({ group: 'month', filters: {} }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.message).toBe(
+      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 400',
+    );
+    expect(err.data?.status).toBe(400);
+  });
+
+  it('keeps the status-line message for a 4xx with a non-JSON body', async () => {
+    stubFetch(403, '<!doctype html><html><body><h1>Forbidden</h1></body></html>');
+    const err = await newService()
+      .spendingOverTime({ group: 'month', filters: {} }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.code).toBe(JsonRpcErrorCode.Forbidden);
+    expect(err.message).toBe(
+      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 403',
+    );
+  });
+
+  it('falls back to a string message when the 4xx carries no detail', async () => {
+    // Verbatim shape of the live mixed-group 422 (award_type_groups abridged).
+    const groups = {
+      contracts: {
+        A: 'BPA Call',
+        B: 'Purchase Order',
+        C: 'Delivery Order',
+        D: 'Definitive Contract',
+      },
+      loans: { '07': 'Direct Loan', '08': 'Guaranteed/Insured Loan', F003: 'Direct Loan' },
+    };
+    stubFetch(
+      422,
+      JSON.stringify({
+        message: "'award_type_codes' must only contain types from one group.",
+        award_type_groups: groups,
+      }),
+    );
+    const err = await newService()
+      .searchAwards(
+        {
+          filters: { award_type_codes: ['A', '07'] },
+          fields: ['Award ID'],
+          sort: 'Award ID',
+          limit: 1,
+        },
+        ctx,
+      )
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(err.message).toBe(
+      "USAspending rejected POST search/spending_by_award/ (HTTP 422): 'award_type_codes' must only contain types from one group.",
+    );
+    expect(err.message).not.toContain('award_type_groups');
+    expect(err.data).toMatchObject({ status: 422, errorSource: 'FetchHttpError' });
+    expect(String(err.data?.body)).toContain('award_type_groups');
+  });
+
+  it('prefers detail over message when a 4xx carries both', async () => {
+    stubFetch(400, JSON.stringify({ detail: 'the detail', message: 'the message' }));
+    const err = await newService()
+      .spendingOverTime({ group: 'month', filters: {} }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.message).toBe(
+      'USAspending rejected POST search/spending_over_time/ (HTTP 400): the detail',
+    );
+  });
+
+  it('keeps the status-line message for a 4xx whose message is not a string', async () => {
+    stubFetch(422, JSON.stringify({ message: { nested: true } }));
+    const err = await newService()
+      .spendingOverTime({ group: 'month', filters: {} }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.message).toBe(
+      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 422',
+    );
+  });
+
+  it('keeps the status-line message for a 4xx whose JSON carries no string detail', async () => {
+    stubFetch(400, JSON.stringify({ detail: ['not', 'a', 'string'], messages: ['x'] }));
+    const err = await newService()
+      .spendingOverTime({ group: 'month', filters: {} }, ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.code).toBe(JsonRpcErrorCode.InvalidParams);
+    expect(err.message).toBe(
+      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 400',
+    );
   });
 });

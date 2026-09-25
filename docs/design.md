@@ -6,7 +6,7 @@
 
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
-| `usaspending_search_awards` | Search federal awards by keyword, recipient, agency, award type, NAICS code, location, or date range. Returns ranked award summaries with recipient names, amounts, agencies, and award IDs for chaining. | `keyword`, `award_type_codes`, `agency_name`, `recipient_name`, `naics_code`, `location_filter`, `time_period`, `sort`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` |
+| `usaspending_search_awards` | Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing, location, or date range. Returns ranked award summaries with recipient names, amounts (loan value and subsidy cost for loans), agencies, and award IDs for chaining. `sort` values and default follow the award type group. | `keyword`, `award_type_codes`, `agency_name`, `recipient_name`, `naics_codes`, `assistance_listings`, `location_filter`, `time_period`, `sort`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` |
 | `usaspending_get_award` | Fetch full details of a federal award by its generated ID. Returns contract or assistance data, parent IDV info, subaward count, and funding account linkages. Use award IDs from `usaspending_search_awards`. | `award_id` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_get_award_transactions` | List individual transactions (modifications, amendments) on an award. Reveals spending history and obligation changes over time. | `award_id`, `sort`, `order`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: false` |
 | `usaspending_get_award_subawards` | List subaward contracts or grants under a prime award. Reveals the sub-contractor or sub-grantee layer — who actually does the work. | `award_id`, `sort`, `order`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: false` |
@@ -72,7 +72,7 @@ Target users: investigative journalists, policy researchers, government contract
 |:--------|:---------|:------------|
 | `USASPENDING_BASE_URL` | No | Override base URL (default: `https://api.usaspending.gov/api/v2/`) |
 | `USASPENDING_TIMEOUT_MS` | No | Request timeout in ms, applied per attempt (default: 30000) |
-| `USASPENDING_RETRY_BUDGET_MS` | No | Wall-clock budget in ms spanning every retry attempt of one request, 1000–300000 (default: 1.5 × `USASPENDING_TIMEOUT_MS`). A per-attempt timeout classifies as transient, so without a shared deadline the retry loop re-pays the full timeout on each attempt; expiry surfaces as a `Timeout` naming the budget. |
+| `USASPENDING_RETRY_BUDGET_MS` | No | Wall-clock budget in ms spanning every retry attempt of one request, 1000–300000 (default: 1.5 × `USASPENDING_TIMEOUT_MS`). A per-attempt timeout classifies as transient, so without a shared deadline the retry loop re-pays the full timeout on each attempt; expiry surfaces as a `Timeout` naming the budget, tagged `api_timeout` with the calling tool's recovery hint. |
 
 ## Implementation Order
 
@@ -93,7 +93,7 @@ Each step is independently testable.
 
 | Tool | Key Output Fields |
 |:-----|:-----------------|
-| `usaspending_search_awards` | `results[].generated_internal_id` (chain to `usaspending_get_award`), `Recipient Name`, `Award Amount`, `Awarding Agency`, `agency_slug` (chain to `usaspending_get_agency`), `page_metadata.hasNext` |
+| `usaspending_search_awards` | `results[].generated_internal_id` (chain to `usaspending_get_award`), `Recipient Name`, `Award Amount` (`Loan Value`, `Subsidy Cost`, `Issued Date` for loans), `Awarding Agency`, `agency_slug` (chain to `usaspending_get_agency`), `page_metadata.hasNext` |
 | `usaspending_get_award` | `generated_unique_award_id`, `type`, `type_description`, `description`, `total_obligation`, `subaward_count`, `date_signed`, `parent_award.generated_unique_award_id`, `latest_transaction_contract_data.naics`, `recipient.recipient_hash` (chain to `usaspending_get_recipient`), `account_obligations_by_defc` |
 | `usaspending_get_award_transactions` | `results[].id`, `action_date`, `federal_action_obligation`, `modification_number`, `description`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
 | `usaspending_get_award_subawards` | `results[].id`, `subaward_number`, `description`, `action_date`, `amount`, `recipient_name`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
@@ -105,7 +105,7 @@ Each step is independently testable.
 | `usaspending_spending_by_geography` | `results[].shape_code`, `display_name`, `aggregated_amount`, `population`, `per_capita` |
 | `usaspending_spending_by_category` | `category`, `results[].code`, `name`, `amount`, `id`, `page_metadata` (`has_next`, `page`, `limit` — no total) |
 | `usaspending_spending_over_time` | `group`, `results[].time_period`, `aggregated_amount`, by-type obligation columns |
-| `usaspending_disaster_spending` | Varies by dimension: `results[].description`, `obligation`, `outlay`, `award_count`; or geography aggregations |
+| `usaspending_disaster_spending` | Varies by dimension: `results[].description`, `obligation`, `outlay`, `award_count`, `total_budgetary_resources` (agency, `spending_type: total`); `totals` for the whole result set on agency, cfda, and recipient (`obligation`, `outlay`, plus `total_budgetary_resources` or `award_count`); or geography aggregations |
 | `usaspending_get_federal_account` | `account_title`, `federal_account_code`, `agency_identifier`, `main_account_code`, `parent_agency_name`, `bureau_name`, `fiscal_year`, `total_obligated_amount`, `total_gross_outlay_amount`, `total_budgetary_resources`, `children[]` (per-TAS `name`, `code`, `obligated_amount`, `gross_outlay_amount`, `budgetary_resources_amount`) |
 | `usaspending_get_federal_account_breakdown` | `account_code`, `dimension`, `results[].code`, `name`, `obligations`, `type` (program_activity only), `page_metadata` (`total`, `page`, `has_next`, `has_previous`, `limit`) |
 | `usaspending_search_federal_accounts` | `results[].account_number` (chain to `usaspending_get_federal_account`), `account_name`, `agency_identifier`, `managing_agency`, `managing_agency_acronym`, `budgetary_resources`, `page_metadata` (`count`, `page`, `has_next`, `limit`) |
@@ -132,18 +132,17 @@ Each step is independently testable.
 
 ### `usaspending_disaster_spending`
 
-This tool dispatches across the disaster endpoint family based on two enums: `dimension` (which breakdown axis to use) and `spending_type` (`spending` vs `loans`). Each disaster endpoint has parallel `/spending/` and `/loans/` variants — `spending_type` selects between them. Internal call sequence:
+This tool dispatches across the disaster endpoint family on `dimension`, one route per breakdown axis. `spending_type` (`award`, the default, or `total`) is forwarded in the request body, and only the agency route honors it: `total` adds direct non-award spending and `total_budgetary_resources`. The recipient route accepts the field but returns the same response for either value, the cfda route is sent none, and no `/loans/` route is called. Internal call sequence:
 
-| # | Call | Purpose | `dimension` | `spending_type` |
-|:--|:-----|:--------|:------------|:----------------|
-| 1 | `GET /disaster/overview/` | Top-level totals (obligations + outlays) | `overview` | — |
-| 2 | `POST /disaster/agency/spending/` | Breakdown by awarding agency | `agency` | `spending` |
-| 2b | `POST /disaster/agency/loans/` | Loan face values by agency | `agency` | `loans` |
-| 3 | `POST /disaster/cfda/spending/` | Breakdown by CFDA/Assistance Listing | `cfda` | `spending` |
-| 4 | `POST /disaster/recipient/spending/` | Breakdown by recipient | `recipient` | `spending` |
-| 5 | `POST /disaster/spending_by_geography/` | Breakdown by state/county | `geography` | — |
+| # | Call | Purpose | `dimension` | `spending_type` sent |
+|:--|:-----|:--------|:------------|:---------------------|
+| 1 | `GET /disaster/overview/` | Top-level totals (budget authority, obligations, outlays) and funding by DEF code | `overview` | — (reported as `spending`) |
+| 2 | `POST /disaster/agency/spending/` | Breakdown by awarding agency | `agency` | `award` / `total` — honored |
+| 3 | `POST /disaster/cfda/spending/` | Breakdown by CFDA/Assistance Listing | `cfda` | — |
+| 4 | `POST /disaster/recipient/spending/` | Breakdown by recipient | `recipient` | `award` / `total` — ignored upstream |
+| 5 | `POST /disaster/spending_by_geography/` | Breakdown by state/county (place of performance) | `geography` | always `obligation` (that route's own vocabulary) |
 
-This consolidates 9+ disaster endpoints into one tool. The agent selects the breakdown axis (dimension) and whether to view grants/contracts or loans (spending_type) without knowing endpoint topology.
+This consolidates the disaster endpoints into one tool. The agent selects the breakdown axis (`dimension`) without knowing endpoint topology.
 
 ---
 
@@ -169,6 +168,16 @@ Treasury Account Symbol detail needs no tool of its own — it arrives free in t
 
 **`usaspending_get_agency` accepts both `toptier_code` and `agency_slug`.** Award search results return `agency_slug` (e.g., `department-of-defense`) but agency detail requires a `toptier_code` (e.g., `097`). Requiring agents to do an intermediate list-agencies lookup just to resolve a slug adds a needless round trip. The tool resolves either input, with slug resolution backed by a name-match against the agencies list.
 
+**Upstream-failure reasons are attached in the service.** Every tool declares `api_timeout` and `api_unavailable`, but only `USASpendingService.request()` sees the failure's shape, so it tags every `Timeout` (budget expiry, per-attempt timeouts that exhaust the retries, a 504) and every `ServiceUnavailable` (5xx, network, HTML or invalid-JSON body) with the reason, `retryable`, and `ctx.recoveryFor(reason)`. The handler ctx the service receives already carries the calling tool's contract, so each tool's own recovery wording reaches the wire without a catch in the handler. A 4xx gets no `api_*` reason; its message carries upstream's `detail` instead (or its `message` when a body has no `detail`, as the mixed-award-type 422 does), read from a 4 KiB capture of the body because the framework's default 500-byte capture elides a longer one mid-string (the largest `detail` body seen runs 1,430 bytes, and the framework logs the body it reads on every non-2xx, so the capture stays small).
+
+**Date inputs advertise their shape, and a half-open range is filled.** Each date input is `anyOf ["", ^\d{4}-\d{1,2}-\d{1,2}$]`: a malformed date fails argument validation before any request, while `""` — what form clients send for an untouched field, including both inner fields of `time_period` — reads as absent, so a fully blank `time_period` is no date filter, as it was before the pattern existed. A whitespace-only value reads as blank for the same reason (a lone one was dropped like any blank), while a whitespace-padded date fails the pattern. Unpadded month and day stay accepted because the analytics endpoints always took them, and the handlers pad before sending. The endpoints need both ends of a range, so a lone start runs through today in UTC and a lone end from 2007-10-01, echoed as sent with a notice naming the omitted field by the path the other came in on (`filters.time_period_*` or `time_period.*_date`) — dropping it had returned unfiltered results labelled as filtered. The filled bound never inverts the range: a lone start after today closes on itself, and a lone end before the floor opens on itself and draws the floor rejection. On all four tools, a range supplied with both ends and a start after the end fails as `date_range_inverted`, and a resolved start before 2007-10-01 fails as `date_before_earliest`, both before any request — upstream would answer the first with a retryable-looking HTML 500 or, on award search, ignore the range while the echo claimed it, and the second with an undeclared 422.
+
+**Award search sort follows the award type group.** `sort` has no schema default; the handler resolves the group from the effective `award_type_codes` and defaults to `Loan Value` for loans, `Award Amount` otherwise, requesting the loan fields only for loans. A sort outside the group's list fails as `unsupported_sort` before the request, naming the group's sorts, because upstream's 400 names only its internal mapping. Codes spanning groups skip the check and send the sort unchanged, since upstream's own 422 for mixed groups is the accurate answer. The flat `award_type_codes` takes `.min(1)` because an empty array there reaches upstream's 422; the nested `filters.award_type_codes` does not, because an empty nested array falls back to the flat value, as the other nested array filters do — a form client's untouched field keeps working.
+
+**`assistance_listings` rejects contract and IDV codes rather than switching the default.** Upstream returns an empty page with no message for that pairing, which reads as "no awards under this listing". Defaulting to grants instead would silently drop the direct payments and loans that also carry listings, so the tool fails as `assistance_listings_type_mismatch` and asks for an assistance group.
+
+**Disaster breakdown totals are relayed, never computed.** The agency, cfda, and recipient breakdowns return a `totals` object for the whole result set, which the tool surfaces as-is; summing a page of rows would cover only that page and cannot produce budgetary resources. Members vary — `spending_type: total` on the agency breakdown carries `total_budgetary_resources`, award-level responses carry `award_count` — and geography returns none, so absent members stay absent.
+
 ---
 
 ## API Reference
@@ -180,8 +189,9 @@ Key filter fields for `usaspending_search_awards`, `usaspending_spending_by_cate
 | Field | Type | Notes |
 |:------|:-----|:------|
 | `keywords` | `string[]` | Full-text search across award descriptions, recipient names, and locations |
-| `award_type_codes` | `string[]` | `A/B/C/D` = contracts, `02/03/04/05` = grants, `06/10` = direct payments, `07/08` = loans, `IDV_*` = IDVs |
-| `time_period` | `{start_date, end_date}[]` | ISO 8601 dates; earliest 2007-10-01 via search API |
+| `award_type_codes` | `string[]` | `A/B/C/D` = contracts, `IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E` = IDVs, `02/03/04/05/F001/F002` = grants, `06/10/F006/F007` = direct payments, `07/08/F003/F004` = loans, `09/11/-1/F005/F008/F009/F010` = other assistance (the partition `spending_by_award`'s mixed-group 422 lists in `award_type_groups`, which labels the last two groups the other way round). `spending_by_award` takes one group per request (422 with a `message`, not a `detail`, otherwise; `[]` also 422s) and checks `sort` against that group's field mapping: loans sort by `Loan Value`, `Subsidy Cost`, `Issued Date`, `Recipient Name`, `Awarding Agency`; IDVs have no `End Date`; the rest share the contract list. The sort key must also be among the requested `fields` |
+| `program_numbers` | `string[]` | Assistance Listing (CFDA) numbers, exact match, ORed; matches an award carrying the listing anywhere in its listings, not only as primary. Contracts and IDVs never match and upstream says nothing — 200 with zero rows. Exposed on `usaspending_search_awards` as `assistance_listings` |
+| `time_period` | `{start_date, end_date}[]` | `YYYY-MM-DD`; earliest 2007-10-01 on `spending_by_award` and all three analytics endpoints (each 422s earlier). Every element needs both ends. `spending_by_award` answers an unpadded `2024-1-1` with an empty-bodied 503 (the analytics endpoints accept it), so the tools pad month and day before sending. An inverted range draws an HTML 500 from the analytics endpoints and is ignored by `spending_by_award`, so the tools reject it before sending |
 | `agencies` | `{type, tier, name}[]` | `type`: `awarding` or `funding`; `tier`: `toptier` or `subtier` |
 | `recipient_search_text` | `string[]` | Recipient name search within filter |
 | `recipient_id` | `string` | Exact recipient hash ID. Not honored by `usaspending_search_awards` — `spending_by_award` silently ignores it (returns it in the response `messages` as unused); filter by recipient name via `recipient_search_text` there |

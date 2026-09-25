@@ -29,195 +29,165 @@
 
 ## Overview
 
-Federal award, recipient, agency, and spending data from USAspending.gov, the US Treasury's DATA Act transparency platform. Search and trace federal awards, profile recipients and agencies, and aggregate spending by geography, category, and time from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Federal award, recipient, agency, and spending data from USAspending.gov, the US Treasury's DATA Act transparency platform. Search and trace awards down to transactions, subawards, and funding accounts; profile recipients and agencies; and aggregate spending by geography, category, time, and disaster appropriation. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
 ### Tools
 
 | Tool | Description |
 |:---|:---|
-| `usaspending_search_awards` | Search federal awards by keyword, recipient, agency, award type, NAICS code, location, or date range. Returns ranked award summaries with recipient names, amounts, agencies, and award IDs for chaining. |
-| `usaspending_get_award` | Fetch full details of a federal award by its generated ID. Returns contract or assistance data, parent IDV info, subaward count, and funding account linkages. |
-| `usaspending_get_idv_awards` | List child contracts and task/delivery orders placed under an IDV award. Each row includes a `generated_unique_award_id` for chaining into `usaspending_get_award`. |
-| `usaspending_get_award_transactions` | List individual transactions (modifications, amendments) on an award. Reveals spending history and obligation changes over time. |
-| `usaspending_get_award_subawards` | List subaward contracts or grants under a prime award. Reveals the sub-contractor or sub-grantee layer — who actually does the work. |
-| `usaspending_get_award_federal_accounts` | List the Treasury federal accounts that funded an award, with the amount obligated from each. Returns `federal_account` for chaining into `usaspending_get_federal_account`. |
-| `usaspending_search_recipients` | Search for organizations receiving federal funds by name, UEI, or DUNS. Returns recipient hash IDs, UEI/DUNS, total award amounts, and hierarchy level. Paginated — page through with `page`; `page_metadata.total` reports the full match count. |
-| `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parent organization, alternate names, and total award amounts by type. |
-| `usaspending_get_agency` | Fetch an agency's fiscal year overview: mission, budget authority, obligation totals, sub-agency count, and DEF codes. Accepts a 3-digit `toptier_code` or an `agency_slug` from award search results. |
-| `usaspending_spending_by_geography` | Aggregate federal spending by state, county, or congressional district. Returns per-capita figures when combined with population data. |
-| `usaspending_spending_by_category` | Aggregate spending grouped by NAICS, PSC, awarding/funding agency (toptier or subtier), CFDA program, or recipient (by DUNS). Returns top items with amounts for trend and breakdown analysis. |
-| `usaspending_spending_over_time` | Fetch aggregated spending by fiscal year, fiscal quarter, or fiscal month. Filter by award type, agency, recipient, or keyword to trace trends in a specific area. |
-| `usaspending_disaster_spending` | Fetch disaster and emergency supplemental spending (COVID-19, hurricanes, etc.) broken down by agency, CFDA program, recipient, or geography. Filter by DEF codes to isolate a specific appropriation. |
-| `usaspending_get_federal_account` | Fetch a federal account's budget data: total obligations, outlays, budgetary resources, and the per-Treasury-Account-Symbol component breakdown. Account codes come from `usaspending_search_federal_accounts`. |
-| `usaspending_get_federal_account_breakdown` | Break a federal account's obligations down by program activity (what the money funds) or object class (what it buys). Paginated with a total count. |
-| `usaspending_search_federal_accounts` | List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers for chaining into `usaspending_get_federal_account`. |
-| `usaspending_list_agencies` | List all top-tier federal agencies with toptier codes, budget authority amounts, and obligation totals. Entry point for agency navigation. |
-| `usaspending_autocomplete_filters` | Look up valid code values for filter fields: NAICS, PSC, CFDA, recipient names, or agency names. Use before filtering to discover the right code from a description. |
+| `usaspending_list_agencies` | List every top-tier federal agency with its toptier code, slug, and current-year budget totals |
+| `usaspending_autocomplete_filters` | Look up NAICS, PSC, CFDA, agency, or recipient codes from a free-text description |
+| `usaspending_search_awards` | Search awards by keyword, recipient, agency, award type, NAICS code, assistance listing, location, or date range |
+| `usaspending_get_award` | Fetch one award's full record: amounts, recipient, agencies, codes, parent IDV, DEF-code funding |
+| `usaspending_get_award_transactions` | List the transactions (modifications, amendments) on an award |
+| `usaspending_get_award_subawards` | List the subcontracts or subgrants under a prime award |
+| `usaspending_get_award_federal_accounts` | List the Treasury federal accounts that funded an award, with the amount from each |
+| `usaspending_get_idv_awards` | List the child orders and sub-IDVs placed under an IDV |
+| `usaspending_search_recipients` | Search recipients by name, UEI, or DUNS |
+| `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parent, and award totals |
+| `usaspending_get_agency` | Fetch an agency's mission, latest-year budget totals, sub-agencies, and DEF codes |
+| `usaspending_spending_by_geography` | Aggregate spending by state, county, or congressional district |
+| `usaspending_spending_by_category` | Aggregate spending by NAICS, PSC, agency, CFDA program, or recipient |
+| `usaspending_spending_over_time` | Aggregate spending by fiscal year, quarter, or month |
+| `usaspending_disaster_spending` | Break down disaster and emergency supplemental spending by agency, program, recipient, or geography |
+| `usaspending_search_federal_accounts` | Search federal accounts by title keyword or agency identifier |
+| `usaspending_get_federal_account` | Fetch a federal account's budget totals and its Treasury Account Symbol components |
+| `usaspending_get_federal_account_breakdown` | Break a federal account's obligations down by program activity or object class |
 
 ## Capability reference
 
-### `usaspending_search_awards` <sub>tool</sub>
-
-- Full-text keyword search across award descriptions, recipient names, and locations
-- Filter by award type codes (`A/B/C/D` = contracts, `02/03/04/05` = grants, `06/10` = direct payments, `07/08` = loans, `IDV_*` = IDVs)
-- Filter by awarding or funding agency (toptier or subtier), recipient name, NAICS code, and place of performance
-- Date range filtering — earliest 2007-10-01 via search API
-- Pagination via `limit` (max 100) and `page`; `page_metadata.has_next` signals more results and is `true` on any full page — the endpoint stops advertising continuation once `page` × `limit` reaches 10,000, so page fullness is the honest signal past that point. Page-number paging caps at a 50,000-result offset — beyond it, continue with keyset pagination using the `last_record_sort_value` + `last_record_unique_id` cursor, which is only returned below the 10,000-result offset and has to be captured before crossing it
-- Returns `generated_internal_id` for chaining to `usaspending_get_award` and `agency_slug` for chaining to `usaspending_get_agency`
-
----
-
-### `usaspending_get_award` <sub>tool</sub>
-
-- Returns type, description, total obligation, date signed, and subaward count
-- Exposes `recipient.recipient_hash` for chaining to `usaspending_get_recipient`
-- Exposes `parent_award.generated_unique_award_id` for traversing IDV parent chains
-- Includes NAICS code and product/service code from the latest transaction
-- Returns `account_obligations_by_defc` linking the award to specific disaster/emergency appropriations
-- Award IDs use the `generated_unique_award_id` format (e.g., `CONT_AWD_FA862118F6251_9700_...`)
-
----
-
-### `usaspending_get_idv_awards` <sub>tool</sub>
-
-- `award_id` must be the `generated_unique_award_id` of the parent IDV — from `usaspending_search_awards` (`generated_internal_id` field) or from `usaspending_get_award`
-- `type` selects what to list: `child_awards` (task/delivery orders), `child_idvs` (sub-IDVs), or `grandchild_awards`
-- Each row returns `generated_unique_award_id` for chaining into `usaspending_get_award` for full detail
-- Pagination via `limit` and `page`; note: no `total` count is available from this endpoint
-- An invalid `award_id` or an IDV with no children of the requested type returns an empty result set
-
----
-
-### `usaspending_get_award_transactions` <sub>tool</sub>
-
-- Each row is one transaction: `action_date`, `federal_action_obligation`, `modification_number`, and description
-- Pagination via `limit` and `page`; configurable sort and order. No `total` count is available from this endpoint
-
----
-
-### `usaspending_get_award_subawards` <sub>tool</sub>
-
-- Each row covers: subaward number, description, action date, amount, and recipient name
-- Reveals the supply chain below the prime — who actually performs the work
-- Pagination via `limit` and `page`; configurable sort and order. No `total` count is available from this endpoint
-
----
-
-### `usaspending_get_award_federal_accounts` <sub>tool</sub>
-
-- `award_id` must be a `generated_unique_award_id` — from `usaspending_search_awards` (`generated_internal_id` field) or `usaspending_get_award`
-- Each row returns `federal_account` (AGENCY-MAIN format, e.g. `080-0120`) for chaining into `usaspending_get_federal_account`, plus the amount obligated from that account and the funding agency behind it
-- Distinct from `usaspending_get_award` `account_obligations_by_defc`, which breaks funding down by Disaster/Emergency Funding code rather than by account
-- Pagination via `limit` (max 100) and `page`; `count` in `page_metadata` is the total across pages
-- An `award_id` that does not exist returns an empty list rather than an error — the upstream reports no not-found signal for this endpoint
-
----
-
-### `usaspending_search_recipients` <sub>tool</sub>
-
-- Returns recipient IDs (UUID hashes with level suffix: `-P` parent, `-C` child, `-R` root), UEI, DUNS, name, recipient level, and total award amount
-- `results[].id` chains to `usaspending_get_recipient`; `uei` and `duns` chain to SAM.gov or SEC EDGAR
-- Paginated via `limit` (max 100) and `page`; `page_metadata` reports `total`, `page`, and `has_next` — page through to reach matches beyond the first page
-
----
-
-### `usaspending_get_recipient` <sub>tool</sub>
-
-- Returns address, business type classifications, parent organization, alternate names
-- Optionally scope to a specific fiscal year and award type
-- Requires the UUID-based recipient ID from `usaspending_search_recipients`
-
----
-
-### `usaspending_get_agency` <sub>tool</sub>
-
-- Returns mission, budget authority amount, obligation amount, sub-agency count, and DEF codes
-- Accepts either a 3-digit `toptier_code` (e.g., `097` for DoD) or an `agency_slug` (e.g., `department-of-defense`) — slugs appear in award search results, eliminating an intermediate lookup
-- Includes sub-agency breakdown with transaction counts
-
----
-
-### `usaspending_spending_by_geography` <sub>tool</sub>
-
-- `scope`: `place_of_performance` or `recipient_location`
-- `geo_layer`: `state`, `county`, or `district`
-- Returns `shape_code`, `display_name`, `aggregated_amount`, and `per_capita` (when `population` is available)
-- `limit` accepts 1–500 (default 50). The upstream endpoint is not paginated — a nationwide county query matches over 3,000 areas — so areas are ranked by `aggregated_amount` descending and capped client-side; `total_areas_available` reports the full match count
-- Omitting `filters` entirely aggregates every award type (contracts, IDVs, grants, direct payments, loans, insurance, and unspecified); the substitution is disclosed on the response
-- Geographic filters require FIPS codes or 2-letter state abbreviations — use a geocoding server (e.g., Census or OpenStreetMap) to resolve place names first
-
----
-
-### `usaspending_spending_by_category` <sub>tool</sub>
-
-- `category` enum maps to the right sub-route: `naics`, `psc`, `awarding_agency`, `awarding_subagency`, `funding_agency`, `funding_subagency`, `cfda`, `recipient_duns`, or `recipient_parent_duns`
-- Returns top items with amounts and codes for trend analysis
-- Accepts the standard award filter object for scoping to a specific agency, time period, or keyword
-- Pagination via `limit` and `page`; no `total` count is available from this endpoint
-
----
-
-### `usaspending_spending_over_time` <sub>tool</sub>
-
-- `group`: `fiscal_year`, `quarter`, or `month`
-- Filter by award type, agency, recipient, or keyword to trace trends in a specific area
-- `subawards: true` shifts aggregation to the subaward layer
-
----
-
-### `usaspending_disaster_spending` <sub>tool</sub>
-
-- `dimension` enum selects the breakdown axis: `overview`, `agency`, `cfda`, `recipient`, or `geography`
-- `spending_type` selects between award-level obligations and outlays (`award`) and total spending including direct non-award amounts (`total`, agency and recipient dimensions only)
-- Filter by `def_codes` to isolate a specific emergency appropriation (e.g., COVID-19 = `L`, `M`, `N`, `O`, `P`, `U`)
-- Returns obligation, outlay, and award count per row
-
----
-
-### `usaspending_get_federal_account` <sub>tool</sub>
-
-- Returns account title, federal account code, agency identifier, parent agency, and bureau
-- Includes the fiscal year snapshot: total obligations, gross outlays, and budgetary resources
-- `children` breaks the account into its Treasury Account Symbol (TAS) components, each with its own obligated, outlay, and budgetary-resource amounts — one entry per availability period, bounded and returned in full
-- Account codes come from `account_number` in `usaspending_search_federal_accounts` results, or `federal_account` in `usaspending_get_award_federal_accounts` results
-- For obligations broken down by program activity or object class, use `usaspending_get_federal_account_breakdown`
-
----
-
-### `usaspending_get_federal_account_breakdown` <sub>tool</sub>
-
-- `dimension` enum selects the axis: `program_activity` (what the money funds) or `object_class` (what it buys — personnel, supplies, contracts)
-- Each row returns the code, name, and obligated amount; `program_activity` rows also carry `type` — `PAC/PAN` (legacy program activity code/name) or `PARK` (Program Activity Reporting Key), both of which can appear for the same account
-- Pagination via `limit` (max 100) and `page`; `total` in `page_metadata` is the true row count across pages
-- An account code that does not exist returns an empty list rather than an error — unlike `usaspending_get_federal_account`, these routes report no not-found signal
-
----
-
-### `usaspending_search_federal_accounts` <sub>tool</sub>
-
-- `keyword` filters by account name/title (e.g., `"defense"`, `"transportation"`)
-- `agency_identifier` filters to a specific agency by 3-digit code (e.g., `"097"` for DoD) — use `usaspending_list_agencies` to look up codes
-- `sort_field` enum: `account_name`, `account_number`, `budgetary_resources` (default), `managing_agency`
-- Returns `account_number` (format `"097-8097"`) for chaining into `usaspending_get_federal_account` for full budget detail
-- Pagination via `limit` and `page`; `count` in `page_metadata` is the total matches
-
----
-
 ### `usaspending_list_agencies` <sub>tool</sub>
 
-- Returns agency name, abbreviation, `toptier_code`, `agency_slug`, obligated amount, and budget authority amount for the current fiscal year
-- Entry point for agency navigation — `toptier_code` is required by `usaspending_get_agency` and agency filters
-- Configurable sort and order
+- Takes only `sort` (`agency_name`, `budget_authority_amount`, `obligated_amount`, `outlay_amount`) and `order`; returns every agency in one unpaginated response
+- Rows carry `toptier_code` and `agency_slug`, both accepted by `usaspending_get_agency`, plus current-year `budget_authority_amount`, `obligated_amount`, and `outlay_amount`
 
 ---
 
 ### `usaspending_autocomplete_filters` <sub>tool</sub>
 
-- `type` enum selects the lookup: `naics`, `psc`, `cfda`, `awarding_agency`, or `recipient`
-- Returns matching codes and names — use before filtering to find the right code when you only know a description (e.g., "software" → NAICS codes); `recipient` matches also carry `uei`/`duns`
-- The `naics` lookup matches official NAICS title text, not colloquial industry language — "software" and "aircraft" resolve, "cybersecurity" and "aircraft maintenance" return nothing. Fall back to the broader industry term the NAICS title would use
-- Consolidates five autocomplete endpoints into one tool
-- `limit` accepts 1–500 and is enforced client-side — the `recipient` lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x the requested count, so its results are capped before returning; the other four honor `limit` exactly
+- `type` (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) plus `search_text`; `limit` 1–500, default 10
+- Rows carry `code` and `name`, with `id` for agencies and `uei` / `duns` for recipients; no match fails as `no_match`. A `cfda` code is what `usaspending_search_awards` takes in `assistance_listings`
+- `naics` matches official NAICS title text: "software" resolves, "cybersecurity" does not, so search with the industry term a title would use
+
+---
+
+### `usaspending_search_awards` <sub>tool</sub>
+
+- Filters: `keyword`, `agency_name`, `recipient_name`, `naics_codes`, `assistance_listings`, `time_period`, and `location_filter` (country, state, FIPS county, city); `award_type_codes` defaults to contracts (`A`–`D`) and must stay in one group: IDVs `IDV_A`–`IDV_E`, grants `02`–`05`/`F001`/`F002`, direct payments `06`/`10`/`F006`/`F007`, loans `07`/`08`/`F003`/`F004`, or other assistance `09`/`11`/`-1`/`F005`/`F008`/`F009`/`F010`. `limit` up to 100
+- `assistance_listings` takes Assistance Listing (CFDA) numbers such as `93.866` or `11.67A` — look them up with `usaspending_autocomplete_filters` `type: cfda` — and matches awards carrying any of them. It needs an assistance group in `award_type_codes`; with contract or IDV codes, or the contract default, it fails as `assistance_listings_type_mismatch`
+- `sort` depends on the award type group: loans sort by `Loan Value` (default), `Subsidy Cost`, `Issued Date`, `Recipient Name`, or `Awarding Agency`; every other group by `Award Amount` (default), `Total Outlays`, `Start Date`, `End Date`, `Recipient Name`, or `Awarding Agency`, except that IDVs have no `End Date`. Any other pairing fails as `unsupported_sort` with the group's list
+- Dates are `YYYY-MM-DD` from 2007-10-01 on (month and day may be unpadded). Either end may be given alone, on the nested `filters.time_period_start` / `time_period_end` or by leaving one side of `time_period` blank (`""`) — a lone start runs through today (UTC), a lone end from 2007-10-01 — and the response echoes the range sent with a `notice` naming the filled field. A fully blank `time_period` means no date filter. A start after the end fails as `date_range_inverted`
+- Rows carry `generated_internal_id` for `usaspending_get_award` and `agency_slug` for `usaspending_get_agency`; loan rows carry `loan_value`, `subsidy_cost`, and `issued_date` in place of amounts and dates. There is no total, and `page_metadata.has_next` is true on any full page
+- Page numbers stop at a 50,000-result offset (`pagination_limit_exceeded`); go further with the `last_record_sort_value` + `last_record_unique_id` cursor, which is only returned below a 10,000-result offset
+
+---
+
+### `usaspending_get_award` <sub>tool</sub>
+
+- `award_id` is a `generated_unique_award_id`, the `generated_internal_id` from search; an unknown ID fails as `award_not_found`
+- Returns `category`, `total_obligation`, `total_outlays`, `subaward_count`, NAICS / PSC or CFDA codes, and `account_obligations_by_defc`
+- `recipient.recipient_id` chains to `usaspending_get_recipient` and `parent_award.generated_unique_award_id` to the parent IDV; `category: "idv"` awards list their children via `usaspending_get_idv_awards`
+
+---
+
+### `usaspending_get_award_transactions` <sub>tool</sub>
+
+- `award_id` plus `sort` (`action_date`, `federal_action_obligation`, `modification_number`); `limit` up to 100
+- Rows carry `action_date`, `modification_number`, `action_type`, and a signed `federal_action_obligation` (negative is a deobligation)
+
+---
+
+### `usaspending_get_award_subawards` <sub>tool</sub>
+
+- `award_id` plus `sort` (`subaward_number`, `description`, `action_date`, `amount`, `recipient_name`); `limit` up to 100
+- Rows carry `subaward_number`, `amount`, `action_date`, `recipient_name`, `recipient_uei`, and place of performance; `subaward_count` on `usaspending_get_award` says whether any exist
+
+---
+
+### `usaspending_get_award_federal_accounts` <sub>tool</sub>
+
+- `award_id` is a `generated_unique_award_id`; `limit` up to 100, with `page_metadata.count` as the total
+- Rows carry `federal_account` (AGENCY-MAIN, e.g. `080-0120`) for `usaspending_get_federal_account`, `total_transaction_obligated_amount`, and the funding agency with its `funding_agency_slug`
+
+---
+
+### `usaspending_get_idv_awards` <sub>tool</sub>
+
+- Parent IDV `award_id`; `type` is `child_awards` (task and delivery orders, the default), `child_idvs`, or `grandchild_awards`; `limit` up to 100
+- Rows carry `generated_unique_award_id` for `usaspending_get_award`, `obligated_amount`, and performance dates; there is no total, and `has_next` is true on any full page
+
+---
+
+### `usaspending_search_recipients` <sub>tool</sub>
+
+- `keyword` matches names, UEI, or DUNS, partial matches included; optional `award_type` scopes the totals; `limit` up to 100
+- Rows carry `id` (a hash suffixed `-P` parent, `-C` child, or `-R` standalone) for `usaspending_get_recipient`, plus `uei`, `duns`, `recipient_level`, and `amount`; `page_metadata.total` is the full match count
+
+---
+
+### `usaspending_get_recipient` <sub>tool</sub>
+
+- `recipient_id` from `usaspending_search_recipients` or `usaspending_get_award`; optional `fiscal_year` (2001–2030) and `award_type` scope the totals; an unknown ID fails as `recipient_not_found`
+- Returns address, `business_types`, `parent_name` / `parent_uei`, `alternate_names`, `total_transaction_amount`, `total_transactions`, and loan face-value totals
+
+---
+
+### `usaspending_get_agency` <sub>tool</sub>
+
+- One of `toptier_code` (e.g. `097`) or `agency_slug` (e.g. `department-of-defense`); `page` walks the sub-agency list 10 at a time. Failures are `missing_input` and `agency_not_found`
+- Returns `mission`, plus `budgetary_resources_amount`, `obligated_amount`, and `outlay_amount` for the latest `fiscal_year`, `sub_agencies` with obligations and transaction and new-award counts, and `def_codes`
+
+---
+
+### `usaspending_spending_by_geography` <sub>tool</sub>
+
+- `scope` (`place_of_performance`, `recipient_location`) and `geo_layer` (`state`, `county`, `district`) are required; `filters` takes `keywords`, `award_type_codes`, `agency_name`, `recipient_id`, `naics_codes`, and `time_period_start` / `time_period_end` (`YYYY-MM-DD`; either alone fills the other, as in `usaspending_search_awards`, `applied_time_period_*` echoes the range sent, a start after the end fails as `date_range_inverted`, and a range starting before 2007-10-01 fails as `date_before_earliest`); `limit` 1–500, default 50
+- Rows carry `shape_code`, `display_name`, `aggregated_amount`, `population`, `per_capita`, and `award_count`, ranked by amount; `total_areas_available` counts every match before the cap
+- With no filters, every award type is aggregated and `applied_award_type_default` says so; `subawards: true` switches to subaward data
+
+---
+
+### `usaspending_spending_by_category` <sub>tool</sub>
+
+- `category` is `naics`, `psc`, `awarding_agency`, `awarding_subagency`, `funding_agency`, `funding_subagency`, `cfda`, `recipient_duns`, or `recipient_parent_duns`; takes the same `filters` object as `usaspending_spending_by_geography`; `limit` up to 100
+- Rows carry `id`, `code`, `name`, and `amount`, ranked by obligation
+
+---
+
+### `usaspending_spending_over_time` <sub>tool</sub>
+
+- `group` is `fiscal_year`, `quarter`, or `month` (fiscal month, where 1 is October); the same `filters` object, with `award_type_codes` defaulting to contracts and limited to one group; `subawards: true` switches to subaward data
+- Rows carry `time_period`, `aggregated_amount`, and per-type `contracts`, `grants`, `direct_payments`, `idvs`, `loans`, and `other`
+
+---
+
+### `usaspending_disaster_spending` <sub>tool</sub>
+
+- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; every dimension except `overview` requires `filters.def_codes` (e.g. `["L", "M", "N", "O", "P"]` for COVID-19); `limit` up to 100 on agency, cfda, and recipient
+- Rows carry `obligation`, `outlay`, and `award_count`, plus `total_budgetary_resources` on agency rows under `spending_type: total`; `overview` returns totals and `funding_by_def_code`. A recipient row's `id` is one recipient hash for `usaspending_get_recipient` — the recipient-level `-R` ID when USAspending lists several. The recipient total tops out at 10,000, and a response at that cap is flagged `truncated`
+- Agency, cfda, and recipient also return `totals` for every matching row, as USAspending reports them: `obligation`, `outlay`, and either `total_budgetary_resources` (agency, `total`) or `award_count`. When the overview endpoint outlasts the request budget, the agency breakdown with `spending_type: total` still reports obligations, outlays, and budgetary resources
+- `spending_type` (`award`, the default, or `total`) applies to the agency dimension only — USAspending returns the same recipient breakdown for either value; geography takes `filters.geo_layer` (`state`, `county`) and always reports obligations
+
+---
+
+### `usaspending_search_federal_accounts` <sub>tool</sub>
+
+- Optional `keyword` and 3-digit `agency_identifier`; `sort_field` is `account_name`, `account_number`, `budgetary_resources` (default), or `managing_agency`; `limit` up to 100
+- Rows carry `account_number` (e.g. `097-8097`) for the federal-account tools, `managing_agency`, and `budgetary_resources`; `page_metadata.count` is the total
+
+---
+
+### `usaspending_get_federal_account` <sub>tool</sub>
+
+- `account_code` in AGENCY-MAIN format, from `account_number` in search results or `federal_account` on an award; an unknown code fails as `account_not_found`
+- Returns `total_obligated_amount`, `total_gross_outlay_amount`, and `total_budgetary_resources` for `fiscal_year`, plus `children`: one entry per Treasury Account Symbol with its own amounts
+
+---
+
+### `usaspending_get_federal_account_breakdown` <sub>tool</sub>
+
+- `account_code` plus `dimension` (`program_activity` or `object_class`); `limit` up to 100, with `page_metadata.total` as the row count
+- Rows carry `code`, `name`, and `obligations`; `program_activity` rows add `type`, either `PAC/PAN` or `PARK`
 
 ## Features
 
@@ -225,17 +195,17 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 
 USAspending-specific:
 
-- Full USAspending.gov API v2 coverage — award search, award detail, recipient and agency profiles, spending analytics, disaster spending, and federal accounts
-- No authentication required — all data is public domain under the DATA Act
-- `usaspending_spending_by_category` consolidates 14 category sub-routes behind a single `category` enum; `usaspending_disaster_spending` consolidates 9+ disaster endpoints behind `dimension` + `spending_type` enums
-- `usaspending_get_agency` accepts both `toptier_code` and `agency_slug`, eliminating the intermediate agency-list lookup that award search results would otherwise require
-- `usaspending_autocomplete_filters` serves as the code-discovery step before filtering — maps human-readable terms to NAICS, PSC, CFDA, and agency codes
+- USAspending.gov API v2, keyless: the data is public under the DATA Act
+- Award search and the spending analytics tools cover action dates from 2007-10-01 on (an earlier start date fails as `date_before_earliest`), and DoD contract data lags publication by 90 days
+- `usaspending_spending_by_category` puts nine category sub-routes behind one `category` enum, and `usaspending_disaster_spending` puts five disaster endpoints behind `dimension`
+- Each request runs under a per-attempt timeout and a wall-clock retry budget; failures surface as `api_timeout` or `api_unavailable` with each tool's recovery hint, and a rejected request carries USAspending's own explanation in the error message
 
 Agent-friendly output:
 
-- Chaining fields on every response — `generated_internal_id`, `agency_slug`, `recipient_hash`, and `account_code` fields are surfaced explicitly so agents can follow the money without parsing identifiers out of display strings
-- Pagination metadata on list responses — `page_metadata.has_next` and `page_metadata.page` let agents iterate large result sets without guessing. `page_metadata.total` is carried wherever the upstream endpoint publishes one; `usaspending_get_award_transactions`, `usaspending_get_award_subawards`, and `usaspending_spending_by_category` sit on endpoints that publish none, so `has_next` is the only continuation signal there
-- Structured geographic outputs — `shape_code`, `display_name`, `aggregated_amount`, and `per_capita` are typed consistently across state, county, and district views for composable analysis
+- Chaining IDs as explicit fields: `generated_internal_id`, `agency_slug`, `recipient.recipient_id`, `federal_account`, and `account_number`, so agents follow the money without parsing display strings
+- Honest pagination: `page_metadata.has_next` on every list, a `total` or `count` where the upstream publishes one, and `truncated` / `shown` / `cap` when a response is capped
+- Empty results are notices, not errors: an empty page carries a `notice` echoing the filters and how to broaden them. The ID-keyed list tools (transactions, subawards, funding accounts, IDV children, account breakdown) return an empty list for an unknown ID rather than failing
+- Typed failures with recovery hints: `award_not_found`, `recipient_not_found`, `agency_not_found`, `account_not_found`, `no_match`, `date_before_earliest`, `date_range_inverted`, `unsupported_sort`, `assistance_listings_type_mismatch`, `pagination_limit_exceeded`
 
 ## Getting started
 
@@ -256,7 +226,7 @@ A public instance is available at `https://usaspending.caseyjhand.com/mcp` — n
 
 ### Self-Hosted / Local
 
-Add the following to your MCP client configuration file. No API key is required — USAspending.gov data is public domain.
+Add the following to your MCP client configuration file. No API key is required.
 
 ```json
 {
@@ -319,8 +289,8 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
-- No API key required — USAspending.gov is a public data platform with no authentication requirement.
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- No API key or account: USAspending.gov is open to anonymous requests.
 
 ### Installation
 
@@ -351,23 +321,21 @@ cp .env.example .env
 
 ## Configuration
 
-All configuration is validated at startup via Zod schemas in `src/config/server-config.ts`. No environment variables are required — the defaults work out of the box.
+No variable is required; the defaults work out of the box.
 
 | Variable | Description | Default |
-|:---------|:------------|:--------|
-| `USASPENDING_BASE_URL` | Base URL for the USAspending.gov API. | `https://api.usaspending.gov/api/v2/` |
-| `USASPENDING_TIMEOUT_MS` | HTTP timeout in milliseconds, applied per attempt. | `30000` |
-| `USASPENDING_RETRY_BUDGET_MS` | Wall-clock budget covering every retry attempt of one request, so a slow endpoint cannot re-pay the per-attempt timeout on each retry. Accepts 1000–300000. | `1.5 × USASPENDING_TIMEOUT_MS` |
+|:---|:---|:---|
+| `USASPENDING_BASE_URL` | USAspending.gov API v2 base URL. | `https://api.usaspending.gov/api/v2/` |
+| `USASPENDING_TIMEOUT_MS` | Per-attempt HTTP timeout, in ms (1000–120000). | `30000` |
+| `USASPENDING_RETRY_BUDGET_MS` | Wall-clock budget for one request across all retry attempts, in ms (1000–300000). | 1.5 × `USASPENDING_TIMEOUT_MS` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
-| `MCP_HTTP_PORT` | Port for the HTTP server. | `3010` |
-| `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path. | `/mcp` |
-| `MCP_SESSION_MODE` | Session mode: `auto`, `stateful`, or `stateless`; `auto` resolves to `stateful`. Shipped as `stateless` in both `.env.example` and the Dockerfile — this server holds no per-session state. | `auto` |
-| `MCP_PUBLIC_URL` | Public origin override for TLS-terminating reverse-proxy deployments. | — |
-| `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
+| `MCP_HTTP_PORT` | HTTP server port. | `3010` |
+| `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. | `stateless` |
+| `MCP_AUTH_MODE` | Authentication: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (`debug`, `info`, `warning`, `error`, etc.). | `info` |
 | `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv/r2/d1`. | `in-memory` |
-| `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
+| `OTEL_ENABLED` | Enable [OpenTelemetry](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 
@@ -407,12 +375,12 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 ## Project structure
 
 | Directory | Purpose |
-|:----------|:--------|
-| `src/index.ts` | `createApp()` entry point — registers tools and inits services. |
+|:---|:---|
+| `src/index.ts` | `createApp()` entry point: registers the tools and initializes the USAspending service. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). |
-| `src/services` | USAspending API client and service layer. |
-| `tests/` | Unit and integration tests mirroring `src/`. |
+| `src/mcp-server/tools/definitions` | Tool definitions (`*.tool.ts`) plus shared filter, date, pagination, and formatting helpers. |
+| `src/services/usaspending` | USAspending.gov API client: request timeouts, retry budget, raw response types. |
+| `tests/` | Unit tests for tools, the service, config, and scripts. |
 
 ## Development guide
 
@@ -420,7 +388,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 
 - Handlers throw, framework catches — no `try/catch` in tool logic
 - Use `ctx.log` for request-scoped logging, `ctx.state` for tenant-scoped storage
-- Register new tools via the barrels in `src/mcp-server/tools/definitions/index.ts`
+- Register new tools via the barrel in `src/mcp-server/tools/definitions/index.ts`
 - Wrap external API calls: validate raw → normalize to domain type → return output schema; never fabricate missing fields
 
 ## Contributing

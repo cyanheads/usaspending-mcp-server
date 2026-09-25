@@ -19,7 +19,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
     type: z
       .enum(['naics', 'psc', 'cfda', 'awarding_agency', 'recipient'])
       .describe(
-        'Lookup table to search: naics (industry codes), psc (product/service codes), cfda (assistance programs), awarding_agency (agency names), recipient (recipient names)',
+        'Lookup table to search: naics (industry codes), psc (product/service codes), cfda (Assistance Listing program numbers, for usaspending_search_awards assistance_listings), awarding_agency (agency names), recipient (recipient names)',
       ),
     search_text: z
       .string()
@@ -49,7 +49,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                'Code value (NAICS code, PSC code, CFDA number, or agency code); use this in filter parameters',
+                'Code value (NAICS code, PSC code, Assistance Listing/CFDA number, or agency code); use this in filter parameters — an Assistance Listing number goes in usaspending_search_awards assistance_listings',
               ),
             name: z.string().optional().describe('Human-readable name or description'),
             id: z

@@ -7,6 +7,16 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import {
+  ANALYTICS_DATE_FIELDS,
+  blankableIsoDate,
+  type DateFields,
+  filledBoundNotice,
+  floorViolationMessage,
+  invertedRangeMessage,
+  optionalIsoDate,
+  resolveDateRange,
+} from './dates.js';
 import { formatCurrency } from './formatting.js';
 import { resolveHasNext } from './pagination.js';
 
@@ -34,6 +44,96 @@ const AWARD_SEARCH_FIELDS = [
 ];
 
 /**
+ * Loan-only fields. A loan row carries no Award Amount, Total Outlays, or
+ * dates, and upstream sorts only by a field the request names, so a loan search
+ * requests these on top of {@link AWARD_SEARCH_FIELDS}.
+ */
+const LOAN_FIELDS = ['Loan Value', 'Subsidy Cost', 'Issued Date'];
+
+const CONTRACT_SORTS = [
+  'Award Amount',
+  'Total Outlays',
+  'Start Date',
+  'End Date',
+  'Recipient Name',
+  'Awarding Agency',
+] as const;
+const LOAN_SORTS = [
+  'Loan Value',
+  'Subsidy Cost',
+  'Issued Date',
+  'Recipient Name',
+  'Awarding Agency',
+] as const;
+
+type AwardSort = (typeof CONTRACT_SORTS)[number] | (typeof LOAN_SORTS)[number];
+
+interface AwardTypeGroup {
+  codes: readonly string[];
+  label: string;
+  sorts: readonly AwardSort[];
+}
+
+/**
+ * The award-type groups `search/spending_by_award/` accepts one at a time — the
+ * partition its mixed-group 422 lists, F-codes and -1 included — and the sorts
+ * each group's field mapping allows; upstream answers any other sort with a 400.
+ * IDVs have no End Date; loans have no amount or date fields of the contract
+ * kind and sort by their own. Labels follow USAspending's type names.
+ */
+const AWARD_TYPE_GROUPS = {
+  contracts: { label: 'contracts', codes: ['A', 'B', 'C', 'D'], sorts: CONTRACT_SORTS },
+  idvs: {
+    label: 'IDVs',
+    codes: ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E'],
+    sorts: CONTRACT_SORTS.filter((sort) => sort !== 'End Date'),
+  },
+  grants: {
+    label: 'grants',
+    codes: ['02', '03', '04', '05', 'F001', 'F002'],
+    sorts: CONTRACT_SORTS,
+  },
+  direct_payments: {
+    label: 'direct payments',
+    codes: ['06', '10', 'F006', 'F007'],
+    sorts: CONTRACT_SORTS,
+  },
+  loans: { label: 'loans', codes: ['07', '08', 'F003', 'F004'], sorts: LOAN_SORTS },
+  other: {
+    label: 'other',
+    codes: ['09', '11', '-1', 'F005', 'F008', 'F009', 'F010'],
+    sorts: CONTRACT_SORTS,
+  },
+} satisfies Record<string, AwardTypeGroup>;
+
+/**
+ * The group every code belongs to, or `undefined` when the codes span groups or
+ * include one outside them — upstream's own 422 then decides, unguessed.
+ */
+function resolveAwardTypeGroup(codes: readonly string[]): AwardTypeGroup | undefined {
+  const groups = new Set(
+    codes.map((code) => Object.values(AWARD_TYPE_GROUPS).find((g) => g.codes.includes(code))),
+  );
+  const [only] = groups;
+  return groups.size === 1 ? only : undefined;
+}
+
+/** Codes that never carry an assistance listing: contracts and IDVs. */
+const NON_ASSISTANCE_CODES = new Set([
+  ...AWARD_TYPE_GROUPS.contracts.codes,
+  ...AWARD_TYPE_GROUPS.idvs.codes,
+]);
+
+/** The flat `time_period` object's field paths, as messages name them. */
+const FLAT_DATE_FIELDS = {
+  start: 'time_period.start_date',
+  end: 'time_period.end_date',
+} as const satisfies DateFields;
+
+/** Assistance Listing (CFDA) number: two digits, a dot, three digits or capitals (`11.67A`). */
+const ASSISTANCE_LISTING_PATTERN = /^\d{2}\.[0-9A-Z]{3}$/;
+
+/**
  * Page-number pagination on search/spending_by_award/ caps at a 50,000-result offset
  * (page × limit). Past that boundary the endpoint requires keyset (after-cursor)
  * pagination via last_record_sort_value + last_record_unique_id.
@@ -50,18 +150,10 @@ const MAX_PAGE_OFFSET = 50_000;
  */
 const CURSOR_WINDOW_OFFSET = 10_000;
 
-/**
- * Earliest action date search/spending_by_award/ will accept. A start_date before
- * this floor makes the endpoint return a raw HTML 500 with no explanation — unlike
- * the sibling analytics endpoints, which reject the same input with a graceful 422
- * naming the floor. Guarded client-side so the caller gets the boundary instead.
- */
-const EARLIEST_SEARCH_DATE = '2007-10-01';
-
 export const searchAwardsTool = tool('usaspending_search_awards', {
   title: 'Search Federal Awards',
   description:
-    'Search federal awards by keyword, recipient, agency, award type, NAICS code, location, or date range. Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award. Award types: A/B/C/D = contracts, 02/03/04/05 = grants, 06/10 = direct payments, 07/08 = loans, IDV_A/IDV_B/IDV_C/IDV_D/IDV_E = IDVs. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
+    'Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, location, or date range. Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -71,9 +163,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe('Full-text search across award descriptions, recipient names, and place names'),
     award_type_codes: z
       .array(z.string())
+      .min(1)
       .default(['A', 'B', 'C', 'D'])
       .describe(
-        'Filter by award type codes. All codes must belong to a single group: A/B/C/D (contracts), 02/03/04/05 (grants), 06/10 (direct payments), 07/08 (loans), IDV_A–IDV_E (IDVs). Defaults to contracts. Mixing groups across categories causes a 422 error.',
+        'Filter by award type codes. All codes must belong to a single group: A/B/C/D (contracts), IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E (IDVs), 02/03/04/05/F001/F002 (grants), 06/10/F006/F007 (direct payments), 07/08/F003/F004 (loans), 09/11/-1/F005/F008/F009/F010 (other assistance). Defaults to contracts. Mixing groups causes a 422 error. The group decides which sort values apply.',
       ),
     agency_name: z
       .string()
@@ -93,15 +186,33 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe(
         'Filter by NAICS industry codes (e.g., ["541512"]). Use usaspending_autocomplete_filters type=naics to look up codes.',
       ),
+    assistance_listings: z
+      .array(
+        z
+          .string()
+          .regex(
+            ASSISTANCE_LISTING_PATTERN,
+            'Expected an Assistance Listing number as NN.NNN (e.g. 93.866 or 11.67A)',
+          )
+          .describe('Assistance Listing number, e.g. 93.866'),
+      )
+      .optional()
+      .describe(
+        'Filter by Assistance Listing (CFDA) program numbers, e.g. ["93.866"]: two digits, a dot, then three digits or capital letters (11.67A). Matches an award when any of its listings equals one of these exactly; several values match any of them. A row\'s primary listing can differ from the one requested, and its amount is the whole award, not that listing\'s share. Assistance award types only — set award_type_codes to grants, direct payments, loans, or other assistance; contracts and IDVs carry no listings, so pairing them (including the default award_type_codes) is rejected. Use usaspending_autocomplete_filters type=cfda to look up numbers.',
+      ),
     time_period: z
       .object({
-        start_date: z
-          .string()
-          .describe('Start date in ISO 8601 format (YYYY-MM-DD); earliest valid: 2007-10-01'),
-        end_date: z.string().describe('End date in ISO 8601 format (YYYY-MM-DD)'),
+        start_date: blankableIsoDate(
+          'Start date in ISO 8601 format (YYYY-MM-DD); earliest valid: 2007-10-01. Blank ("") leaves the start open, filled with 2007-10-01.',
+        ),
+        end_date: blankableIsoDate(
+          'End date in ISO 8601 format (YYYY-MM-DD). Blank ("") leaves the end open, filled with today (UTC).',
+        ),
       })
       .optional()
-      .describe('Filter awards by date range (action date)'),
+      .describe(
+        'Filter awards by date range (action date). Both blank means no date filter; one blank end is filled and named in the notice.',
+      ),
     location_filter: z
       .object({
         country: z.string().optional().describe('ISO 3166-1 alpha-3 country code (e.g., USA)'),
@@ -122,11 +233,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         'Total Outlays',
         'Start Date',
         'End Date',
+        'Loan Value',
+        'Subsidy Cost',
+        'Issued Date',
         'Recipient Name',
         'Awarding Agency',
       ])
-      .default('Award Amount')
-      .describe('Sort field for results'),
+      .optional()
+      .describe(
+        'Sort field for results. Loans (07/08/F003/F004) sort by Loan Value, Subsidy Cost, Issued Date, Recipient Name, or Awarding Agency, defaulting to Loan Value. Every other group sorts by Award Amount, Total Outlays, Start Date, End Date, Recipient Name, or Awarding Agency, defaulting to Award Amount — except IDVs, which have no End Date. A sort the group does not support is rejected before the search runs.',
+      ),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
     limit: z
       .number()
@@ -168,7 +284,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           .array(z.string())
           .optional()
           .describe(
-            'Award type codes; all must belong to one group (A/B/C/D, 02/03/04/05, 06/10, 07/08, IDV_A–IDV_E)',
+            'Award type codes; all must belong to one group (A/B/C/D contracts, IDV_A–IDV_E IDVs, 02/03/04/05/F001/F002 grants, 06/10/F006/F007 direct payments, 07/08/F003/F004 loans, 09/11/-1/F005/F008/F009/F010 other assistance). When non-empty, overrides the top-level award_type_codes and decides which sort values apply; an empty array falls back to the top-level value.',
           ),
         agency_name: z
           .string()
@@ -184,16 +300,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           .array(z.string())
           .optional()
           .describe('NAICS industry codes to require, e.g., ["541512"]'),
-        time_period_start: z
-          .string()
-          .optional()
-          .describe(
-            'Start date (YYYY-MM-DD); earliest valid 2007-10-01. Requires time_period_end.',
-          ),
-        time_period_end: z
-          .string()
-          .optional()
-          .describe('End date (YYYY-MM-DD). Requires time_period_start.'),
+        time_period_start: optionalIsoDate(
+          'Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC).',
+        ),
+        time_period_end: optionalIsoDate(
+          'End date (YYYY-MM-DD). Given alone, the range starts at 2007-10-01, the earliest searchable date.',
+        ),
       })
       .optional()
       .describe(
@@ -219,6 +331,22 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
             recipient_name: z.string().optional().describe('Name of the award recipient'),
             award_amount: z.number().optional().describe('Total award amount in USD'),
             total_outlays: z.number().optional().describe('Total outlays in USD'),
+            loan_value: z
+              .number()
+              .optional()
+              .describe('Face value of the loan in USD (loans only — they carry no award_amount)'),
+            subsidy_cost: z
+              .number()
+              .optional()
+              .describe(
+                'Original subsidy cost of the loan in USD — the estimated long-term cost to the government (loans only)',
+              ),
+            issued_date: z
+              .string()
+              .optional()
+              .describe(
+                'Date the loan was issued (YYYY-MM-DD; loans only — they carry no start or end date)',
+              ),
             awarding_agency: z.string().optional().describe('Name of the awarding agency'),
             awarding_sub_agency: z.string().optional().describe('Name of the awarding sub-agency'),
             agency_slug: z
@@ -301,16 +429,23 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe('NAICS codes filter applied (comma-separated)'),
+    applied_assistance_listings: z
+      .string()
+      .optional()
+      .describe('Assistance Listing numbers filter applied (comma-separated)'),
     applied_time_period_start: z
       .string()
       .optional()
-      .describe('Start date filter applied (YYYY-MM-DD)'),
-    applied_time_period_end: z.string().optional().describe('End date filter applied (YYYY-MM-DD)'),
+      .describe('Start of the date range sent (YYYY-MM-DD), including a filled-in start'),
+    applied_time_period_end: z
+      .string()
+      .optional()
+      .describe('End of the date range sent (YYYY-MM-DD), including a filled-in end'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — echoes applied filters and suggests how to broaden. Absent when results are present.',
+        'How to page on when more results may remain, which date bound was filled in when only the other was supplied, and — when results are empty — the applied filters with how to broaden. Absent when none applies.',
       ),
   },
 
@@ -366,6 +501,29 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       recovery:
         'Re-request with a start date of 2007-10-01 or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.',
     },
+    {
+      reason: 'date_range_inverted',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'Both ends of the date range were supplied and the start date falls after the end date.',
+      retryable: false,
+      recovery: 'Swap the two dates so the start date is on or before the end date, then retry.',
+    },
+    {
+      reason: 'unsupported_sort',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The sort value is not one the award type group supports.',
+      retryable: false,
+      recovery:
+        'Re-request with one of the sorts the error lists for this award type group, or omit sort to use the group default (Loan Value for loans, Award Amount otherwise).',
+    },
+    {
+      reason: 'assistance_listings_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'assistance_listings was given while the award type codes include contract or IDV codes, or were left at the contract default.',
+      retryable: false,
+      recovery:
+        'Set award_type_codes to one assistance group — grants 02/03/04/05/F001/F002, direct payments 06/10/F006/F007, loans 07/08/F003/F004, or other assistance 09/11/-1/F005/F008/F009/F010 — alongside assistance_listings.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -407,26 +565,65 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         : input.keyword
           ? [input.keyword]
           : undefined;
-    const awardTypeCodes =
-      f?.award_type_codes && f.award_type_codes.length > 0
-        ? f.award_type_codes
-        : input.award_type_codes;
+    const awardTypeCodes = f?.award_type_codes?.length
+      ? f.award_type_codes
+      : input.award_type_codes;
     const agencyName = f?.agency_name || input.agency_name;
     const recipientName = f?.recipient_name || input.recipient_name;
     const naicsCodes =
       f?.naics_codes && f.naics_codes.length > 0 ? f.naics_codes : input.naics_codes;
-    const startDate = f?.time_period_start || input.time_period?.start_date;
-    const endDate = f?.time_period_end || input.time_period?.end_date;
+    // Both input paths (the flat time_period and the nested filters.time_period_*)
+    // merge here, nested winning per bound; a blank reads as absent. A lone bound
+    // is filled to a two-ended range, padded, so a half-blank flat pair is a lone
+    // bound and a fully blank one is no range at all.
+    const timePeriod = resolveDateRange(
+      f?.time_period_start || input.time_period?.start_date,
+      f?.time_period_end || input.time_period?.end_date,
+    );
+    // Messages name the path each bound came from. Only a lone bound is filled,
+    // so the omitted field belongs to the same path as the one supplied.
+    const dateFields: DateFields = {
+      start: f?.time_period_start ? ANALYTICS_DATE_FIELDS.start : FLAT_DATE_FIELDS.start,
+      end: f?.time_period_end ? ANALYTICS_DATE_FIELDS.end : FLAT_DATE_FIELDS.end,
+    };
+    const filledFields: DateFields =
+      f?.time_period_start || f?.time_period_end ? ANALYTICS_DATE_FIELDS : FLAT_DATE_FIELDS;
 
-    // A start_date before the floor makes this endpoint answer with a raw HTML 500,
-    // so fail fast with the boundary instead. Guarding here covers both input paths:
-    // the flat time_period and the nested filters.time_period_start resolve into
-    // startDate above. ISO 8601 dates compare correctly as strings.
-    if (startDate && startDate < EARLIEST_SEARCH_DATE) {
+    // Upstream ignores an inverted range here and returns rows outside it, so the
+    // echo would claim a window that was never applied.
+    const inverted = invertedRangeMessage(timePeriod, dateFields);
+    if (inverted) {
+      throw ctx.fail('date_range_inverted', inverted, ctx.recoveryFor('date_range_inverted'));
+    }
+
+    // Upstream rejects a start before the floor with its own 422; failing here
+    // instead carries the declared reason and the bulk-download recovery.
+    const beforeFloor = floorViolationMessage(timePeriod);
+    if (beforeFloor) {
+      throw ctx.fail('date_before_earliest', beforeFloor, ctx.recoveryFor('date_before_earliest'));
+    }
+
+    // Contracts and IDVs carry no listings: upstream answers 200 with zero rows and
+    // no message, which reads as "no such awards" rather than a mismatched filter.
+    const listings = input.assistance_listings?.length ? input.assistance_listings : undefined;
+    if (listings && awardTypeCodes.some((code) => NON_ASSISTANCE_CODES.has(code))) {
       throw ctx.fail(
-        'date_before_earliest',
-        `Start date ${startDate} precedes ${EARLIEST_SEARCH_DATE}, the earliest date this endpoint can search.`,
-        ctx.recoveryFor('date_before_earliest'),
+        'assistance_listings_type_mismatch',
+        `assistance_listings match only assistance awards, but award_type_codes [${awardTypeCodes.join(', ')}] include contract or IDV codes, which carry no listings. award_type_codes defaults to contracts when omitted.`,
+        ctx.recoveryFor('assistance_listings_type_mismatch'),
+      );
+    }
+
+    // Upstream checks the sort against the group's field mapping and answers 400
+    // outside it. Codes spanning groups skip the check: upstream's 422 decides.
+    const group = resolveAwardTypeGroup(awardTypeCodes);
+    const isLoan = group === AWARD_TYPE_GROUPS.loans;
+    const sort = input.sort ?? (isLoan ? 'Loan Value' : 'Award Amount');
+    if (group && !group.sorts.includes(sort)) {
+      throw ctx.fail(
+        'unsupported_sort',
+        `Sort "${sort}" is not available for ${group.label} (award_type_codes ${awardTypeCodes.join(', ')}). Supported sorts for ${group.label}: ${group.sorts.join(', ')}.`,
+        ctx.recoveryFor('unsupported_sort'),
       );
     }
 
@@ -440,8 +637,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     if (naicsCodes?.length) {
       filters.naics_codes = { require: naicsCodes };
     }
-    if (startDate && endDate) {
-      filters.time_period = [{ start_date: startDate, end_date: endDate }];
+    if (listings) filters.program_numbers = listings;
+    if (timePeriod) {
+      filters.time_period = [{ start_date: timePeriod.start_date, end_date: timePeriod.end_date }];
     }
     if (
       input.location_filter &&
@@ -461,8 +659,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     const data = await svc.searchAwards(
       {
         filters,
-        fields: AWARD_SEARCH_FIELDS,
-        sort: input.sort,
+        fields: isLoan ? [...AWARD_SEARCH_FIELDS, ...LOAN_FIELDS] : AWARD_SEARCH_FIELDS,
+        sort,
         order: input.order,
         limit: input.limit,
         // page and cursor are mutually exclusive; omit page when paging by cursor.
@@ -485,6 +683,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ...(r['Recipient Name'] ? { recipient_name: String(r['Recipient Name']) } : {}),
       ...(typeof r['Award Amount'] === 'number' ? { award_amount: r['Award Amount'] } : {}),
       ...(typeof r['Total Outlays'] === 'number' ? { total_outlays: r['Total Outlays'] } : {}),
+      ...(typeof r['Loan Value'] === 'number' ? { loan_value: r['Loan Value'] } : {}),
+      ...(typeof r['Subsidy Cost'] === 'number' ? { subsidy_cost: r['Subsidy Cost'] } : {}),
+      ...(r['Issued Date'] ? { issued_date: String(r['Issued Date']) } : {}),
       ...(r['Awarding Agency'] ? { awarding_agency: String(r['Awarding Agency']) } : {}),
       ...(r['Awarding Sub Agency']
         ? { awarding_sub_agency: String(r['Awarding Sub Agency']) }
@@ -548,33 +749,44 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ...(keywords?.length ? { applied_keyword: keywords.join(', ') } : {}),
       ...(agencyName ? { applied_agency_name: agencyName } : {}),
       ...(naicsCodes?.length ? { applied_naics_codes: naicsCodes.join(', ') } : {}),
-      ...(startDate ? { applied_time_period_start: startDate } : {}),
-      ...(endDate ? { applied_time_period_end: endDate } : {}),
+      ...(listings ? { applied_assistance_listings: listings.join(', ') } : {}),
+      ...(timePeriod
+        ? {
+            applied_time_period_start: timePeriod.start_date,
+            applied_time_period_end: timePeriod.end_date,
+          }
+        : {}),
     });
+
+    // enrich.notice is last-wins, and enrich.truncated writes the notice too, so
+    // every notice source joins into one string written at the end.
+    const notices: (string | undefined)[] = [];
 
     // Disclose page-based truncation: a capped page with more results behind has_next
     // (this endpoint returns no total, so the cap/shown pair is the honest signal).
     if (page_metadata.has_next) {
-      ctx.enrich.truncated({
-        shown: results.length,
-        cap: input.limit,
-        guidance: `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`,
-      });
+      const guidance = `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`;
+      ctx.enrich.truncated({ shown: results.length, cap: input.limit, guidance });
+      notices.push(guidance);
     }
+    notices.push(filledBoundNotice(timePeriod, filledFields));
 
     if (results.length === 0) {
       const filterParts: string[] = [];
       if (keywords?.length) filterParts.push(`keyword="${keywords.join(', ')}"`);
       if (agencyName) filterParts.push(`agency="${agencyName}"`);
+      if (listings) filterParts.push(`assistance_listings=${listings.join(',')}`);
       if (awardTypeCodes?.length) {
         filterParts.push(`types=${awardTypeCodes.join(',')}`);
       }
-      const notice =
+      notices.push(
         filterParts.length > 0
           ? `No awards matched: ${filterParts.join(', ')}. Try removing filters or broadening the date range.`
-          : 'No awards matched your search. Try a different keyword or remove filters.';
-      ctx.enrich.notice(notice);
+          : 'No awards matched your search. Try a different keyword or remove filters.',
+      );
     }
+    const notice = notices.filter(Boolean).join(' ');
+    if (notice) ctx.enrich.notice(notice);
 
     return { results, page_metadata };
   },
@@ -595,6 +807,11 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         lines.push(`**Amount:** ${formatCurrency(r.award_amount)}`);
       if (typeof r.total_outlays === 'number')
         lines.push(`**Outlays:** ${formatCurrency(r.total_outlays)}`);
+      if (typeof r.loan_value === 'number')
+        lines.push(`**Loan Value:** ${formatCurrency(r.loan_value)}`);
+      if (typeof r.subsidy_cost === 'number')
+        lines.push(`**Subsidy Cost:** ${formatCurrency(r.subsidy_cost)}`);
+      if (r.issued_date) lines.push(`**Issued:** ${r.issued_date}`);
       if (r.award_type) lines.push(`**Type:** ${r.award_type}`);
       if (r.awarding_agency)
         lines.push(

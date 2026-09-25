@@ -96,6 +96,112 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   }),
 }));
 
+// --- Date inputs (#58) ---
+
+/**
+ * All ten date inputs carry the YYYY-MM-DD pattern in the advertised input
+ * schema, so a client sees the shape before calling, and the same pattern
+ * rejects a malformed date at argument validation. Month and day may be
+ * unpadded; the handlers pad them. Every field also accepts `""`, what form
+ * clients send for an untouched field, and advertises it beside the pattern.
+ */
+describe('Date inputs — advertised and enforced pattern', () => {
+  const DATE_FIELDS = [
+    [searchAwardsTool, {}, 'time_period', 'start_date', true],
+    [searchAwardsTool, {}, 'time_period', 'end_date', true],
+    [searchAwardsTool, {}, 'filters', 'time_period_start', false],
+    [searchAwardsTool, {}, 'filters', 'time_period_end', false],
+    [spendingByCategoryTool, { category: 'naics' }, 'filters', 'time_period_start', false],
+    [spendingByCategoryTool, { category: 'naics' }, 'filters', 'time_period_end', false],
+    [
+      spendingByGeographyTool,
+      { scope: 'place_of_performance', geo_layer: 'state' },
+      'filters',
+      'time_period_start',
+      false,
+    ],
+    [
+      spendingByGeographyTool,
+      { scope: 'place_of_performance', geo_layer: 'state' },
+      'filters',
+      'time_period_end',
+      false,
+    ],
+    [spendingOverTimeTool, { group: 'fiscal_year' }, 'filters', 'time_period_start', false],
+    [spendingOverTimeTool, { group: 'fiscal_year' }, 'filters', 'time_period_end', false],
+  ] as const;
+
+  const cases = DATE_FIELDS.map(
+    ([tool, base, parent, field, required]) =>
+      [`${tool.name} ${parent}.${field}`, tool, base, parent, field, required] as const,
+  );
+
+  /** Input with `value` at parent.field; the flat time_period's sibling gets a valid date. */
+  const withDate = (
+    base: Record<string, unknown>,
+    parent: string,
+    field: string,
+    value: string,
+  ): Record<string, unknown> => {
+    const sibling =
+      parent === 'time_period' ? { start_date: '2024-01-01', end_date: '2024-12-31' } : {};
+    return { ...base, [parent]: { ...sibling, [field]: value } };
+  };
+
+  it.each(cases)(
+    '%s advertises the pattern alongside the blank literal',
+    (_label, tool, _base, parent, field) => {
+      type Node = { anyOf?: Node[]; const?: unknown; pattern?: string };
+      const schema = z.toJSONSchema(tool.input, { io: 'input' }) as {
+        properties: Record<string, { properties: Record<string, Node> }>;
+      };
+      const node = schema.properties[parent]?.properties[field];
+      expect(node?.anyOf?.map((branch) => branch.pattern).filter(Boolean)).toEqual([
+        '^\\d{4}-\\d{1,2}-\\d{1,2}$',
+      ]);
+      expect(node?.anyOf?.some((branch) => branch.const === '')).toBe(true);
+    },
+  );
+
+  it.each(cases)('%s rejects malformed dates by path', (_label, tool, base, parent, field) => {
+    for (const bad of ['2024/01/01', '01/15/2024', '2024-01-01T00:00:00', '20240101']) {
+      const result = tool.input.safeParse(withDate(base, parent, field, bad));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual([parent, field]);
+    }
+  });
+
+  it.each(cases)('%s accepts padded and unpadded dates', (_label, tool, base, parent, field) => {
+    for (const good of ['2024-01-31', '2024-1-1', '2024-02-30']) {
+      expect(tool.input.safeParse(withDate(base, parent, field, good)).success).toBe(true);
+    }
+  });
+
+  it.each(cases)('%s accepts a blank from a form client', (_label, tool, base, parent, field) => {
+    expect(tool.input.safeParse(withDate(base, parent, field, '')).success).toBe(true);
+  });
+
+  it.each(cases)(
+    '%s reads whitespace-only as blank, and rejects a whitespace-padded date',
+    (_label, tool, base, parent, field) => {
+      const blank = tool.input.safeParse(withDate(base, parent, field, '  '));
+      expect(blank.success).toBe(true);
+      const parsed = blank.data as unknown as Record<string, Record<string, unknown> | undefined>;
+      expect(parsed[parent]?.[field]).toBe('');
+
+      const padded = tool.input.safeParse(withDate(base, parent, field, ' 2024-01-01'));
+      expect(padded.success).toBe(false);
+      expect(padded.error?.issues[0]?.path).toEqual([parent, field]);
+    },
+  );
+
+  it('still requires both keys on the flat time_period object', () => {
+    expect(
+      searchAwardsTool.input.safeParse({ time_period: { start_date: '2024-01-01' } }).success,
+    ).toBe(false);
+  });
+});
+
 // --- Schema / input validation ---
 
 describe('searchAwardsTool — input validation', () => {
@@ -133,6 +239,61 @@ describe('searchAwardsTool — input validation', () => {
 
   it('rejects invalid order value', () => {
     expect(() => searchAwardsTool.input.parse({ order: 'sideways' })).toThrow();
+  });
+
+  it('leaves sort unset when omitted, so the award type group picks the default (#60)', () => {
+    expect(searchAwardsTool.input.parse({}).sort).toBeUndefined();
+    const schema = z.toJSONSchema(searchAwardsTool.input, { io: 'input' }) as {
+      properties: Record<string, { default?: unknown; enum?: string[] }>;
+    };
+    expect(schema.properties.sort).not.toHaveProperty('default');
+    expect(schema.properties.sort?.enum).toEqual(
+      expect.arrayContaining(['Loan Value', 'Subsidy Cost', 'Issued Date', 'End Date']),
+    );
+  });
+
+  it('rejects an empty flat award_type_codes (#60)', () => {
+    const result = searchAwardsTool.input.safeParse({ award_type_codes: [] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(['award_type_codes']);
+  });
+
+  /**
+   * An empty nested array has always fallen back to the flat codes (as the
+   * other nested array filters do), so it never reached upstream's 422 and
+   * stays accepted.
+   */
+  it('accepts an empty nested award_type_codes (#60)', () => {
+    expect(searchAwardsTool.input.safeParse({ filters: { award_type_codes: [] } }).success).toBe(
+      true,
+    );
+  });
+
+  it('advertises minItems 1 on the flat award_type_codes only (#60)', () => {
+    const schema = z.toJSONSchema(searchAwardsTool.input, { io: 'input' }) as {
+      properties: Record<
+        string,
+        { minItems?: number; properties?: Record<string, { minItems?: number }> }
+      >;
+    };
+    expect(schema.properties.award_type_codes?.minItems).toBe(1);
+    expect(schema.properties.filters?.properties?.award_type_codes).not.toHaveProperty('minItems');
+  });
+
+  it('advertises and enforces the assistance listing pattern (#61)', () => {
+    const schema = z.toJSONSchema(searchAwardsTool.input, { io: 'input' }) as {
+      properties: Record<string, { items?: { pattern?: string } }>;
+    };
+    expect(schema.properties.assistance_listings?.items?.pattern).toBe('^\\d{2}\\.[0-9A-Z]{3}$');
+
+    for (const good of ['93.866', '11.67A', '93.LM2']) {
+      expect(searchAwardsTool.input.safeParse({ assistance_listings: [good] }).success).toBe(true);
+    }
+    for (const bad of ['93.86', '93.8660', '93.*', '93.lm2', '9.866', '93866', ' 93.866']) {
+      const result = searchAwardsTool.input.safeParse({ assistance_listings: [bad] });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(['assistance_listings', 0]);
+    }
   });
 });
 

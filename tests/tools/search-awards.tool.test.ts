@@ -589,8 +589,8 @@ describe('searchAwardsTool', () => {
       limit: 1,
     });
 
-    // Upstream answers this with a raw HTML 500; the guard must pre-empt it with
-    // the declared reason and an actionable recovery hint.
+    // Upstream answers this with a bare 422; the guard must pre-empt it with the
+    // declared reason and an actionable recovery hint.
     await expect(searchAwardsTool.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: {

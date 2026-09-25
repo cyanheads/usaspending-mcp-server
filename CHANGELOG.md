@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.4](changelog/0.4.x/0.4.4.md) — 2026-09-25
+
+Upstream timeouts and outages reach the caller as api_timeout / api_unavailable with each tool's recovery hint, 4xx errors quote upstream's detail, date inputs are validated and half ranges filled, award search sorts by award type group and filters by assistance listing, and disaster breakdowns carry upstream totals.
+
 ## [0.4.3](changelog/0.4.x/0.4.3.md) — 2026-09-20
 
 Adopts mcp-ts-core ^0.13.6: the framework skill tree moves to framework-skills/, the stateless session posture is declared in src/, and every error-contract entry the service layer throws is marked thrownBy: 'service' while handler-local throws forward their declared recovery hint.

@@ -551,7 +551,6 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail(
         'pagination_limit_exceeded',
         `Requested page ${input.page} at limit ${input.limit} exceeds this endpoint's ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window.`,
-        ctx.recoveryFor('pagination_limit_exceeded'),
       );
     }
 
@@ -593,14 +592,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     // echo would claim a window that was never applied.
     const inverted = invertedRangeMessage(timePeriod, dateFields);
     if (inverted) {
-      throw ctx.fail('date_range_inverted', inverted, ctx.recoveryFor('date_range_inverted'));
+      throw ctx.fail('date_range_inverted', inverted);
     }
 
     // Upstream rejects a start before the floor with its own 422; failing here
     // instead carries the declared reason and the bulk-download recovery.
     const beforeFloor = floorViolationMessage(timePeriod);
     if (beforeFloor) {
-      throw ctx.fail('date_before_earliest', beforeFloor, ctx.recoveryFor('date_before_earliest'));
+      throw ctx.fail('date_before_earliest', beforeFloor);
     }
 
     // Contracts and IDVs carry no listings: upstream answers 200 with zero rows and
@@ -610,7 +609,6 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail(
         'assistance_listings_type_mismatch',
         `assistance_listings match only assistance awards, but award_type_codes [${awardTypeCodes.join(', ')}] include contract or IDV codes, which carry no listings. award_type_codes defaults to contracts when omitted.`,
-        ctx.recoveryFor('assistance_listings_type_mismatch'),
       );
     }
 
@@ -623,7 +621,6 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail(
         'unsupported_sort',
         `Sort "${sort}" is not available for ${group.label} (award_type_codes ${awardTypeCodes.join(', ')}). Supported sorts for ${group.label}: ${group.sorts.join(', ')}.`,
-        ctx.recoveryFor('unsupported_sort'),
       );
     }
 

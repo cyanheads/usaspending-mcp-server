@@ -154,11 +154,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
 
   async handler(input, ctx) {
     if (!input.toptier_code?.trim() && !input.agency_slug?.trim()) {
-      throw ctx.fail(
-        'missing_input',
-        'Either toptier_code or agency_slug is required',
-        ctx.recoveryFor('missing_input'),
-      );
+      throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required');
     }
 
     const svc = getUSASpendingService();
@@ -175,22 +171,14 @@ export const getAgencyTool = tool('usaspending_get_agency', {
           a.agency_name?.toLowerCase().replace(/\s+/g, '-') === slug,
       );
       if (!match?.toptier_code) {
-        throw ctx.fail(
-          'agency_not_found',
-          `No agency found with slug: ${input.agency_slug}`,
-          ctx.recoveryFor('agency_not_found'),
-        );
+        throw ctx.fail('agency_not_found', `No agency found with slug: ${input.agency_slug}`);
       }
       toptierCode = match.toptier_code;
     }
 
     ctx.log.info('usaspending_get_agency', { toptier_code: toptierCode });
     if (!toptierCode) {
-      throw ctx.fail(
-        'missing_input',
-        'Either toptier_code or agency_slug is required',
-        ctx.recoveryFor('missing_input'),
-      );
+      throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required');
     }
     const [detail, subAgenciesData, budgetData] = await Promise.all([
       svc.getAgency(toptierCode, ctx),
@@ -203,11 +191,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     ]);
 
     if (!detail?.name) {
-      throw ctx.fail(
-        'agency_not_found',
-        `Agency not found: ${toptierCode}`,
-        ctx.recoveryFor('agency_not_found'),
-      );
+      throw ctx.fail('agency_not_found', `Agency not found: ${toptierCode}`);
     }
 
     // Budget totals live on the budgetary-resources endpoint, not the agency overview.

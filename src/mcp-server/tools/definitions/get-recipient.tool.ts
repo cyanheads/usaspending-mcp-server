@@ -115,11 +115,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
     );
 
     if (!r?.name) {
-      throw ctx.fail(
-        'recipient_not_found',
-        `Recipient not found: ${input.recipient_id}`,
-        ctx.recoveryFor('recipient_not_found'),
-      );
+      throw ctx.fail('recipient_not_found', `Recipient not found: ${input.recipient_id}`);
     }
 
     return {

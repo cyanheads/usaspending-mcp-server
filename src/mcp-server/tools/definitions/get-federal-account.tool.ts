@@ -100,11 +100,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
     const account = await svc.getFederalAccount(input.account_code, ctx);
 
     if (!account?.account_title) {
-      throw ctx.fail(
-        'account_not_found',
-        `Federal account not found: ${input.account_code}`,
-        ctx.recoveryFor('account_not_found'),
-      );
+      throw ctx.fail('account_not_found', `Federal account not found: ${input.account_code}`);
     }
 
     const children = (account.children ?? []).map((c) => ({

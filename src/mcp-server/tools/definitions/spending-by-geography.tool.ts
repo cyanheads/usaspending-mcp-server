@@ -248,12 +248,12 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
     const { filters, timePeriod } = buildFilters(input.filters);
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
     if (inverted) {
-      throw ctx.fail('date_range_inverted', inverted, ctx.recoveryFor('date_range_inverted'));
+      throw ctx.fail('date_range_inverted', inverted);
     }
     // Upstream answers a start before the floor with an undeclared 422.
     const beforeFloor = floorViolationMessage(timePeriod);
     if (beforeFloor) {
-      throw ctx.fail('date_before_earliest', beforeFloor, ctx.recoveryFor('date_before_earliest'));
+      throw ctx.fail('date_before_earliest', beforeFloor);
     }
     // The endpoint answers HTTP 500 to `filters: {}`; any one populated key satisfies it.
     const defaultedAwardTypes = Object.keys(filters).length === 0;

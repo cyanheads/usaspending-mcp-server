@@ -186,11 +186,7 @@ export const getAwardTool = tool('usaspending_get_award', {
     const r = await svc.getAward(input.award_id, ctx);
 
     if (!r || (!r.generated_unique_award_id && !r.piid && !r.fain)) {
-      throw ctx.fail(
-        'award_not_found',
-        `Award not found: ${input.award_id}`,
-        ctx.recoveryFor('award_not_found'),
-      );
+      throw ctx.fail('award_not_found', `Award not found: ${input.award_id}`);
     }
 
     const contractData = r.latest_transaction_contract_data;

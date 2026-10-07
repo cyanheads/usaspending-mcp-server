@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 
@@ -583,19 +583,22 @@ describe('searchAwardsTool', () => {
   });
 
   it('rejects a pre-2007-10-01 flat time_period before calling the API (#38)', async () => {
-    const ctx = createMockContext({ errors: searchAwardsTool.errors });
-    const input = searchAwardsTool.input.parse({
+    // Upstream answers this with a bare 422; the guard must pre-empt it with the
+    // declared reason and an actionable recovery hint. The framework fills the
+    // hint from the contract on the error envelope, which runToolContract applies.
+    const result = await runToolContract(searchAwardsTool, {
       time_period: { start_date: '2005-01-01', end_date: '2006-01-01' },
       limit: 1,
     });
 
-    // Upstream answers this with a bare 422; the guard must pre-empt it with the
-    // declared reason and an actionable recovery hint.
-    await expect(searchAwardsTool.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-      data: {
-        reason: 'date_before_earliest',
-        recovery: { hint: expect.stringContaining('2007-10-01') },
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        data: {
+          reason: 'date_before_earliest',
+          recovery: { hint: expect.stringContaining('2007-10-01') },
+        },
       },
     });
     expect(mockSearchAwards).not.toHaveBeenCalled();

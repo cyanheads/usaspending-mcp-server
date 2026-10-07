@@ -651,8 +651,8 @@ describe('disasterSpendingTool', () => {
 });
 
 /**
- * The service attaches this entry's text to every timeout the tool sees (#57),
- * so it has to name a lever that actually exists for each dimension: overview
+ * This entry's text reaches every timeout the tool sees (#57) — the service tags
+ * the reason and the framework fills the recovery from it — so it has to name a lever that actually exists for each dimension: overview
  * applies neither def_codes nor limit, and geography is not paginated.
  */
 describe('disasterSpendingTool api_timeout recovery (#57)', () => {

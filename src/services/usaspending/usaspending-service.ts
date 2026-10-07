@@ -97,13 +97,12 @@ type UpstreamFailureReason = 'api_timeout' | 'api_unavailable';
 
 /**
  * The `data` fields that turn a service-classified upstream failure into the
- * calling tool's declared contract entry: the reason, whether a retry can help,
- * and the tool's own recovery text. The handler ctx carries the calling tool's
- * contract, so `recoveryFor` resolves that tool's wording (and `{}` for a
- * caller with no contract).
+ * calling tool's declared contract entry: the reason and whether a retry can
+ * help. The framework fills `data.recovery` from the calling tool's `errors[]`
+ * entry for that reason, so the tool's own recovery text reaches the wire.
  */
-function upstreamFailure(reason: UpstreamFailureReason, ctx: Context, retryable = true) {
-  return { reason, retryable, ...ctx.recoveryFor(reason) };
+function upstreamFailure(reason: UpstreamFailureReason, retryable = true) {
+  return { reason, retryable };
 }
 
 /** Re-bounds a diagnostic body to the framework's default capture, head + tail. */
@@ -150,7 +149,7 @@ function extractDetail(body: unknown): string | undefined {
  * the rebuilt `data.body` is bounded back to the usual capture so error
  * payloads do not grow. Anything else (a non-`McpError`) passes through.
  */
-function classifyUpstreamError(err: unknown, operation: string, ctx: Context): unknown {
+function classifyUpstreamError(err: unknown, operation: string): unknown {
   if (!(err instanceof McpError)) return err;
   const httpBody = err.data?.errorSource === 'FetchHttpError' ? err.data.body : undefined;
   const data =
@@ -161,12 +160,12 @@ function classifyUpstreamError(err: unknown, operation: string, ctx: Context): u
     new McpError(err.code, message, next, { cause: err });
 
   if (err.code === JsonRpcErrorCode.Timeout) {
-    return rebuild(err.message, { ...data, ...upstreamFailure('api_timeout', ctx) });
+    return rebuild(err.message, { ...data, ...upstreamFailure('api_timeout') });
   }
   if (err.code === JsonRpcErrorCode.ServiceUnavailable) {
     return rebuild(err.message, {
       ...data,
-      ...upstreamFailure('api_unavailable', ctx, data?.retryable !== false),
+      ...upstreamFailure('api_unavailable', data?.retryable !== false),
     });
   }
   const status = data?.status;
@@ -270,12 +269,12 @@ export class USASpendingService {
             budgetMs: this.retryBudgetMs,
             timeoutMs: this.timeoutMs,
             errorSource: 'RequestBudgetExhausted',
-            ...upstreamFailure('api_timeout', ctx),
+            ...upstreamFailure('api_timeout'),
           },
           { cause: err },
         );
       }
-      throw classifyUpstreamError(err, operation, ctx);
+      throw classifyUpstreamError(err, operation);
     } finally {
       clearTimeout(timer);
     }

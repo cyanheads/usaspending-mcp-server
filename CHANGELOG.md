@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.5](changelog/0.4.x/0.4.5.md) — 2026-10-07
+
+Built on mcp-ts-core 0.13.13: tool errors carry a request ID, each tool's declared recovery hint is filled in by the framework, and the MCP Registry entry now starts the HTTP transport when HTTP is chosen.
+
 ## [0.4.4](changelog/0.4.x/0.4.4.md) — 2026-09-25
 
 Upstream timeouts and outages reach the caller as api_timeout / api_unavailable with each tool's recovery hint, 4xx errors quote upstream's detail, date inputs are validated and half ranges filled, award search sorts by award type group and filters by assistance listing, and disaster breakdowns carry upstream totals.

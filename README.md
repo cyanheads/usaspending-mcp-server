@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.4.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -73,12 +73,9 @@ Federal award, recipient, agency, and spending data from USAspending.gov, the US
 
 ### `usaspending_search_awards` <sub>tool</sub>
 
-- Filters: `keyword`, `agency_name`, `recipient_name`, `naics_codes`, `assistance_listings`, `time_period`, and `location_filter` (country, state, FIPS county, city); `award_type_codes` defaults to contracts (`A`–`D`) and must stay in one group: IDVs `IDV_A`–`IDV_E`, grants `02`–`05`/`F001`/`F002`, direct payments `06`/`10`/`F006`/`F007`, loans `07`/`08`/`F003`/`F004`, or other assistance `09`/`11`/`-1`/`F005`/`F008`/`F009`/`F010`. `limit` up to 100
-- `assistance_listings` takes Assistance Listing (CFDA) numbers such as `93.866` or `11.67A` — look them up with `usaspending_autocomplete_filters` `type: cfda` — and matches awards carrying any of them. It needs an assistance group in `award_type_codes`; with contract or IDV codes, or the contract default, it fails as `assistance_listings_type_mismatch`
-- `sort` depends on the award type group: loans sort by `Loan Value` (default), `Subsidy Cost`, `Issued Date`, `Recipient Name`, or `Awarding Agency`; every other group by `Award Amount` (default), `Total Outlays`, `Start Date`, `End Date`, `Recipient Name`, or `Awarding Agency`, except that IDVs have no `End Date`. Any other pairing fails as `unsupported_sort` with the group's list
-- Dates are `YYYY-MM-DD` from 2007-10-01 on (month and day may be unpadded). Either end may be given alone, on the nested `filters.time_period_start` / `time_period_end` or by leaving one side of `time_period` blank (`""`) — a lone start runs through today (UTC), a lone end from 2007-10-01 — and the response echoes the range sent with a `notice` naming the filled field. A fully blank `time_period` means no date filter. A start after the end fails as `date_range_inverted`
-- Rows carry `generated_internal_id` for `usaspending_get_award` and `agency_slug` for `usaspending_get_agency`; loan rows carry `loan_value`, `subsidy_cost`, and `issued_date` in place of amounts and dates. There is no total, and `page_metadata.has_next` is true on any full page
-- Page numbers stop at a 50,000-result offset (`pagination_limit_exceeded`); go further with the `last_record_sort_value` + `last_record_unique_id` cursor, which is only returned below a 10,000-result offset
+- Filters: `keyword`, `agency_name`, `recipient_name`, `naics_codes`, `assistance_listings` (Assistance Listing numbers such as `93.866`, from `usaspending_autocomplete_filters` `type: cfda`), `time_period` (`YYYY-MM-DD` from 2007-10-01 on; either end may be given alone), and `location_filter`; `award_type_codes` defaults to contracts (`A`–`D`) and must stay in one group: IDVs `IDV_A`–`IDV_E`, grants `02`–`05`/`F001`/`F002`, direct payments `06`/`10`/`F006`/`F007`, loans `07`/`08`/`F003`/`F004`, or other assistance `09`/`11`/`-1`/`F005`/`F008`/`F009`/`F010`; `limit` up to 100
+- Rows carry `generated_internal_id` for `usaspending_get_award` and `agency_slug` for `usaspending_get_agency`; loan rows carry `loan_value`, `subsidy_cost`, and `issued_date` in place of amounts and dates. There is no total, and `page_metadata.has_next` is true on any full page. Failures are `assistance_listings_type_mismatch` (listings with a non-assistance group), `unsupported_sort`, `date_range_inverted`, and `date_before_earliest`
+- `sort` depends on the group: loans take `Loan Value` (default), `Subsidy Cost`, `Issued Date`, `Recipient Name`, or `Awarding Agency`; the others `Award Amount` (default), `Total Outlays`, `Start Date`, `End Date` (not IDVs), `Recipient Name`, or `Awarding Agency`. Page numbers stop at a 50,000-result offset (`pagination_limit_exceeded`); past it, page with the `last_record_sort_value` + `last_record_unique_id` cursor, returned below a 10,000-result offset
 
 ---
 
@@ -163,10 +160,9 @@ Federal award, recipient, agency, and spending data from USAspending.gov, the US
 
 ### `usaspending_disaster_spending` <sub>tool</sub>
 
-- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; every dimension except `overview` requires `filters.def_codes` (e.g. `["L", "M", "N", "O", "P"]` for COVID-19); `limit` up to 100 on agency, cfda, and recipient
-- Rows carry `obligation`, `outlay`, and `award_count`, plus `total_budgetary_resources` on agency rows under `spending_type: total`; `overview` returns totals and `funding_by_def_code`. A recipient row's `id` is one recipient hash for `usaspending_get_recipient` — the recipient-level `-R` ID when USAspending lists several. The recipient total tops out at 10,000, and a response at that cap is flagged `truncated`
-- Agency, cfda, and recipient also return `totals` for every matching row, as USAspending reports them: `obligation`, `outlay`, and either `total_budgetary_resources` (agency, `total`) or `award_count`. When the overview endpoint outlasts the request budget, the agency breakdown with `spending_type: total` still reports obligations, outlays, and budgetary resources
-- `spending_type` (`award`, the default, or `total`) applies to the agency dimension only — USAspending returns the same recipient breakdown for either value; geography takes `filters.geo_layer` (`state`, `county`) and always reports obligations
+- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; every dimension except `overview` requires `filters.def_codes` (e.g. `["L", "M", "N", "O", "P"]` for COVID-19); `limit` up to 100 on agency, cfda, and recipient; `spending_type` (`award`, the default, or `total`) applies to agency only, and geography takes `filters.geo_layer` (`state`, `county`)
+- Rows carry `obligation`, `outlay`, and `award_count`, plus `total_budgetary_resources` on agency rows under `spending_type: total`; `overview` returns totals and `funding_by_def_code`. A recipient row's `id` chains to `usaspending_get_recipient`. The recipient total tops out at 10,000, and a response at that cap is flagged `truncated`
+- Agency, cfda, and recipient also return `totals` across every matching row: `obligation`, `outlay`, and either `total_budgetary_resources` (agency, `total`) or `award_count`. When `overview` outlasts the request budget, the agency breakdown with `spending_type: total` still reports obligations, outlays, and budgetary resources
 
 ---
 
@@ -333,9 +329,11 @@ No variable is required; the defaults work out of the box.
 | `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. | `stateless` |
 | `MCP_AUTH_MODE` | Authentication: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (`debug`, `info`, `warning`, `error`, etc.). | `info` |
+| `LOG_TOOL_FAILURE_PAYLOADS` | Log each failed tool call's arguments and result, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). A secret inside a free-form value is not redacted. | `false` |
 | `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv/r2/d1`. | `in-memory` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Opt-in OTLP log export endpoint; the base `OTEL_EXPORTER_OTLP_ENDPOINT` never enables it. | — |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 

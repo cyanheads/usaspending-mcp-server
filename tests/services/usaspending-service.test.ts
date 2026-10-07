@@ -516,13 +516,6 @@ const failIfResolved = (): never => {
   throw new Error('Expected the request to fail');
 };
 
-/** The declared recovery text for one of the disaster tool's contract reasons. */
-const disasterRecovery = (reason: 'api_timeout' | 'api_unavailable') => {
-  const entry = disasterSpendingTool.errors?.find((e) => e.reason === reason);
-  if (!entry) throw new Error(`disaster tool declares no ${reason}`);
-  return entry.recovery;
-};
-
 /** Stubs fetch with a scripted sequence of responders, one per attempt (last repeats). */
 const stubSequence = (...responders: Array<(init: RequestInit) => Promise<Response>>) => {
   const fetchMock = vi.fn((_url: string, init: RequestInit) => {
@@ -544,10 +537,11 @@ const hang = (init: RequestInit) =>
 /**
  * Every tool declares `api_timeout` and `api_unavailable` as service-thrown
  * reasons. The service is where the upstream failure is classified, so it is
- * where the reason, the retryable flag, and the calling tool's recovery text are
- * attached (#57). The handler ctx arrives with the tool's contract already bound
- * (the framework's typed-fail wiring mutates that ctx in place), which a
- * contract-bearing mock context reproduces.
+ * where the reason and the retryable flag are attached (#57). The calling tool's
+ * recovery text is not: the framework fills `data.recovery` from the tool's
+ * `errors[]` entry for that reason on the error envelope, which
+ * `tests/tools/tool-contract.test.ts` asserts end to end. A contract-bearing
+ * mock context stands in for the handler ctx the service receives.
  *
  * Retry ladders run under fake timers so the backoff (1s/2s/4s with jitter) is
  * walked in full without spending real seconds — each case asserts the attempt
@@ -573,7 +567,7 @@ describe('USASpendingService upstream-failure contract (#57)', () => {
     return await outcome;
   };
 
-  it('tags a budget that expires on a later attempt as api_timeout with the tool recovery', async () => {
+  it('tags a budget that expires on a later attempt as api_timeout', async () => {
     // First attempt fails fast with a transient 503; the second hangs until the
     // shared deadline fires mid-fetch.
     const fetchMock = stubSequence(respond(503, '{"detail":"Service Unavailable"}'), hang);
@@ -589,7 +583,6 @@ describe('USASpendingService upstream-failure contract (#57)', () => {
       data: {
         reason: 'api_timeout',
         retryable: true,
-        recovery: { hint: disasterRecovery('api_timeout') },
         errorSource: 'RequestBudgetExhausted',
         budgetMs: 5_000,
         timeoutMs: 60_000,
@@ -612,7 +605,6 @@ describe('USASpendingService upstream-failure contract (#57)', () => {
     expect(err.data).toMatchObject({
       reason: 'api_timeout',
       retryable: true,
-      recovery: { hint: disasterRecovery('api_timeout') },
       errorSource: 'FetchTimeout',
       retryAttempts: 4,
     });
@@ -658,11 +650,7 @@ describe('USASpendingService upstream-failure contract (#57)', () => {
       expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
       expect(err.message).toContain(messagePart);
       expect(err.message).toContain('(failed after 4 attempts)');
-      expect(err.data).toMatchObject({
-        reason: 'api_unavailable',
-        retryable: true,
-        recovery: { hint: disasterRecovery('api_unavailable') },
-      });
+      expect(err.data).toMatchObject({ reason: 'api_unavailable', retryable: true });
     },
   );
 
@@ -793,9 +781,7 @@ describe('USASpendingService 4xx detail (#58)', () => {
       .spendingOverTime({ group: 'month', filters: {} }, ctx)
       .then(failIfResolved, (e: unknown) => e as McpError);
 
-    expect(err.message).toBe(
-      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 400',
-    );
+    expect(err.message).toBe('Fetch failed for https://api.usaspending.gov/…. Status: 400');
     expect(err.data?.status).toBe(400);
   });
 
@@ -806,9 +792,7 @@ describe('USASpendingService 4xx detail (#58)', () => {
       .then(failIfResolved, (e: unknown) => e as McpError);
 
     expect(err.code).toBe(JsonRpcErrorCode.Forbidden);
-    expect(err.message).toBe(
-      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 403',
-    );
+    expect(err.message).toBe('Fetch failed for https://api.usaspending.gov/…. Status: 403');
   });
 
   it('falls back to a string message when the 4xx carries no detail', async () => {
@@ -867,9 +851,7 @@ describe('USASpendingService 4xx detail (#58)', () => {
       .spendingOverTime({ group: 'month', filters: {} }, ctx)
       .then(failIfResolved, (e: unknown) => e as McpError);
 
-    expect(err.message).toBe(
-      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 422',
-    );
+    expect(err.message).toBe('Fetch failed for https://api.usaspending.gov/…. Status: 422');
   });
 
   it('keeps the status-line message for a 4xx whose JSON carries no string detail', async () => {
@@ -879,8 +861,6 @@ describe('USASpendingService 4xx detail (#58)', () => {
       .then(failIfResolved, (e: unknown) => e as McpError);
 
     expect(err.code).toBe(JsonRpcErrorCode.InvalidParams);
-    expect(err.message).toBe(
-      'Fetch failed for https://api.usaspending.gov/api/v2/search/spending_over_time/. Status: 400',
-    );
+    expect(err.message).toBe('Fetch failed for https://api.usaspending.gov/…. Status: 400');
   });
 });

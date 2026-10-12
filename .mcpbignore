@@ -6,6 +6,13 @@
 /docs/idea.md
 /logs/
 /.cache/
+/coverage/
+/tests/
+/src/
+/scripts/
+/docs/
+/.github/
+/.vscode/
 /Dockerfile
 /bun.lock
 /bunfig.toml

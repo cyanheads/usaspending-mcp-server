@@ -14,13 +14,22 @@ import {
   invertedRangeMessage,
   optionalIsoDate,
 } from './dates.js';
-import { buildFilters } from './filters.js';
+import {
+  analyticsTypeMismatch,
+  buildFilters,
+  CODE_FILTER_FIELDS,
+  codeFilterEcho,
+  describeCodeFilters,
+} from './filters.js';
 import { formatCurrency } from './formatting.js';
+
+/** Award types sent when the call names none: contracts. */
+const DEFAULT_AWARD_TYPE_CODES = ['A', 'B', 'C', 'D'];
 
 export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   title: 'Spending Over Time',
   description:
-    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, or NAICS code to trace spending trends in a specific area. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, IDVs, loans, other).',
+    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, NAICS code, Assistance Listing, PSC, or DEF code to trace spending trends in a specific area; award types default to contracts. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, IDVs, loans, other).',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -36,11 +45,17 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
           .array(z.string())
           .optional()
           .describe(
-            'Award type code filters (A/B/C/D, 02–05, etc.). All codes must belong to a single group. When omitted, defaults to contracts (A, B, C, D).',
+            'Award type code filters (A/B/C/D, 02–05, etc.); groups may be mixed. When omitted, defaults to contracts (A, B, C, D).',
           ),
-        agency_name: z.string().optional().describe('Awarding agency name filter'),
+        agency_name: z
+          .string()
+          .optional()
+          .describe(
+            'Awarding agency name filter, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches nothing',
+          ),
         recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
         naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
+        ...CODE_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start of the time window (YYYY-MM-DD), 2007-10-01 or later. Given alone, the window runs through today (UTC).',
         ),
@@ -48,6 +63,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
           'End of the time window (YYYY-MM-DD). Given alone, the window starts at 2007-10-01, the earliest searchable date.',
         ),
       })
+      .strict()
       .optional()
       .describe(
         'Filters to scope the time-series aggregation. Defaults to contract awards when omitted.',
@@ -122,6 +138,18 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       .string()
       .optional()
       .describe('NAICS code filters applied (comma-separated)'),
+    applied_assistance_listings: z
+      .string()
+      .optional()
+      .describe('Assistance Listing numbers sent (comma-separated)'),
+    applied_psc_codes: z
+      .string()
+      .optional()
+      .describe('PSC codes sent, uppercased (comma-separated)'),
+    applied_def_codes: z
+      .string()
+      .optional()
+      .describe('DEF codes sent, uppercased (comma-separated)'),
     applied_time_period_start: z
       .string()
       .optional()
@@ -134,7 +162,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       .string()
       .optional()
       .describe(
-        'Names a time-window bound that was filled in because only the other was supplied, and suggests broadening filters when no periods are returned. Absent when neither applies.',
+        'Names a time-window bound that was filled in because only the other was supplied, and — when no periods are returned — names any Assistance Listing, PSC, or DEF codes sent and suggests broadening filters. Absent when neither applies.',
       ),
   },
 
@@ -171,19 +199,34 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       recovery:
         'Re-request with a start date of 2007-10-01 or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.',
     },
+    {
+      reason: 'assistance_listings_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'filters.assistance_listings was given while every code in filters.award_type_codes is a contract or IDV code, or award_type_codes was left at its contract default.',
+      retryable: false,
+      recovery:
+        'Set filters.award_type_codes to include an assistance group — grants 02/03/04/05/F001/F002, direct payments 06/10/F006/F007, loans 07/08/F003/F004, or other assistance 09/11/-1/F005/F008/F009/F010 — alongside assistance_listings.',
+    },
+    {
+      reason: 'psc_codes_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'filters.psc_codes was given while every code in filters.award_type_codes is an assistance code.',
+      retryable: false,
+      recovery:
+        'Add contracts A/B/C/D or IDVs IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E to filters.award_type_codes, or leave award_type_codes out to use the contract default.',
+    },
   ],
 
   async handler(input, ctx) {
     ctx.log.info('usaspending_spending_over_time', { group: input.group });
     const svc = getUSASpendingService();
 
-    const filtersInput = {
+    const supplied = input.filters?.award_type_codes;
+    const awardTypeCodes = supplied?.length ? supplied : DEFAULT_AWARD_TYPE_CODES;
+    const { filters, timePeriod, codes } = buildFilters({
       ...input.filters,
-      award_type_codes: input.filters?.award_type_codes?.length
-        ? input.filters.award_type_codes
-        : ['A', 'B', 'C', 'D'],
-    };
-    const { filters, timePeriod } = buildFilters(filtersInput);
+      award_type_codes: awardTypeCodes,
+    });
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
     if (inverted) {
       throw ctx.fail('date_range_inverted', inverted);
@@ -192,6 +235,20 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     const beforeFloor = floorViolationMessage(timePeriod);
     if (beforeFloor) {
       throw ctx.fail('date_before_earliest', beforeFloor);
+    }
+    /**
+     * Upstream answers a code filter no award type here can carry with $0 and no
+     * message — the contract default included, so a lone assistance_listings fails.
+     */
+    const mismatch = analyticsTypeMismatch(codes, awardTypeCodes, 'filters.award_type_codes');
+    const defaultNote = supplied?.length
+      ? ''
+      : ' filters.award_type_codes defaults to contracts when omitted.';
+    if (mismatch?.filter === 'assistance_listings') {
+      throw ctx.fail('assistance_listings_type_mismatch', `${mismatch.message}${defaultNote}`);
+    }
+    if (mismatch?.filter === 'psc_codes') {
+      throw ctx.fail('psc_codes_type_mismatch', mismatch.message);
     }
     const data = await svc.spendingOverTime(
       { group: input.group, filters, subawards: input.subawards },
@@ -232,6 +289,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       ...(input.filters?.naics_codes?.length
         ? { applied_naics_codes: input.filters.naics_codes.join(', ') }
         : {}),
+      ...codeFilterEcho(codes),
       ...(timePeriod
         ? {
             applied_time_period_start: timePeriod.start_date,
@@ -243,8 +301,9 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     // enrich.notice is last-wins, so every notice source joins into one string.
     const notices = [filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS)];
     if (results.length === 0) {
+      const codeParts = describeCodeFilters(codes);
       notices.push(
-        'No spending data periods returned. Try a broader time period or remove keyword/agency filters to get more data points.',
+        `No spending data periods returned${codeParts.length ? ` for ${codeParts.join(', ')}` : ''}. Try a broader time period or remove keyword/agency filters to get more data points.`,
       );
     }
     const notice = notices.filter(Boolean).join(' ');

@@ -11,7 +11,7 @@ import { formatCurrency } from './formatting.js';
 export const getRecipientTool = tool('usaspending_get_recipient', {
   title: 'Get Recipient Profile',
   description:
-    "Fetch a recipient's full profile including address, business type codes, parent organization, alternate names, and total transaction and loan amounts. Recipient IDs are UUID hashes with a level suffix (-P parent, -C child, -R standalone) from usaspending_search_recipients or usaspending_get_award. Optionally scope the totals to a specific fiscal year and award type. UEI and DUNS values can be used to cross-reference with SAM.gov and SEC EDGAR.",
+    "Fetch a recipient's full profile including address, business type codes, parent organization, alternate names, and total transaction and loan amounts. Recipient IDs are UUID hashes with a level suffix (-P parent, -C child, -R standalone) from usaspending_search_recipients or usaspending_get_award. Totals cover the trailing 12 months unless fiscal_year selects one fiscal year, and period names the window. For a recipient's totals by award type, use usaspending_spending_over_time with filters.recipient_id and award_type_codes. UEI and DUNS values can be used to cross-reference with SAM.gov and SEC EDGAR.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -27,11 +27,9 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       .min(2001)
       .max(2030)
       .optional()
-      .describe('Fiscal year to scope award totals (e.g., 2024)'),
-    award_type: z
-      .enum(['contracts', 'grants', 'direct_payments', 'loans', 'other_financial_assistance'])
-      .optional()
-      .describe('Award type category to scope award totals'),
+      .describe(
+        'Fiscal year to scope the totals to (e.g., 2024, which runs October 2023 through September 2024). Omit for the trailing 12 months.',
+      ),
   }),
 
   output: z.object({
@@ -58,21 +56,27 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       })
       .optional()
       .describe('Recipient address'),
+    period: z
+      .string()
+      .describe(
+        'Window the totals cover: FY<year> when fiscal_year was given, otherwise "trailing 12 months"',
+      ),
     total_transaction_amount: z
       .number()
       .optional()
-      .describe(
-        'Total transaction (award) amount in USD; scoped by fiscal_year/award_type when provided',
-      ),
-    total_transactions: z.number().optional().describe('Total number of award transactions'),
+      .describe('Total transaction (award) amount in USD over period, across all award types'),
+    total_transactions: z
+      .number()
+      .optional()
+      .describe('Total number of award transactions over period'),
     total_face_value_loan_amount: z
       .number()
       .optional()
-      .describe('Total face value of loans in USD'),
+      .describe('Total face value of loans in USD over period'),
     total_face_value_loan_transactions: z
       .number()
       .optional()
-      .describe('Number of face-value loan transactions'),
+      .describe('Number of face-value loan transactions over period'),
     alternate_names: z.array(z.string()).optional().describe('Alternate business names'),
   }),
 
@@ -98,7 +102,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
       thrownBy: 'service',
-      recovery: 'Retry with a single fiscal_year set to scope the profile to one year.',
+      recovery: 'Retry the request after a few seconds; USAspending was slow to build the profile.',
     },
   ],
 
@@ -107,10 +111,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
     const svc = getUSASpendingService();
     const r = await svc.getRecipient(
       input.recipient_id,
-      {
-        ...(input.fiscal_year !== undefined ? { fiscal_year: input.fiscal_year } : {}),
-        ...(input.award_type !== undefined ? { award_type: input.award_type } : {}),
-      },
+      input.fiscal_year !== undefined ? { fiscal_year: input.fiscal_year } : {},
       ctx,
     );
 
@@ -118,8 +119,21 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       throw ctx.fail('recipient_not_found', `Recipient not found: ${input.recipient_id}`);
     }
 
+    const location = r.location
+      ? {
+          ...(r.location.address_line1 ? { address_line1: r.location.address_line1 } : {}),
+          ...(r.location.address_line2 ? { address_line2: r.location.address_line2 } : {}),
+          ...(r.location.city_name ? { city_name: r.location.city_name } : {}),
+          ...(r.location.state_code ? { state_code: r.location.state_code } : {}),
+          ...(r.location.zip ? { zip: r.location.zip } : {}),
+          ...(r.location.zip4 ? { zip4: r.location.zip4 } : {}),
+          ...(r.location.country_code ? { country_code: r.location.country_code } : {}),
+        }
+      : {};
+
     return {
       name: r.name,
+      period: input.fiscal_year !== undefined ? `FY${input.fiscal_year}` : 'trailing 12 months',
       ...(r.uei ? { uei: r.uei } : {}),
       ...(r.duns ? { duns: r.duns } : {}),
       ...(r.recipient_id ? { recipient_id: r.recipient_id } : {}),
@@ -127,19 +141,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       ...(r.parent_name ? { parent_name: r.parent_name } : {}),
       ...(r.parent_uei ? { parent_uei: r.parent_uei } : {}),
       ...(r.business_types?.length ? { business_types: r.business_types } : {}),
-      ...(r.location
-        ? {
-            location: {
-              ...(r.location.address_line1 ? { address_line1: r.location.address_line1 } : {}),
-              ...(r.location.address_line2 ? { address_line2: r.location.address_line2 } : {}),
-              ...(r.location.city_name ? { city_name: r.location.city_name } : {}),
-              ...(r.location.state_code ? { state_code: r.location.state_code } : {}),
-              ...(r.location.zip ? { zip: r.location.zip } : {}),
-              ...(r.location.zip4 ? { zip4: r.location.zip4 } : {}),
-              ...(r.location.country_code ? { country_code: r.location.country_code } : {}),
-            },
-          }
-        : {}),
+      ...(Object.keys(location).length > 0 ? { location } : {}),
       ...(typeof r.total_transaction_amount === 'number'
         ? { total_transaction_amount: r.total_transaction_amount }
         : {}),
@@ -158,6 +160,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
 
   format: (result) => {
     const lines: string[] = [`## Recipient: ${result.name ?? 'Unknown'}`];
+    lines.push(`**Period:** ${result.period}`);
     if (result.recipient_id) lines.push(`**Recipient ID:** ${result.recipient_id}`);
     if (result.uei) lines.push(`**UEI:** ${result.uei}`);
     if (result.duns) lines.push(`**DUNS:** ${result.duns}`);

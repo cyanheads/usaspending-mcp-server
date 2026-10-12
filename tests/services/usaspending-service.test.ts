@@ -127,6 +127,28 @@ describe('USASpendingService entity lookups', () => {
     expect(result).toBeUndefined();
   });
 
+  it('getRecipient sends a fiscal year as the year parameter the endpoint reads (#67)', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ name: 'Acme' }));
+    await newService().getRecipient(
+      '3885d3e7-520b-bb82-7faa-5bb319ec94e2-P',
+      { fiscal_year: 2020 },
+      ctx,
+    );
+    const [sent] = fetchMock.mock.calls[0] as unknown as [string];
+    const url = new URL(sent);
+    expect(url.pathname).toBe('/api/v2/recipient/3885d3e7-520b-bb82-7faa-5bb319ec94e2-P/');
+    expect([...url.searchParams.entries()]).toEqual([['year', '2020']]);
+  });
+
+  it('getRecipient sends no query string without a fiscal year', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ name: 'Acme' }));
+    await newService().getRecipient('3885d3e7-520b-bb82-7faa-5bb319ec94e2-P', {}, ctx);
+    const [sent] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(sent).toBe(
+      'https://api.usaspending.gov/api/v2/recipient/3885d3e7-520b-bb82-7faa-5bb319ec94e2-P/',
+    );
+  });
+
   it('getFederalAccount resolves undefined on the upstream 400 miss', async () => {
     stubFetch(
       400,
@@ -206,6 +228,25 @@ describe('USASpendingService non-entity GETs', () => {
     await expect(newService().getAgencySubAgencies('097', {}, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.InvalidParams,
     });
+  });
+
+  it('getAgencySubAgencies sends only page and limit when no fiscal year is given', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ results: [] }));
+    await newService().getAgencySubAgencies('014', { page: 2, limit: 10 }, ctx);
+    const [sent] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(sent).toBe('https://api.usaspending.gov/api/v2/agency/014/sub_agency/?page=2&limit=10');
+  });
+
+  it('getAgencySubAgencies sends a fiscal year when given (#86)', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ fiscal_year: 2026, results: [] }));
+    const res = await newService().getAgencySubAgencies(
+      '014',
+      { page: 1, limit: 10, fiscal_year: 2026 },
+      ctx,
+    );
+    const [sent] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(new URL(sent).searchParams.get('fiscal_year')).toBe('2026');
+    expect(res.fiscal_year).toBe(2026);
   });
 
   it('getAgencyBudgetaryResources still throws on a 400', async () => {
@@ -409,12 +450,10 @@ describe('USASpendingService POST', () => {
 
 /**
  * The retry loop runs under one wall-clock budget, so a per-attempt timeout is
- * not re-paid on every attempt (#52). Deadline expiry reaches the caller through
- * two different framework paths, each incoherent on its own — mid-fetch it is
- * `fetchWithTimeout`'s `FetchAborted` RequestCancelled ("was aborted"), mid-backoff
- * it is the raw `AbortError` DOMException `withRetry`'s sleep rejects with,
- * which never passes through the enrichment path. Both must land as one Timeout
- * naming the budget.
+ * not re-paid on every attempt (#52). Budget expiry reaches the service mid-fetch
+ * (the attempt cut at the time left, or the deadline clock aborting it) or in
+ * place of a backoff that would outlast the budget. Every path must land as one
+ * Timeout naming the budget — never a bare AbortError or a RequestCancelled.
  */
 describe('USASpendingService request budget', () => {
   let ctx: ReturnType<typeof createMockContext>;
@@ -463,17 +502,30 @@ describe('USASpendingService request budget', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('derives the default budget from the per-attempt timeout', async () => {
-    stubHangingFetch();
-    const svc = newServiceWith({ timeoutMs: 400 });
+  it('keeps the 45s default budget under a shorter per-attempt timeout (#79)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const fetchMock = stubHangingFetch();
+      const svc = newServiceWith({ timeoutMs: 400 });
+      let settled = false;
+      const outcome = svc
+        .getDisasterOverview(ctx)
+        .then(failIfResolved, (e: unknown) => e as McpError)
+        .finally(() => {
+          settled = true;
+        });
 
-    const started = Date.now();
-    await expect(svc.getDisasterOverview(ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.Timeout,
-      data: { budgetMs: 600 },
-    });
-    // 1.5x the timeout, versus four attempts plus 1s/2s/4s of backoff unbounded.
-    expect(Date.now() - started).toBeLessThan(1600);
+      // One 400ms attempt, not retried — versus four attempts plus 1s/2s/4s of backoff.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(settled).toBe(true);
+      expect(await outcome).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        data: { budgetMs: 45_000, timeoutMs: 400, errorSource: 'AttemptTimeout' },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**
@@ -590,23 +642,24 @@ describe('USASpendingService upstream-failure contract (#57)', () => {
     });
   });
 
-  it('tags per-attempt timeouts that exhaust the retries before the budget as api_timeout', async () => {
-    // Reachable when USASPENDING_RETRY_BUDGET_MS exceeds four attempts plus backoff:
-    // every attempt times out on its own clock and withRetry gives up first.
+  it('tags a per-attempt timeout inside the budget as api_timeout without retrying it (#79)', async () => {
+    // A timed-out attempt is not retried, so one attempt times out on its own
+    // clock with most of the budget left, and nothing more is sent.
     const fetchMock = stubSequence(hang);
     const svc = newServiceWith({ timeoutMs: 100, retryBudgetMs: 60_000 });
 
     const err = await settle(svc.getDisasterOverview(ctx));
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(err.code).toBe(JsonRpcErrorCode.Timeout);
-    expect(err.message).toContain('timed out');
-    expect(err.message).toContain('(failed after 4 attempts)');
+    expect(err.message).toContain('within the 100ms per-attempt timeout');
+    expect(err.message).not.toContain('failed after');
     expect(err.data).toMatchObject({
       reason: 'api_timeout',
       retryable: true,
-      errorSource: 'FetchTimeout',
-      retryAttempts: 4,
+      errorSource: 'AttemptTimeout',
+      timeoutMs: 100,
+      budgetMs: 60_000,
     });
   });
 
@@ -688,6 +741,259 @@ describe('USASpendingService upstream-failure contract (#57)', () => {
   it('still resolves a getEntity 400/404 miss to undefined under a contract ctx', async () => {
     stubSequence(respond(404, '{"detail":"Agency with a toptier code of \'999\' does not exist"}'));
     await expect(newService().getAgency('999', ctx)).resolves.toBeUndefined();
+  });
+});
+
+/** The server config `USASPENDING_*` env vars resolve to, with none of them set. */
+const defaultServerConfig = async (): Promise<ServerConfig> => {
+  vi.stubEnv('USASPENDING_BASE_URL', undefined);
+  vi.stubEnv('USASPENDING_TIMEOUT_MS', undefined);
+  vi.stubEnv('USASPENDING_RETRY_BUDGET_MS', undefined);
+  vi.resetModules();
+  const { getServerConfig } = await import('@/config/server-config.js');
+  return getServerConfig();
+};
+
+/** Answers 200 after `delayMs` unless the request signal aborts first. */
+const answerAfter =
+  (delayMs: number, body = '{"total_budget_authority":1}') =>
+  (init: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(new Response(body, { status: 200 })), delayMs);
+      init.signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(init.signal?.reason);
+      });
+    });
+
+/**
+ * One call-level budget (#52) with each attempt cut at the smaller of the
+ * per-attempt timeout and the time left in that budget, and a timed-out attempt
+ * never retried (#79). An answer arriving inside the budget is never lost to an
+ * earlier per-attempt cut, and a never-answering upstream sees one request, not
+ * an identical uncached aggregation re-sent with less time to finish.
+ */
+describe('USASpendingService attempt timeout inside the request budget (#79)', () => {
+  const contractCtx = () => createMockContext({ errors: disasterSpendingTool.errors });
+  let ctx: ReturnType<typeof contractCtx>;
+
+  beforeEach(() => {
+    ctx = contractCtx();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it('defaults to a 45s per-attempt timeout and a 45s budget', async () => {
+    const config = await defaultServerConfig();
+    expect(config.timeoutMs).toBe(45_000);
+    const svc = new USASpendingService({} as AppConfig, {} as StorageService, config);
+    stubSequence(hang);
+    const outcome = svc
+      .getDisasterOverview(ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(await outcome).toMatchObject({ data: { budgetMs: 45_000, timeoutMs: 45_000 } });
+  });
+
+  it('raises the default budget to a per-attempt timeout above 45s', async () => {
+    const svc = newServiceWith({ timeoutMs: 60_000 });
+    const fetchMock = stubSequence(answerAfter(55_000));
+    const pending = svc.getDisasterOverview(ctx);
+    await vi.advanceTimersByTimeAsync(55_001);
+
+    await expect(pending).resolves.toEqual({ total_budget_authority: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('succeeds in one attempt when the upstream answers after 40s', async () => {
+    const svc = new USASpendingService(
+      {} as AppConfig,
+      {} as StorageService,
+      await defaultServerConfig(),
+    );
+    const fetchMock = stubSequence(answerAfter(40_000));
+
+    const pending = svc.getDisasterOverview(ctx);
+    await vi.advanceTimersByTimeAsync(40_001);
+
+    await expect(pending).resolves.toEqual({ total_budget_authority: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a never-answering upstream as api_timeout at 45s, having sent one request', async () => {
+    const svc = new USASpendingService(
+      {} as AppConfig,
+      {} as StorageService,
+      await defaultServerConfig(),
+    );
+    const fetchMock = stubSequence(hang);
+    let settled = false;
+    const outcome = svc
+      .getDisasterOverview(ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(44_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    const err = await outcome;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message:
+        'USAspending did not answer GET disaster/overview/ within the 45000ms request budget (45000ms per attempt, retries included).',
+      data: {
+        reason: 'api_timeout',
+        retryable: true,
+        errorSource: 'RequestBudgetExhausted',
+        budgetMs: 45_000,
+        timeoutMs: 45_000,
+      },
+    });
+  });
+
+  it('still retries a 503 and succeeds within the budget', async () => {
+    const svc = new USASpendingService(
+      {} as AppConfig,
+      {} as StorageService,
+      await defaultServerConfig(),
+    );
+    const fetchMock = stubSequence(
+      respond(503, '{"detail":"Service Unavailable"}'),
+      respond(200, '{"total_budget_authority":2}'),
+    );
+
+    const pending = svc.getDisasterOverview(ctx);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(pending).resolves.toEqual({ total_budget_authority: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('cuts the attempt after a retry at the time left in the budget', async () => {
+    // 503 at once, 0.75–1.25s of jittered backoff, then an upstream that answers
+    // 44.5s later: past what is left of the 45s budget, so the second attempt is
+    // cut there.
+    const svc = newServiceWith({ timeoutMs: 45_000, retryBudgetMs: 45_000 });
+    const fetchMock = stubSequence(
+      respond(503, '{"detail":"Service Unavailable"}'),
+      answerAfter(44_500),
+    );
+    let settled = false;
+    const outcome = svc
+      .getDisasterOverview(ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(44_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await outcome).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', errorSource: 'RequestBudgetExhausted' },
+    });
+  });
+
+  it('caps each attempt at an explicit USASPENDING_TIMEOUT_MS below the budget, without retrying', async () => {
+    const svc = newServiceWith({ timeoutMs: 10_000, retryBudgetMs: 45_000 });
+    const fetchMock = stubSequence(hang);
+    let settled = false;
+    const outcome = svc
+      .getDisasterOverview(ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(9_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    const err = await outcome;
+
+    expect(settled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message:
+        'USAspending did not answer GET disaster/overview/ within the 10000ms per-attempt timeout; a timed-out attempt is not retried.',
+      data: {
+        reason: 'api_timeout',
+        retryable: true,
+        errorSource: 'AttemptTimeout',
+        budgetMs: 45_000,
+        timeoutMs: 10_000,
+      },
+    });
+    // Nothing more is sent once the attempt timed out.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 200 whose body stalls past the attempt timeout', async () => {
+    const fetchMock = stubStalledBodyFetch();
+    const svc = newServiceWith({ timeoutMs: 1_000, retryBudgetMs: 45_000 });
+    const outcome = svc
+      .getDisasterOverview(ctx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await outcome).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', errorSource: 'AttemptTimeout' },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a caller cancellation mid-attempt as RequestCancelled', async () => {
+    stubSequence(hang);
+    const caller = new AbortController();
+    const callerCtx = createMockContext({
+      errors: disasterSpendingTool.errors,
+      signal: caller.signal,
+    });
+    const svc = newServiceWith({ timeoutMs: 45_000, retryBudgetMs: 45_000 });
+
+    const outcome = svc
+      .getDisasterOverview(callerCtx)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+    await vi.advanceTimersByTimeAsync(20_000);
+    caller.abort();
+    const err = await outcome;
+
+    expect(err.code).toBe(JsonRpcErrorCode.RequestCancelled);
+    expect(err.data?.reason).toBeUndefined();
+  });
+
+  it('propagates a caller cancellation during the retry backoff as the abort, not a timeout', async () => {
+    const fetchMock = stubSequence(respond(503, '{"detail":"Service Unavailable"}'));
+    const caller = new AbortController();
+    const callerCtx = createMockContext({
+      errors: disasterSpendingTool.errors,
+      signal: caller.signal,
+    });
+    const svc = newServiceWith({ timeoutMs: 45_000, retryBudgetMs: 45_000 });
+
+    const outcome = svc
+      .getDisasterOverview(callerCtx)
+      .then(failIfResolved, (e: unknown) => e as Error);
+    await vi.advanceTimersByTimeAsync(100);
+    caller.abort();
+    const err = await outcome;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(err.name).toBe('AbortError');
+    expect((err as McpError).code).not.toBe(JsonRpcErrorCode.Timeout);
   });
 });
 

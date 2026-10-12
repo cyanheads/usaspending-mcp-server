@@ -3,7 +3,7 @@
  * @module tests/tools/get-idv-awards.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getIdvAwardsTool } from '@/mcp-server/tools/definitions/get-idv-awards.tool.js';
 
@@ -86,31 +86,56 @@ describe('getIdvAwardsTool', () => {
     expect(enrichment.notice).toBeDefined();
   });
 
-  it('discloses continuation on a full page even when upstream hasNext is false', async () => {
+  it('keeps continuation but sets no truncated on a full page the upstream marks as last (#76)', async () => {
+    // The live shape for CONT_IDV_NNK14MA74C_8000 at limit 12: twelve rows, hasNext
+    // false, and an empty page 2. has_next keeps the precautionary fullness guard;
+    // truncated needs evidence that rows exist beyond the page, and there is none.
     mockGetIdvAwards.mockResolvedValueOnce({
-      page_metadata: {
-        page: 1,
-        next: null,
-        previous: null,
-        hasNext: false, // upstream (possibly stale) reports no more
-        hasPrevious: false,
-      },
-      results: Array.from({ length: 2 }, (_, i) => ({
+      page_metadata: { page: 1, next: null, previous: null, hasNext: false, hasPrevious: false },
+      results: Array.from({ length: 12 }, (_, i) => ({
         generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
       })),
     });
 
-    const ctx = createMockContext({ errors: getIdvAwardsTool.errors });
-    const input = getIdvAwardsTool.input.parse({ award_id: 'CONT_IDV_STALE_000', limit: 2 });
-    const result = await getIdvAwardsTool.handler(input, ctx);
+    const result = await runToolContract(getIdvAwardsTool, {
+      award_id: 'CONT_IDV_NNK14MA74C_8000',
+      limit: 12,
+    });
 
-    // A full page must disclose possible continuation despite hasNext:false
-    expect(result.page_metadata.has_next).toBe(true);
-    const enrichment = getEnrichment(ctx);
-    expect(enrichment.has_next_page).toBe(true);
-    expect(enrichment.truncated).toBe(true);
-    expect(enrichment.shown).toBe(2);
-    expect(enrichment.cap).toBe(2);
+    expect(result.isError).toBeFalsy();
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect((sc.page_metadata as { has_next: boolean }).has_next).toBe(true);
+    expect(sc.has_next_page).toBe(true);
+    expect(sc.truncated).toBeUndefined();
+    expect(sc.shown).toBeUndefined();
+    expect(sc.cap).toBeUndefined();
+    expect(sc.notice).toBeUndefined();
+    const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('**Has next:** Yes');
+    expect(text).not.toContain('truncated');
+  });
+
+  it('sets truncated from the upstream hasNext on both surfaces (#76)', async () => {
+    // Same IDV at limit 6: page 1 is full and the upstream reports a next page.
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page_metadata: { page: 1, next: 2, previous: null, hasNext: true, hasPrevious: false },
+      results: Array.from({ length: 6 }, (_, i) => ({
+        generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
+      })),
+    });
+
+    const result = await runToolContract(getIdvAwardsTool, {
+      award_id: 'CONT_IDV_NNK14MA74C_8000',
+      limit: 6,
+    });
+
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc.truncated).toBe(true);
+    expect(sc.shown).toBe(6);
+    expect(sc.cap).toBe(6);
+    expect(sc.notice).toContain('next page');
+    const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('next page');
   });
 
   it('does not disclose continuation on a short final page', async () => {

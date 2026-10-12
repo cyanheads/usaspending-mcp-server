@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getRecipientTool } from '@/mcp-server/tools/definitions/get-recipient.tool.js';
 
@@ -81,22 +81,130 @@ describe('getRecipientTool', () => {
     await expect(getRecipientTool.handler(input, ctx)).rejects.toThrow();
   });
 
-  it('passes fiscal_year and award_type through to service', async () => {
+  it('passes fiscal_year through to the service and nothing else', async () => {
     mockGetRecipient.mockResolvedValueOnce({ name: 'Acme', total_transaction_amount: 100 });
 
     const ctx = createMockContext({ errors: getRecipientTool.errors });
-    const input = getRecipientTool.input.parse({
-      recipient_id: 'abc123-P',
-      fiscal_year: 2023,
-      award_type: 'contracts',
-    });
+    const input = getRecipientTool.input.parse({ recipient_id: 'abc123-P', fiscal_year: 2023 });
     await getRecipientTool.handler(input, ctx);
 
-    expect(mockGetRecipient).toHaveBeenCalledWith(
-      'abc123-P',
-      expect.objectContaining({ fiscal_year: 2023, award_type: 'contracts' }),
-      ctx,
-    );
+    // #67: award_type was removed — no recipient-profile endpoint scopes by award type.
+    expect(mockGetRecipient).toHaveBeenCalledWith('abc123-P', { fiscal_year: 2023 }, ctx);
+  });
+
+  describe('fiscal-year window and location (#67)', () => {
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    const allNullLocation = {
+      address_line1: null,
+      address_line2: null,
+      address_line3: null,
+      foreign_province: null,
+      city_name: null,
+      county_name: null,
+      state_code: null,
+      zip: null,
+      zip4: null,
+      foreign_postal_code: null,
+      country_name: null,
+      country_code: null,
+      congressional_code: null,
+    };
+
+    it('keeps a location that carries only some fields', async () => {
+      mockGetRecipient.mockResolvedValueOnce({
+        name: 'Acme',
+        location: { ...allNullLocation, country_code: 'USA' },
+      });
+
+      const result = await runToolContract(getRecipientTool, { recipient_id: 'abc123-P' });
+
+      expect(result.structuredContent).toMatchObject({ location: { country_code: 'USA' } });
+    });
+
+    it('emits no location key when every upstream location field is null', async () => {
+      mockGetRecipient.mockResolvedValueOnce({ name: 'Acme', location: allNullLocation });
+
+      const result = await runToolContract(getRecipientTool, { recipient_id: 'abc123-P' });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).not.toHaveProperty('location');
+      expect(textOf(result)).not.toContain('Address');
+    });
+
+    it('labels fiscal-year totals with the year on both surfaces', async () => {
+      mockGetRecipient.mockResolvedValueOnce({
+        name: 'Acme',
+        total_transaction_amount: 1_965_443.74,
+        total_transactions: 3,
+      });
+
+      const result = await runToolContract(getRecipientTool, {
+        recipient_id: 'abc123-P',
+        fiscal_year: 2020,
+      });
+
+      expect(result.structuredContent).toMatchObject({
+        period: 'FY2020',
+        total_transaction_amount: 1_965_443.74,
+      });
+      expect(textOf(result)).toContain('**Period:** FY2020');
+    });
+
+    it('states the trailing-12-month window when fiscal_year is omitted', async () => {
+      mockGetRecipient.mockResolvedValueOnce({ name: 'Acme', total_transaction_amount: 100 });
+
+      const result = await runToolContract(getRecipientTool, { recipient_id: 'abc123-P' });
+
+      expect(result.structuredContent).toMatchObject({ period: 'trailing 12 months' });
+      expect(textOf(result)).toContain('**Period:** trailing 12 months');
+    });
+
+    it('states the period even when the upstream returns no totals', async () => {
+      mockGetRecipient.mockResolvedValueOnce({ name: 'Minimal Corp' });
+
+      const result = await runToolContract(getRecipientTool, {
+        recipient_id: 'abc123-P',
+        fiscal_year: 2024,
+      });
+
+      expect(result.structuredContent).toMatchObject({ period: 'FY2024' });
+      expect(textOf(result)).toContain('FY2024');
+    });
+
+    // Each pattern names the failing issue, not just the field: the recovery of any
+    // unrecognized-key rejection lists every accepted key, fiscal_year included.
+    it.each([
+      ['award_type', { award_type: 'loans' }, /Unrecognized key: "award_type"/],
+      ['a fractional fiscal_year', { fiscal_year: 2020.5 }, /fiscal_year: Invalid input/],
+      ['a non-numeric fiscal_year', { fiscal_year: 'abc' }, /fiscal_year: Invalid input/],
+      ['a fiscal_year past the range', { fiscal_year: 2031 }, /fiscal_year: Too big/],
+    ])('rejects %s before any upstream request', async (_label, extra, field) => {
+      mockGetRecipient.mockClear();
+
+      const result = await runToolContract(getRecipientTool, {
+        recipient_id: 'abc123-P',
+        ...(extra as Record<string, unknown>),
+      } as never);
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(textOf(result)).toMatch(field);
+      expect(mockGetRecipient).not.toHaveBeenCalled();
+    });
+
+    it('points award-type questions to usaspending_spending_over_time', () => {
+      expect(getRecipientTool.description).toContain('usaspending_spending_over_time');
+      expect(getRecipientTool.description).not.toContain('fiscal year and award type');
+    });
+
+    it('no longer tells a timed-out caller to narrow with fiscal_year', () => {
+      const timeout = getRecipientTool.errors?.find((e) => e.reason === 'api_timeout');
+      expect(timeout).toBeDefined();
+      expect(timeout?.recovery).not.toContain('fiscal_year');
+    });
   });
 
   it('handles sparse recipient — no total or alternate names', async () => {
@@ -138,6 +246,7 @@ describe('getRecipientTool', () => {
       total_face_value_loan_amount: 0,
       total_face_value_loan_transactions: 0,
       alternate_names: ['ACME CORP'],
+      period: 'trailing 12 months',
     };
 
     const blocks = getRecipientTool.format!(output);

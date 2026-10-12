@@ -1,0 +1,176 @@
+{
+  "id": 279969490,
+  "generated_unique_award_id": "CONT_AWD_36C10B22F0089_3600_47QTCA22D003G_4732",
+  "piid": "36C10B22F0089",
+  "category": "contract",
+  "type": "C",
+  "type_description": "DELIVERY ORDER",
+  "description": "VA MICROSOFT ENTERPRISE LICENSE AGREEMENT.",
+  "total_obligation": 1590136261.87,
+  "subaward_count": 0,
+  "total_subaward_amount": null,
+  "date_signed": "2022-03-29",
+  "base_exercised_options": 1590242856.86,
+  "base_and_all_options": 1637215100.0,
+  "total_account_outlay": 727245982.37,
+  "total_account_obligation": 648463028.11,
+  "account_outlays_by_defc": [
+    {
+      "code": "Q",
+      "amount": 711500406.36
+    },
+    {
+      "code": "V",
+      "amount": 15745576.01
+    }
+  ],
+  "account_obligations_by_defc": [
+    {
+      "code": "Q",
+      "amount": 648463028.11
+    },
+    {
+      "code": "V",
+      "amount": 0.0
+    }
+  ],
+  "parent_award": {
+    "agency_id": 614,
+    "agency_name": "General Services Administration",
+    "agency_slug": "general-services-administration",
+    "sub_agency_id": "4732",
+    "sub_agency_name": "Federal Acquisition Service",
+    "award_id": 351009310,
+    "generated_unique_award_id": "CONT_IDV_47QTCA22D003G_4732",
+    "idv_type_description": "FSS",
+    "multiple_or_single_aw_desc": "MULTIPLE AWARD",
+    "piid": "47QTCA22D003G",
+    "type_of_idc_description": null
+  },
+  "latest_transaction_contract_data": {
+    "naics": "511210",
+    "naics_description": "SOFTWARE PUBLISHERS",
+    "product_or_service_code": "DA01",
+    "product_or_service_description": "IT AND TELECOM - BUSINESS APPLICATION/APPLICATION DEVELOPMENT SUPPORT SERVICES (LABOR)"
+  },
+  "funding_agency": {
+    "id": 561,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Veterans Affairs",
+      "code": "036",
+      "abbreviation": "VA",
+      "slug": "department-of-veterans-affairs"
+    },
+    "subtier_agency": {
+      "name": "Department of Veterans Affairs",
+      "code": "3600",
+      "abbreviation": "VA"
+    },
+    "office_agency_name": "TECHNOLOGY ACQUISITION CENTER NJ (36C10B)"
+  },
+  "awarding_agency": {
+    "id": 561,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Veterans Affairs",
+      "code": "036",
+      "abbreviation": "VA",
+      "slug": "department-of-veterans-affairs"
+    },
+    "subtier_agency": {
+      "name": "Department of Veterans Affairs",
+      "code": "3600",
+      "abbreviation": "VA"
+    },
+    "office_agency_name": "TECHNOLOGY ACQUISITION CENTER NJ (36C10B)"
+  },
+  "period_of_performance": {
+    "start_date": "2022-04-01",
+    "end_date": "2026-03-31",
+    "last_modified_date": "2026-04-20",
+    "potential_end_date": "2026-03-31 00:00:00"
+  },
+  "recipient": {
+    "recipient_hash": "3612de0a-9635-3846-a5a1-7f555fba52df-C",
+    "recipient_name": "DELL FEDERAL SYSTEMS L.P",
+    "recipient_uei": "N1C5QLNPJLS4",
+    "recipient_unique_id": null,
+    "parent_recipient_hash": "f96a8de9-a2b2-cc9d-cc9f-ec5976fb4c3b-P",
+    "parent_recipient_name": "FRANCISCO PARTNERS MANAGEMENT, L.P.",
+    "parent_recipient_uei": "JGSNSER23GR6",
+    "parent_recipient_unique_id": null,
+    "business_categories": [
+      "Category Business",
+      "Manufacturer of Goods",
+      "Not Designated a Small Business",
+      "Partnership or Limited Liability Partnership",
+      "Special Designations",
+      "U.S.-Owned Business"
+    ],
+    "location": {
+      "location_country_code": "USA",
+      "country_name": "UNITED STATES",
+      "state_code": "TX",
+      "state_name": "TEXAS",
+      "city_name": "ROUND ROCK",
+      "county_code": "491",
+      "county_name": "WILLIAMSON",
+      "address_line1": "1 DELL WAY",
+      "address_line2": null,
+      "address_line3": null,
+      "congressional_code": "17",
+      "zip4": "7000",
+      "zip5": "78682",
+      "foreign_postal_code": null,
+      "foreign_province": null
+    }
+  },
+  "place_of_performance": {
+    "location_country_code": "USA",
+    "country_name": "UNITED STATES",
+    "county_code": "491",
+    "county_name": "WILLIAMSON",
+    "city_name": "ROUND ROCK",
+    "state_code": "TX",
+    "state_name": "TEXAS",
+    "congressional_code": "17",
+    "zip4": "0001",
+    "zip5": "78682",
+    "address_line1": null,
+    "address_line2": null,
+    "address_line3": null,
+    "foreign_province": null,
+    "foreign_postal_code": null
+  },
+  "psc_hierarchy": {
+    "toptier_code": {
+      "code": "D",
+      "description": "IT AND TELECOM - INFORMATION TECHNOLOGY AND TELECOMMUNICATIONS"
+    },
+    "midtier_code": {
+      "code": "DA",
+      "description": "IT AND TELECOM - APLLICATIONS"
+    },
+    "subtier_code": {},
+    "base_code": {
+      "code": "DA01",
+      "description": "IT AND TELECOM - BUSINESS APPLICATION/APPLICATION DEVELOPMENT SUPPORT SERVICES (LABOR)"
+    }
+  },
+  "naics_hierarchy": {
+    "toptier_code": {
+      "code": "51",
+      "description": "Information"
+    },
+    "midtier_code": {
+      "code": "5112",
+      "description": "Software Publishers"
+    },
+    "base_code": {
+      "code": "511210",
+      "description": "Software Publishers"
+    }
+  },
+  "total_outlay": 727245982.37
+}

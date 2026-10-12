@@ -3,6 +3,7 @@
  * @module tests/tools/search-awards.tool.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -330,48 +331,6 @@ describe('searchAwardsTool', () => {
   });
 
   // --- #21: analytics-style nested filters object ---
-
-  it('flows a nested filters object to the request with endpoint keys, dropping recipient_id (#21)', async () => {
-    mockSearchAwards.mockResolvedValueOnce({
-      results: [],
-      page_metadata: { hasNext: false, page: 1, limit: 10 },
-    });
-
-    const ctx = createMockContext({ errors: searchAwardsTool.errors });
-    // recipient_id is not part of the nested schema — Zod strips it, and the handler must
-    // never forward it (search/spending_by_award/ silently ignores it).
-    const input = searchAwardsTool.input.parse({
-      filters: {
-        keywords: ['solar'],
-        award_type_codes: ['IDV_A', 'IDV_B'],
-        agency_name: 'National Aeronautics and Space Administration',
-        recipient_name: 'Boeing',
-        naics_codes: ['541512'],
-        time_period_start: '2023-01-01',
-        time_period_end: '2023-12-31',
-        recipient_id: 'abc-123-def',
-      },
-      limit: 5,
-    });
-    await searchAwardsTool.handler(input, ctx);
-
-    const sent = mockSearchAwards.mock.calls[0]![0]!.filters;
-    expect(sent).toEqual({
-      keywords: ['solar'],
-      award_type_codes: ['IDV_A', 'IDV_B'],
-      agencies: [
-        {
-          type: 'awarding',
-          tier: 'toptier',
-          name: 'National Aeronautics and Space Administration',
-        },
-      ],
-      recipient_search_text: ['Boeing'],
-      naics_codes: { require: ['541512'] },
-      time_period: [{ start_date: '2023-01-01', end_date: '2023-12-31' }],
-    });
-    expect(sent).not.toHaveProperty('recipient_id');
-  });
 
   it('nested filters take precedence over flat inputs per-field, flat fills the gaps (#21)', async () => {
     mockSearchAwards.mockResolvedValueOnce({
@@ -748,9 +707,63 @@ describe('searchAwardsTool', () => {
 
     const enrichment = getEnrichment(ctx);
     expect(enrichment.has_next).toBe(true);
-    expect(enrichment.truncated).toBe(true);
-    expect(enrichment.shown).toBe(100);
-    expect(enrichment.cap).toBe(100);
+    // Past the boundary upstream hasNext is always false, so there is no evidence of
+    // withheld rows — truncated stays unset while the notice still says more may remain (#76).
+    expect(enrichment.truncated).toBeUndefined();
+    expect(enrichment.shown).toBeUndefined();
+    expect(enrichment.cap).toBeUndefined();
+    expect(enrichment.notice).toContain('More results may remain');
+  });
+
+  // --- #76: truncated means rows are known to exist beyond the page ---
+
+  it('sets no truncated on an exactly-full final page, keeping has_next (#76)', async () => {
+    // Live: keyword "zyxel" at limit 4 returns 4 rows with hasNext false; page 2 is empty.
+    mockSearchAwards.mockResolvedValueOnce({
+      results: Array.from({ length: 4 }, (_, i) => ({ generated_internal_id: `CONT_AWD_Z${i}` })),
+      page_metadata: {
+        page: 1,
+        hasNext: false,
+        last_record_unique_id: null,
+        last_record_sort_value: 'None',
+      },
+    });
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'zyxel', limit: 4 });
+
+    expect(result.isError).toBeFalsy();
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect((sc.page_metadata as { has_next: boolean }).has_next).toBe(true);
+    expect(sc.has_next).toBe(true);
+    expect(sc.truncated).toBeUndefined();
+    expect(sc.shown).toBeUndefined();
+    expect(sc.cap).toBeUndefined();
+    const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('**Has next:** Yes');
+    expect(text).not.toContain('**truncated:**');
+  });
+
+  it('sets truncated from the upstream hasNext on both surfaces (#76)', async () => {
+    // Live: "zyxel" at limit 3 — three rows, hasNext true, and a usable cursor.
+    mockSearchAwards.mockResolvedValueOnce({
+      results: Array.from({ length: 3 }, (_, i) => ({ generated_internal_id: `CONT_AWD_Z${i}` })),
+      page_metadata: {
+        page: 1,
+        hasNext: true,
+        last_record_unique_id: 301640553,
+        last_record_sort_value: '108425',
+      },
+    });
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'zyxel', limit: 3 });
+
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc.truncated).toBe(true);
+    expect(sc.shown).toBe(3);
+    expect(sc.cap).toBe(3);
+    expect(sc.notice).toContain('More results may remain');
+    const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('**truncated:** true');
   });
 
   it('keeps reporting continuation on every page past the boundary (#44)', async () => {
@@ -872,5 +885,284 @@ describe('searchAwardsTool', () => {
     const lines = joined.split('\n');
     expect(lines.at(-1)).toBe('**applied_keyword:** solar');
     expect(lines.at(-2)).toBe('');
+  });
+});
+
+// --- #70: location_filter shapes ---
+
+describe('searchAwardsTool location_filter (#70)', () => {
+  const run = (location_filter: Record<string, unknown>) =>
+    runToolContract(searchAwardsTool, { location_filter, limit: 2 });
+  const sentLocations = () =>
+    mockSearchAwards.mock.calls.at(-1)?.[0].filters.place_of_performance_locations;
+
+  beforeEach(() => {
+    mockSearchAwards.mockReset();
+    mockSearchAwards.mockResolvedValue({
+      results: [{ 'Award ID': 'A1', generated_internal_id: 'CONT_AWD_A1' }],
+      page_metadata: { hasNext: false, page: 1 },
+    });
+  });
+
+  it('sends a canonical location unchanged', async () => {
+    const result = await run({ country: 'USA', state: 'NM', county: '049', city: 'Albuquerque' });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentLocations()).toEqual([
+      { country: 'USA', state: 'NM', county: '049', city: 'Albuquerque' },
+    ]);
+  });
+
+  it('leaves blank fields out of the location it sends', async () => {
+    const result = await run({ country: 'USA', state: '', county: '', city: '' });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentLocations()).toEqual([{ country: 'USA' }]);
+  });
+
+  it.each([
+    ['country omitted', { state: 'NM' }, { country: 'USA', state: 'NM' }],
+    ['lowercase codes', { country: 'usa', state: 'nm' }, { country: 'USA', state: 'NM' }],
+    ['a 2-digit state FIPS code', { country: 'USA', state: '35' }, { country: 'USA', state: 'NM' }],
+    ['DC', { state: 'DC' }, { country: 'USA', state: 'DC' }],
+    ['PRI', { country: 'PRI' }, { country: 'USA', state: 'PR' }],
+    ['GUM', { country: 'GUM' }, { country: 'USA', state: 'GU' }],
+    ['VIR', { country: 'VIR' }, { country: 'USA', state: 'VI' }],
+    ['ASM', { country: 'ASM' }, { country: 'USA', state: 'AS' }],
+    ['MNP', { country: 'MNP' }, { country: 'USA', state: 'MP' }],
+    [
+      'a territory code with its own postal state',
+      { country: 'PRI', state: 'PR' },
+      { country: 'USA', state: 'PR' },
+    ],
+    [
+      'a territory code with its own FIPS state',
+      { country: 'PRI', state: '72' },
+      { country: 'USA', state: 'PR' },
+    ],
+    [
+      'a 5-digit county with a matching state',
+      { country: 'USA', state: 'NM', county: '35049' },
+      { country: 'USA', state: 'NM', county: '049' },
+    ],
+    [
+      'a 5-digit county alone, taking the state from its prefix',
+      { county: '35049' },
+      { country: 'USA', state: 'NM', county: '049' },
+    ],
+    [
+      'a 5-digit county with a matching FIPS state',
+      { state: '35', county: '35049' },
+      { country: 'USA', state: 'NM', county: '049' },
+    ],
+    [
+      'a 3-digit county inside a territory code',
+      { country: 'PRI', county: '127' },
+      { country: 'USA', state: 'PR', county: '127' },
+    ],
+    [
+      'a 5-digit county inside a territory code',
+      { country: 'PRI', county: '72127' },
+      { country: 'USA', state: 'PR', county: '127' },
+    ],
+    ['a city alone', { city: 'Albuquerque' }, { country: 'USA', city: 'Albuquerque' }],
+    ['a non-USA country', { country: 'CAN' }, { country: 'CAN' }],
+    [
+      'a non-USA country with a city',
+      { country: 'can', city: 'Toronto' },
+      { country: 'CAN', city: 'Toronto' },
+    ],
+    [
+      "a non-USA country with that country's letter state",
+      { country: 'can', state: 'on' },
+      { country: 'CAN', state: 'ON' },
+    ],
+    [
+      'a non-USA country with a letter state and a city',
+      { country: 'CAN', state: 'ON', city: 'Ottawa' },
+      { country: 'CAN', state: 'ON', city: 'Ottawa' },
+    ],
+    ['an armed-forces code (AE)', { state: 'ae' }, { country: 'USA', state: 'AE' }],
+    ['an armed-forces code (AA)', { country: 'USA', state: 'AA' }, { country: 'USA', state: 'AA' }],
+    ['an armed-forces code (AP)', { state: 'AP' }, { country: 'USA', state: 'AP' }],
+    ['a freely associated state (FM)', { state: 'FM' }, { country: 'USA', state: 'FM' }],
+    ['a freely associated state (MH)', { state: 'MH' }, { country: 'USA', state: 'MH' }],
+    ['a freely associated state (PW)', { state: 'PW' }, { country: 'USA', state: 'PW' }],
+    ['the Minor Outlying Islands (UM)', { state: 'UM' }, { country: 'USA', state: 'UM' }],
+    ['the FIPS code of FM', { state: '64' }, { country: 'USA', state: 'FM' }],
+    ['the FIPS code of UM', { state: '74' }, { country: 'USA', state: 'UM' }],
+    [
+      'whitespace-only fields as blank',
+      { country: ' ', state: 'NM', county: '  ', city: '\t' },
+      { country: 'USA', state: 'NM' },
+    ],
+  ])('normalizes %s', async (_label, location, sent) => {
+    const result = await run(location);
+
+    expect(result.isError).toBeFalsy();
+    expect(sentLocations()).toEqual([sent]);
+  });
+
+  it('sends a 5-digit county exactly as its 3-digit form with the state', async () => {
+    await run({ state: 'NM', county: '049' });
+    const canonical = mockSearchAwards.mock.calls.at(-1)?.[0];
+    await run({ county: '35049' });
+    expect(mockSearchAwards.mock.calls.at(-1)?.[0]).toEqual(canonical);
+  });
+
+  it('reads a numeric state FIPS code the caller sent as a number', async () => {
+    const result = await run({ state: 35 });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentLocations()).toEqual([{ country: 'USA', state: 'NM' }]);
+  });
+
+  it.each([
+    ['an unknown postal state', { state: 'ZZ' }, 'location_filter.state "ZZ"'],
+    ['an unknown FIPS state', { country: 'USA', state: '99' }, 'location_filter.state "99"'],
+    [
+      'a 5-digit county prefix contradicting state',
+      { country: 'USA', state: 'NM', county: '06037' },
+      'location_filter.county "06037"',
+    ],
+    [
+      'a 5-digit county with an unknown state prefix',
+      { county: '99049' },
+      'location_filter.county "99049"',
+    ],
+    ['a 3-digit county without state', { county: '049' }, 'location_filter.county "049"'],
+    [
+      'a 3-digit county without state, country given',
+      { country: 'USA', county: '049' },
+      'location_filter.county "049"',
+    ],
+    [
+      'a FIPS-number state with a non-USA country',
+      { country: 'CAN', state: '35' },
+      'location_filter.country',
+    ],
+    [
+      'a 5-digit county with an armed-forces state',
+      { state: 'AE', county: '35049' },
+      'location_filter.county "35049"',
+    ],
+    [
+      'a 3-digit county with an armed-forces state',
+      { state: 'AE', county: '049' },
+      'location_filter.county "049"',
+    ],
+    [
+      'a county with a non-USA country',
+      { country: 'CAN', county: '049' },
+      'location_filter.country',
+    ],
+    [
+      'a state contradicting a territory code',
+      { country: 'PRI', state: 'NM' },
+      'location_filter.state "NM"',
+    ],
+    [
+      'a 5-digit county contradicting a territory code',
+      { country: 'PRI', county: '35049' },
+      'location_filter.county "35049"',
+    ],
+  ])('rejects %s as invalid_location before any request', async (_label, location, names) => {
+    const result = await run(location);
+
+    expect(result.isError).toBe(true);
+    const error = (
+      result.structuredContent as {
+        error: {
+          code: number;
+          message: string;
+          data: { reason: string; recovery: { hint: string } };
+        };
+      }
+    ).error;
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data.reason).toBe('invalid_location');
+    expect(error.message).toContain(names);
+    expect(error.message).not.toContain('undefined');
+    expect(error.data.recovery.hint).toContain('location_filter.county');
+    const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain(names);
+    expect(text).toContain('Recovery:');
+    expect(mockSearchAwards).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['country', 'US'],
+    ['country', 'USAA'],
+    ['country', 'U5A'],
+    ['state', 'N'],
+    ['state', 'NMX'],
+    ['state', 'New Mexico'],
+    ['state', '355'],
+    ['county', 'ABC'],
+    ['county', '49'],
+    ['county', '0490'],
+    ['county', '350490'],
+    ['county', ' 049'],
+  ])(
+    'rejects a malformed %s (%j) at argument validation, naming the field',
+    async (field, value) => {
+      const result = await run({ state: 'NM', [field]: value });
+
+      expect(result.isError).toBe(true);
+      const error = (result.structuredContent as { error: { code: number; message: string } })
+        .error;
+      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.message).toContain(`location_filter.${field}`);
+      expect(mockSearchAwards).not.toHaveBeenCalled();
+    },
+  );
+
+  it('advertises each code field as anyOf ["", pattern] and leaves city free text', () => {
+    type Node = {
+      anyOf?: Node[];
+      const?: unknown;
+      description?: string;
+      pattern?: string;
+      type?: string;
+    };
+    const schema = z.toJSONSchema(searchAwardsTool.input, { io: 'input' }) as {
+      properties: Record<string, { properties?: Record<string, Node> }>;
+    };
+    const fields = schema.properties.location_filter?.properties ?? {};
+    for (const field of ['country', 'state', 'county']) {
+      const branches = fields[field]?.anyOf ?? [];
+      expect(branches.some((b) => b.const === '')).toBe(true);
+      expect(branches.map((b) => b.pattern).filter(Boolean)).toHaveLength(1);
+      expect(fields[field]?.description).toEqual(expect.any(String));
+    }
+    expect(fields.city?.type).toBe('string');
+  });
+
+  it('echoes the location sent on both surfaces', async () => {
+    const result = await run({ county: '35049', city: 'Albuquerque' });
+
+    expect(result.structuredContent).toMatchObject({
+      applied_location: 'country=USA, state=NM, county=049, city=Albuquerque',
+    });
+    const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain('country=USA, state=NM, county=049, city=Albuquerque');
+  });
+
+  it('names the location sent in the empty-result notice', async () => {
+    mockSearchAwards.mockResolvedValue({ results: [], page_metadata: { hasNext: false, page: 1 } });
+
+    const result = await run({ country: 'PRI' });
+
+    expect(result.structuredContent).toMatchObject({
+      applied_location: 'country=USA, state=PR',
+      notice: expect.stringContaining('location="country=USA, state=PR"'),
+    });
+  });
+
+  it('echoes no location when none was sent', async () => {
+    const result = await run({ country: '', state: '', county: '', city: '' });
+
+    expect(result.structuredContent).not.toHaveProperty('applied_location');
+    expect(sentLocations()).toBeUndefined();
   });
 });

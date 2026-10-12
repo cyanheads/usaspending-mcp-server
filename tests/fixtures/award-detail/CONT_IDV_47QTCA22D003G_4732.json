@@ -1,0 +1,156 @@
+{
+  "id": 351009310,
+  "generated_unique_award_id": "CONT_IDV_47QTCA22D003G_4732",
+  "piid": "47QTCA22D003G",
+  "category": "idv",
+  "type": "IDV_C",
+  "type_description": "FSS",
+  "description": "EO14042 THIS CONTRACT INCLUDES THE  FEDERAL ACQUISITION REGULATION (FAR) CLAUSE 52.223-99 ENSURING ADEQUATE COVID-19 SAFETY PROTOCOLS FOR FEDERAL CONTRACTORS - FEDERAL SUPPLY SCHEDULE CONTRACT",
+  "total_obligation": 0.0,
+  "subaward_count": 0,
+  "total_subaward_amount": null,
+  "date_signed": "2022-01-20",
+  "base_exercised_options": null,
+  "base_and_all_options": 2000000.0,
+  "total_account_outlay": 678240.02,
+  "total_account_obligation": 198497.56,
+  "account_outlays_by_defc": [
+    {
+      "code": "Q",
+      "amount": 678240.02
+    }
+  ],
+  "account_obligations_by_defc": [
+    {
+      "code": "Q",
+      "amount": 198497.56
+    }
+  ],
+  "parent_award": null,
+  "latest_transaction_contract_data": {
+    "naics": "511210",
+    "naics_description": "SOFTWARE PUBLISHERS",
+    "product_or_service_code": "DA01",
+    "product_or_service_description": "IT AND TELECOM - BUSINESS APPLICATION/APPLICATION DEVELOPMENT SUPPORT SERVICES (LABOR)"
+  },
+  "funding_agency": {
+    "id": 634,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "General Services Administration",
+      "code": "047",
+      "abbreviation": "GSA",
+      "slug": "general-services-administration"
+    },
+    "subtier_agency": {
+      "name": "Federal Acquisition Service",
+      "code": "4732",
+      "abbreviation": "FAS"
+    },
+    "office_agency_name": "GSA/FAS CENTER FOR IT SCHEDULE PROG"
+  },
+  "awarding_agency": {
+    "id": 634,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "General Services Administration",
+      "code": "047",
+      "abbreviation": "GSA",
+      "slug": "general-services-administration"
+    },
+    "subtier_agency": {
+      "name": "Federal Acquisition Service",
+      "code": "4732",
+      "abbreviation": "FAS"
+    },
+    "office_agency_name": "GSA/FAS CENTER FOR IT SCHEDULE PROG"
+  },
+  "period_of_performance": {
+    "start_date": "2022-01-20",
+    "end_date": "2032-01-19",
+    "last_modified_date": "2026-10-06",
+    "potential_end_date": null
+  },
+  "recipient": {
+    "recipient_hash": "3612de0a-9635-3846-a5a1-7f555fba52df-C",
+    "recipient_name": "DELL FEDERAL SYSTEMS L.P",
+    "recipient_uei": "N1C5QLNPJLS4",
+    "recipient_unique_id": null,
+    "parent_recipient_hash": "f96a8de9-a2b2-cc9d-cc9f-ec5976fb4c3b-P",
+    "parent_recipient_name": "FRANCISCO PARTNERS MANAGEMENT, L.P.",
+    "parent_recipient_uei": "JGSNSER23GR6",
+    "parent_recipient_unique_id": null,
+    "business_categories": [
+      "Category Business",
+      "Manufacturer of Goods",
+      "Not Designated a Small Business",
+      "Partnership or Limited Liability Partnership",
+      "Special Designations",
+      "U.S.-Owned Business"
+    ],
+    "location": {
+      "location_country_code": "USA",
+      "country_name": "UNITED STATES",
+      "state_code": "TX",
+      "state_name": "TEXAS",
+      "city_name": "ROUND ROCK",
+      "county_code": "491",
+      "county_name": "WILLIAMSON",
+      "address_line1": "1 DELL WAY",
+      "address_line2": null,
+      "address_line3": null,
+      "congressional_code": "17",
+      "zip4": "7000",
+      "zip5": "78682",
+      "foreign_postal_code": null,
+      "foreign_province": null
+    }
+  },
+  "place_of_performance": {
+    "location_country_code": null,
+    "country_name": null,
+    "county_code": null,
+    "county_name": null,
+    "city_name": null,
+    "state_code": null,
+    "state_name": null,
+    "congressional_code": null,
+    "zip4": null,
+    "zip5": null,
+    "address_line1": null,
+    "address_line2": null,
+    "address_line3": null,
+    "foreign_province": null,
+    "foreign_postal_code": null
+  },
+  "psc_hierarchy": {
+    "toptier_code": {
+      "code": "D",
+      "description": "IT AND TELECOM - INFORMATION TECHNOLOGY AND TELECOMMUNICATIONS"
+    },
+    "midtier_code": {
+      "code": "DA",
+      "description": "IT AND TELECOM - APLLICATIONS"
+    },
+    "subtier_code": {},
+    "base_code": {
+      "code": "DA01",
+      "description": "IT AND TELECOM - BUSINESS APPLICATION/APPLICATION DEVELOPMENT SUPPORT SERVICES (LABOR)"
+    }
+  },
+  "naics_hierarchy": {
+    "toptier_code": {
+      "code": "51",
+      "description": "Information"
+    },
+    "midtier_code": {
+      "code": "5112",
+      "description": "Software Publishers"
+    },
+    "base_code": {
+      "code": "511210",
+      "description": "Software Publishers"
+    }
+  },
+  "total_outlay": 678240.02
+}

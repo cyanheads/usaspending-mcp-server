@@ -8,10 +8,26 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 
+type Present<T> = { [K in keyof T]?: Exclude<T[K], null | undefined> };
+
+/**
+ * Keeps the members upstream populated — dropping null, undefined, and empty
+ * strings, keeping zeros — and returns undefined when none are left, so an
+ * all-null upstream block emits no key rather than `{}`.
+ */
+function compact<T extends Record<string, string | number | null | undefined>>(
+  fields: T,
+): Present<T> | undefined {
+  const entries = Object.entries(fields).filter(
+    ([, value]) => value !== null && value !== undefined && value !== '',
+  );
+  return entries.length ? (Object.fromEntries(entries) as Present<T>) : undefined;
+}
+
 export const getAwardTool = tool('usaspending_get_award', {
   title: 'Get Award Details',
   description:
-    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient info, agency hierarchy, period of performance, place of performance, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count. Use generated_internal_id values from usaspending_search_awards as input. Recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
+    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient identity (UEI, parent organization, business categories), agency hierarchy, period of performance, place of performance, Assistance Listings with the obligation under each, loan face value and subsidy cost for loans, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count. Use generated_internal_id values from usaspending_search_awards as input. Recipient and parent recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters, and Assistance Listing numbers in its assistance_listings filter. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -32,7 +48,7 @@ export const getAwardTool = tool('usaspending_get_award', {
     category: z
       .string()
       .optional()
-      .describe('Award category (contract, grant, direct_payment, loan, idv, other)'),
+      .describe('Award category: contract, idv, grant, loans, direct payment, insurance, or other'),
     description: z.string().optional().describe('Award description'),
     total_obligation: z.number().optional().describe('Total obligation amount in USD'),
     total_outlays: z.number().optional().describe('Total outlay amount in USD'),
@@ -40,6 +56,18 @@ export const getAwardTool = tool('usaspending_get_award', {
       .number()
       .optional()
       .describe('Base and all options value in USD (contracts)'),
+    total_loan_value: z
+      .number()
+      .optional()
+      .describe(
+        'Face value of the loan in USD (category "loans" only). A loan reports its value here, not in total_obligation, which is often 0.',
+      ),
+    total_subsidy_cost: z
+      .number()
+      .optional()
+      .describe(
+        'Estimated cost to the government of the loan subsidy in USD (category "loans" only)',
+      ),
     subaward_count: z
       .number()
       .optional()
@@ -60,29 +88,47 @@ export const getAwardTool = tool('usaspending_get_award', {
       .object({
         city_name: z.string().optional().describe('City of performance'),
         state_code: z.string().optional().describe('State code of performance'),
-        country_code: z.string().optional().describe('Country code of performance'),
+        country_code: z
+          .string()
+          .optional()
+          .describe('Three-letter country code of performance (e.g. USA)'),
         zip5: z.string().optional().describe('ZIP code of performance'),
       })
       .optional()
-      .describe('Place of performance'),
+      .describe('Place of performance; absent when upstream reports no location fields'),
     recipient: z
       .object({
         recipient_name: z.string().optional().describe('Recipient legal business name'),
-        uei: z.string().optional().describe('Unique Entity Identifier'),
+        uei: z.string().optional().describe('Recipient Unique Entity Identifier'),
         recipient_id: z
           .string()
           .optional()
           .describe('Recipient hash ID — pass to usaspending_get_recipient for full profile'),
         parent_recipient_name: z.string().optional().describe('Parent organization name'),
-        business_types: z.array(z.string()).optional().describe('Recipient business type codes'),
+        parent_uei: z.string().optional().describe('Parent organization Unique Entity Identifier'),
+        parent_recipient_id: z
+          .string()
+          .optional()
+          .describe(
+            'Parent recipient hash ID (ends in -P) — pass to usaspending_get_recipient for the parent organization profile',
+          ),
+        business_categories: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Recipient business category names (e.g. "Higher Education", "U.S. Local Government") — not the codes usaspending_get_recipient returns as business_types',
+          ),
         location: z
           .object({
             city_name: z.string().optional().describe('Recipient city'),
             state_code: z.string().optional().describe('Recipient state code'),
-            country_code: z.string().optional().describe('Recipient country code'),
+            country_code: z
+              .string()
+              .optional()
+              .describe('Recipient three-letter country code (e.g. USA)'),
           })
           .optional()
-          .describe('Recipient address'),
+          .describe('Recipient address; absent when upstream reports no location fields'),
       })
       .optional()
       .describe('Recipient details'),
@@ -131,13 +177,28 @@ export const getAwardTool = tool('usaspending_get_award', {
       })
       .optional()
       .describe('Product or service code (contracts)'),
-    cfda: z
-      .object({
-        number: z.string().optional().describe('CFDA/Assistance Listing number'),
-        title: z.string().optional().describe('CFDA program title'),
-      })
+    assistance_listings: z
+      .array(
+        z
+          .object({
+            number: z
+              .string()
+              .optional()
+              .describe(
+                'Assistance Listing (CFDA) number, e.g. 93.855 — usable in usaspending_search_awards assistance_listings',
+              ),
+            title: z.string().optional().describe('Assistance Listing program title'),
+            obligation: z
+              .number()
+              .optional()
+              .describe('Federal obligation in USD made under this listing'),
+          })
+          .describe('One Assistance Listing funding the award'),
+      )
       .optional()
-      .describe('CFDA program (grants/assistance)'),
+      .describe(
+        'Every Assistance Listing (CFDA program) funding the award, in upstream order; absent for contracts and IDVs',
+      ),
     account_obligations_by_defc: z
       .array(
         z
@@ -190,7 +251,75 @@ export const getAwardTool = tool('usaspending_get_award', {
     }
 
     const contractData = r.latest_transaction_contract_data;
-    const assistanceData = r.latest_transaction_assistance_data;
+    const pop = r.place_of_performance;
+    const rcp = r.recipient;
+
+    const periodOfPerformance = compact({
+      start_date: r.period_of_performance?.start_date,
+      end_date: r.period_of_performance?.end_date,
+      /**
+       * Upstream returns this one as "YYYY-MM-DD HH:MM:SS" while its siblings are plain
+       * dates; the time component is always midnight, so drop it for a single shape.
+       */
+      potential_end_date: r.period_of_performance?.potential_end_date?.slice(0, 10),
+    });
+    const placeOfPerformance = compact({
+      city_name: pop?.city_name,
+      state_code: pop?.state_code,
+      country_code: pop?.location_country_code,
+      zip5: pop?.zip5,
+    });
+    const recipientLocation = compact({
+      city_name: rcp?.location?.city_name,
+      state_code: rcp?.location?.state_code,
+      country_code: rcp?.location?.location_country_code,
+    });
+    const businessCategories = rcp?.business_categories?.length
+      ? rcp.business_categories
+      : undefined;
+    const recipientIdentity = compact({
+      recipient_name: rcp?.recipient_name,
+      uei: rcp?.recipient_uei,
+      recipient_id: rcp?.recipient_hash,
+      parent_recipient_name: rcp?.parent_recipient_name,
+      parent_uei: rcp?.parent_recipient_uei,
+      parent_recipient_id: rcp?.parent_recipient_hash,
+    });
+    const recipient =
+      recipientIdentity || businessCategories || recipientLocation
+        ? {
+            ...recipientIdentity,
+            ...(businessCategories ? { business_categories: businessCategories } : {}),
+            ...(recipientLocation ? { location: recipientLocation } : {}),
+          }
+        : undefined;
+    const awardingAgency = compact({
+      toptier_name: r.awarding_agency?.toptier_agency?.name,
+      toptier_code: r.awarding_agency?.toptier_agency?.code,
+      toptier_slug: r.awarding_agency?.toptier_agency?.slug,
+      subtier_name: r.awarding_agency?.subtier_agency?.name,
+    });
+    const fundingAgency = compact({
+      toptier_name: r.funding_agency?.toptier_agency?.name,
+      toptier_code: r.funding_agency?.toptier_agency?.code,
+      subtier_name: r.funding_agency?.subtier_agency?.name,
+    });
+    const parentAward = compact({
+      award_id: r.parent_award?.piid,
+      generated_unique_award_id: r.parent_award?.generated_unique_award_id,
+      agency_name: r.parent_award?.agency_name,
+      type_description: r.parent_award?.idv_type_description,
+    });
+    const assistanceListings = (r.cfda_info ?? []).flatMap((listing) => {
+      const entry = compact({
+        number: listing.cfda_number,
+        title: listing.cfda_title,
+        obligation: listing.federal_action_obligation_amount,
+      });
+      return entry ? [entry] : [];
+    });
+    // Non-loan awards carry placeholder zeros in these fields.
+    const isLoan = r.category === 'loans';
 
     return {
       ...(r.generated_unique_award_id
@@ -207,122 +336,20 @@ export const getAwardTool = tool('usaspending_get_award', {
       ...(typeof r.base_and_all_options === 'number'
         ? { base_and_all_options_value: r.base_and_all_options }
         : {}),
+      ...(isLoan && typeof r.total_loan_value === 'number'
+        ? { total_loan_value: r.total_loan_value }
+        : {}),
+      ...(isLoan && typeof r.total_subsidy_cost === 'number'
+        ? { total_subsidy_cost: r.total_subsidy_cost }
+        : {}),
       ...(typeof r.subaward_count === 'number' ? { subaward_count: r.subaward_count } : {}),
       ...(r.date_signed ? { date_signed: r.date_signed } : {}),
-      ...(r.period_of_performance
-        ? {
-            period_of_performance: {
-              ...(r.period_of_performance.start_date
-                ? { start_date: r.period_of_performance.start_date }
-                : {}),
-              ...(r.period_of_performance.end_date
-                ? { end_date: r.period_of_performance.end_date }
-                : {}),
-              // Upstream returns this one as "YYYY-MM-DD HH:MM:SS" while its siblings are plain
-              // dates; the time component is always midnight, so drop it for a single shape.
-              ...(r.period_of_performance.potential_end_date
-                ? { potential_end_date: r.period_of_performance.potential_end_date.slice(0, 10) }
-                : {}),
-            },
-          }
-        : {}),
-      ...(r.place_of_performance
-        ? {
-            place_of_performance: {
-              ...(r.place_of_performance.city_name
-                ? { city_name: r.place_of_performance.city_name }
-                : {}),
-              ...(r.place_of_performance.state_code
-                ? { state_code: r.place_of_performance.state_code }
-                : {}),
-              ...(r.place_of_performance.country_code
-                ? { country_code: r.place_of_performance.country_code }
-                : {}),
-              ...(r.place_of_performance.zip5 ? { zip5: r.place_of_performance.zip5 } : {}),
-            },
-          }
-        : {}),
-      ...(r.recipient
-        ? {
-            recipient: {
-              ...(r.recipient.recipient_name ? { recipient_name: r.recipient.recipient_name } : {}),
-              ...(r.recipient.uei ? { uei: r.recipient.uei } : {}),
-              ...(r.recipient.recipient_hash
-                ? { recipient_id: r.recipient.recipient_hash }
-                : r.recipient.recipient_id
-                  ? { recipient_id: r.recipient.recipient_id }
-                  : {}),
-              ...(r.recipient.parent_recipient_name
-                ? { parent_recipient_name: r.recipient.parent_recipient_name }
-                : {}),
-              ...(r.recipient.business_types?.length
-                ? { business_types: r.recipient.business_types }
-                : {}),
-              ...(r.recipient.location
-                ? {
-                    location: {
-                      ...(r.recipient.location.city_name
-                        ? { city_name: r.recipient.location.city_name }
-                        : {}),
-                      ...(r.recipient.location.state_code
-                        ? { state_code: r.recipient.location.state_code }
-                        : {}),
-                      ...(r.recipient.location.country_code
-                        ? { country_code: r.recipient.location.country_code }
-                        : {}),
-                    },
-                  }
-                : {}),
-            },
-          }
-        : {}),
-      ...(r.awarding_agency
-        ? {
-            awarding_agency: {
-              ...(r.awarding_agency.toptier_agency?.name
-                ? { toptier_name: r.awarding_agency.toptier_agency.name }
-                : {}),
-              ...(r.awarding_agency.toptier_agency?.code
-                ? { toptier_code: r.awarding_agency.toptier_agency.code }
-                : {}),
-              ...(r.awarding_agency.toptier_agency?.slug
-                ? { toptier_slug: r.awarding_agency.toptier_agency.slug }
-                : {}),
-              ...(r.awarding_agency.subtier_agency?.name
-                ? { subtier_name: r.awarding_agency.subtier_agency.name }
-                : {}),
-            },
-          }
-        : {}),
-      ...(r.funding_agency
-        ? {
-            funding_agency: {
-              ...(r.funding_agency.toptier_agency?.name
-                ? { toptier_name: r.funding_agency.toptier_agency.name }
-                : {}),
-              ...(r.funding_agency.toptier_agency?.code
-                ? { toptier_code: r.funding_agency.toptier_agency.code }
-                : {}),
-              ...(r.funding_agency.subtier_agency?.name
-                ? { subtier_name: r.funding_agency.subtier_agency.name }
-                : {}),
-            },
-          }
-        : {}),
-      ...(r.parent_award
-        ? {
-            parent_award: {
-              ...(r.parent_award.piid ? { award_id: r.parent_award.piid } : {}),
-              ...(r.parent_award.generated_unique_award_id
-                ? { generated_unique_award_id: r.parent_award.generated_unique_award_id }
-                : {}),
-              ...(r.parent_award.agency_name ? { agency_name: r.parent_award.agency_name } : {}),
-              ...(r.parent_award.idv_type_description
-                ? { type_description: r.parent_award.idv_type_description }
-                : {}),
-            },
-          }
-        : {}),
+      ...(periodOfPerformance ? { period_of_performance: periodOfPerformance } : {}),
+      ...(placeOfPerformance ? { place_of_performance: placeOfPerformance } : {}),
+      ...(recipient ? { recipient } : {}),
+      ...(awardingAgency ? { awarding_agency: awardingAgency } : {}),
+      ...(fundingAgency ? { funding_agency: fundingAgency } : {}),
+      ...(parentAward ? { parent_award: parentAward } : {}),
       ...(contractData?.naics
         ? {
             naics: {
@@ -343,14 +370,7 @@ export const getAwardTool = tool('usaspending_get_award', {
             },
           }
         : {}),
-      ...(assistanceData?.cfda_number
-        ? {
-            cfda: {
-              number: assistanceData.cfda_number,
-              ...(assistanceData.cfda_title ? { title: assistanceData.cfda_title } : {}),
-            },
-          }
-        : {}),
+      ...(assistanceListings.length ? { assistance_listings: assistanceListings } : {}),
       ...(r.account_obligations_by_defc?.length
         ? {
             account_obligations_by_defc: r.account_obligations_by_defc
@@ -380,6 +400,10 @@ export const getAwardTool = tool('usaspending_get_award', {
       lines.push(`**Total Outlays:** ${formatCurrency(result.total_outlays)}`);
     if (typeof result.base_and_all_options_value === 'number')
       lines.push(`**Base + All Options:** ${formatCurrency(result.base_and_all_options_value)}`);
+    if (typeof result.total_loan_value === 'number')
+      lines.push(`**Total Loan Value:** ${formatCurrency(result.total_loan_value)}`);
+    if (typeof result.total_subsidy_cost === 'number')
+      lines.push(`**Total Subsidy Cost:** ${formatCurrency(result.total_subsidy_cost)}`);
     if (result.date_signed) lines.push(`**Date Signed:** ${result.date_signed}`);
 
     if (result.period_of_performance) {
@@ -406,8 +430,13 @@ export const getAwardTool = tool('usaspending_get_award', {
         lines.push(`**Recipient ID (for get_recipient):** ${result.recipient.recipient_id}`);
       if (result.recipient.parent_recipient_name)
         lines.push(`**Parent:** ${result.recipient.parent_recipient_name}`);
-      if (result.recipient.business_types?.length)
-        lines.push(`**Business Types:** ${result.recipient.business_types.join(', ')}`);
+      if (result.recipient.parent_uei) lines.push(`**Parent UEI:** ${result.recipient.parent_uei}`);
+      if (result.recipient.parent_recipient_id)
+        lines.push(
+          `**Parent Recipient ID (for get_recipient):** ${result.recipient.parent_recipient_id}`,
+        );
+      if (result.recipient.business_categories?.length)
+        lines.push(`**Business Categories:** ${result.recipient.business_categories.join(', ')}`);
       if (result.recipient.location) {
         const loc = result.recipient.location;
         lines.push(
@@ -437,13 +466,18 @@ export const getAwardTool = tool('usaspending_get_award', {
       lines.push(
         `**PSC:** ${result.product_or_service_code.code}${result.product_or_service_code.description ? ` — ${result.product_or_service_code.description}` : ''}`,
       );
-    if (result.cfda)
-      lines.push(
-        `**CFDA:** ${result.cfda.number}${result.cfda.title ? ` — ${result.cfda.title}` : ''}`,
-      );
 
     if (typeof result.subaward_count === 'number')
       lines.push(`**Subaward Count:** ${result.subaward_count}`);
+
+    if (result.assistance_listings?.length) {
+      lines.push('\n### Assistance Listings');
+      for (const l of result.assistance_listings) {
+        lines.push(
+          `- **${l.number ?? 'N/A'}**${l.title ? ` — ${l.title}` : ''}${typeof l.obligation === 'number' ? `: ${formatCurrency(l.obligation)}` : ''}`,
+        );
+      }
+    }
 
     if (result.parent_award) {
       lines.push('\n### Parent Award (IDV)');

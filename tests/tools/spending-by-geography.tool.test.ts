@@ -3,7 +3,7 @@
  * @module tests/tools/spending-by-geography.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
 
@@ -12,6 +12,49 @@ const mockSpendingByGeography = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ spendingByGeography: mockSpendingByGeography }),
 }));
+
+const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+  result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
+/** A `search/spending_by_geography/` state row exactly as the live endpoint returns it (FY2025 contracts). */
+const LIVE_STATE_ROW = {
+  shape_code: 'VA',
+  display_name: 'Virginia',
+  aggregated_amount: 120_579_333_436.23,
+  population: 8_631_393,
+  per_capita: 13_969.86,
+};
+
+describe('spendingByGeographyTool row fields (#82)', () => {
+  it('advertises no award_count, which the endpoint never returns', () => {
+    const rowShape = spendingByGeographyTool.output.shape.results.element.shape;
+    expect(Object.keys(rowShape).sort()).toEqual(
+      ['aggregated_amount', 'display_name', 'per_capita', 'population', 'shape_code'].sort(),
+    );
+  });
+
+  it('passes a live row through the output schema and renders it without N/A placeholders', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: [LIVE_STATE_ROW] });
+
+    const result = await runToolContract(spendingByGeographyTool, {
+      scope: 'place_of_performance',
+      geo_layer: 'state',
+      filters: {
+        award_type_codes: ['A', 'B', 'C', 'D'],
+        time_period_start: '2024-10-01',
+        time_period_end: '2025-09-30',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const row = (result.structuredContent as { results: Record<string, unknown>[] }).results[0];
+    expect(row).toEqual(LIVE_STATE_ROW);
+    const text = textOf(result);
+    expect(text).not.toContain('N/A');
+    expect(text).not.toContain('Awards');
+    expect(text).toContain('| Virginia | VA | $120,579,333,436.23 | 8,631,393 | $13,969.86 |');
+  });
+});
 
 describe('spendingByGeographyTool', () => {
   it('returns state-level spending results', async () => {
@@ -260,5 +303,264 @@ describe('spendingByGeographyTool', () => {
     expect(text).toContain('4,500,000,000');
     expect(text).toContain('place_of_performance');
     expect(text).toContain('state');
+  });
+});
+
+/**
+ * The county aggregate behind #72's reproduction, condensed: 700 counties where
+ * Wayne County, NY (36117) ranks 601st, so it sits past the 500-area cap.
+ */
+const COUNTY_AGGREGATE = Array.from({ length: 700 }, (_, i) => {
+  const rank = i + 1;
+  if (rank === 601) {
+    return {
+      shape_code: '36117',
+      display_name: 'Wayne County',
+      aggregated_amount: 404_539.84,
+      population: 91_283,
+      per_capita: 4.43,
+    };
+  }
+  if (rank === 40) {
+    return {
+      shape_code: '06037',
+      display_name: 'Los Angeles County',
+      aggregated_amount: 11_521_232.46,
+      population: 10_014_009,
+      per_capita: 1.15,
+    };
+  }
+  return {
+    shape_code: String(10_000 + rank).padStart(5, '0'),
+    display_name: `County ${rank}`,
+    aggregated_amount: 1_000_000_000 - rank * 1_000_000,
+  };
+}).reverse();
+
+const DOI_FY2025 = {
+  award_type_codes: ['A', 'B', 'C', 'D'],
+  agency_name: 'Department of the Interior',
+  time_period_start: '2024-10-01',
+  time_period_end: '2025-09-30',
+};
+
+const runGeo = (args: Record<string, unknown>) =>
+  runToolContract(spendingByGeographyTool, {
+    scope: 'place_of_performance',
+    geo_layer: 'county',
+    filters: DOI_FY2025,
+    ...args,
+  });
+
+type GeoStructured = {
+  results: { shape_code?: string; display_name?: string; aggregated_amount?: number }[];
+  total: number;
+  total_areas_available: number;
+  applied_shape_codes?: string;
+  notice?: string;
+  truncated?: boolean;
+  shown?: number;
+  cap?: number;
+};
+const structuredOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+  result.structuredContent as GeoStructured;
+
+describe('spendingByGeographyTool without shape_codes (pre-#72 behavior)', () => {
+  it('sends only scope, geo_layer, filters, and subawards upstream', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    await runGeo({ limit: 500 });
+    const [request] = mockSpendingByGeography.mock.calls.at(-1)!;
+    expect(Object.keys(request).sort()).toEqual(['filters', 'geo_layer', 'scope', 'subawards']);
+  });
+
+  it('caps the ranked aggregate at limit and counts every match', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const result = await runGeo({ limit: 500 });
+    const sc = structuredOf(result);
+    expect(sc.results).toHaveLength(500);
+    expect(sc.total_areas_available).toBe(700);
+    expect(sc.results.some((r) => r.shape_code === '36117')).toBe(false);
+    expect(sc.applied_shape_codes).toBeUndefined();
+    expect(sc.truncated).toBe(true);
+  });
+});
+
+describe('spendingByGeographyTool shape_codes (#72)', () => {
+  it('retrieves an area ranked past the cap, keeping total_areas_available the full count', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const result = await runGeo({ limit: 500, shape_codes: ['36117'] });
+
+    expect(result.isError).toBeFalsy();
+    const sc = structuredOf(result);
+    expect(sc.results).toEqual([
+      {
+        shape_code: '36117',
+        display_name: 'Wayne County',
+        aggregated_amount: 404_539.84,
+        population: 91_283,
+        per_capita: 4.43,
+      },
+    ]);
+    expect(sc.total).toBe(1);
+    expect(sc.total_areas_available).toBe(700);
+    expect(sc.applied_shape_codes).toBe('36117');
+    expect(sc.truncated).toBeUndefined();
+    expect(sc.notice).toBeUndefined();
+    const text = textOf(result);
+    expect(text).toContain('| Wayne County | 36117 | $404,539.84 | 91,283 | $4.43 |');
+    expect(text).toContain('1 of 700 matched');
+    expect(text).toContain('36117');
+  });
+
+  it('selects client-side: the upstream request is identical with or without shape_codes', async () => {
+    mockSpendingByGeography.mockReset();
+    mockSpendingByGeography.mockResolvedValue({ results: COUNTY_AGGREGATE });
+    await runGeo({ limit: 500 });
+    await runGeo({ limit: 500, shape_codes: ['36117'] });
+    const calls = [...mockSpendingByGeography.mock.calls];
+    mockSpendingByGeography.mockReset();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![0]).toEqual(calls[0]![0]);
+  });
+
+  it.each([
+    {
+      layer: 'state',
+      codes: ['NY'],
+      rows: [
+        { shape_code: 'CA', display_name: 'California', aggregated_amount: 9 },
+        { shape_code: 'NY', display_name: 'New York', aggregated_amount: 5 },
+      ],
+      expected: ['NY'],
+    },
+    {
+      layer: 'county',
+      codes: ['36117', '06037'],
+      rows: COUNTY_AGGREGATE,
+      expected: ['06037', '36117'],
+    },
+    {
+      layer: 'district',
+      codes: ['3623', '5600'],
+      rows: [
+        { shape_code: '3623', display_name: 'NY-23', aggregated_amount: 11_914_933.63 },
+        { shape_code: '0612', display_name: 'CA-12', aggregated_amount: 500_000_000 },
+        { shape_code: '5600', display_name: 'WY-00', aggregated_amount: 122_731_368.53 },
+      ],
+      expected: ['5600', '3623'],
+    },
+  ])(
+    'selects $layer areas by their own code form, ranked by amount',
+    async ({ layer, codes, rows, expected }) => {
+      mockSpendingByGeography.mockResolvedValueOnce({ results: rows });
+      const result = await runGeo({ geo_layer: layer, shape_codes: codes });
+      const sc = structuredOf(result);
+      expect(sc.results.map((r) => r.shape_code)).toEqual(expected);
+      expect(sc.total_areas_available).toBe(rows.length);
+      expect(sc.notice).toBeUndefined();
+    },
+  );
+
+  it('matches a lowercase state postal code', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: [
+        { shape_code: 'NY', display_name: 'New York', aggregated_amount: 5 },
+        { shape_code: 'CA', display_name: 'California', aggregated_amount: 9 },
+      ],
+    });
+    const sc = structuredOf(await runGeo({ geo_layer: 'state', shape_codes: ['ny'] }));
+    expect(sc.results.map((r) => r.shape_code)).toEqual(['NY']);
+    expect(sc.applied_shape_codes).toBe('NY');
+  });
+
+  it('names a listed code that matches no area instead of dropping it', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const result = await runGeo({ shape_codes: ['36117', '99999'] });
+    const sc = structuredOf(result);
+    expect(sc.results.map((r) => r.shape_code)).toEqual(['36117']);
+    // Only the unmatched code is listed; the matched 36117 is not.
+    expect(sc.notice).toContain('shape_codes 99999 matched no county area');
+    expect(textOf(result)).toContain('shape_codes 99999 matched no county area');
+  });
+
+  it('names every code when none matches, without blaming the filters', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({
+      results: [{ shape_code: 'NY', display_name: 'New York', aggregated_amount: 5 }],
+    });
+    const result = await runGeo({ geo_layer: 'state', shape_codes: ['36117', '3623'] });
+    const sc = structuredOf(result);
+    expect(sc.results).toEqual([]);
+    expect(sc.total).toBe(0);
+    expect(sc.total_areas_available).toBe(1);
+    expect(sc.notice).toContain('36117, 3623');
+    expect(sc.notice).toContain('2-letter postal code');
+    expect(sc.notice).not.toContain('No spending data matched the filters');
+  });
+
+  it('still reports an empty aggregate as a filter miss', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: [] });
+    const sc = structuredOf(await runGeo({ shape_codes: ['36117'] }));
+    expect(sc.results).toEqual([]);
+    expect(sc.total_areas_available).toBe(0);
+    expect(sc.notice).toContain('No spending data matched the filters');
+    expect(sc.notice).toContain('36117');
+  });
+
+  it('ranks the selected areas and caps them at limit', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const codes = ['36117', '06037', '10001', '10002', '10650'];
+    const result = await runGeo({ shape_codes: codes, limit: 2 });
+    const sc = structuredOf(result);
+    expect(sc.results.map((r) => r.shape_code)).toEqual(['10001', '10002']);
+    expect(sc.total).toBe(2);
+    expect(sc.total_areas_available).toBe(700);
+    expect(sc.truncated).toBe(true);
+    expect(sc.shown).toBe(2);
+    expect(sc.cap).toBe(2);
+    expect(sc.notice).toContain('2 highest-obligation of the 5 selected areas');
+    expect(sc.notice).toContain('Raise limit');
+  });
+
+  it.each([
+    { label: 'an empty list', shape_codes: [] },
+    {
+      label: '501 codes',
+      shape_codes: Array.from({ length: 501 }, (_, i) => String(i).padStart(5, '0')),
+    },
+    { label: 'a place name', shape_codes: ['Wayne County'] },
+    { label: 'a blank code', shape_codes: [''] },
+  ])('rejects $label before any request is sent', async ({ shape_codes }) => {
+    mockSpendingByGeography.mockClear();
+    const result = await runGeo({ shape_codes });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('shape_codes');
+    // A declared field failing its own bound, not an undeclared key.
+    expect(textOf(result)).not.toContain('Unrecognized key');
+    expect(mockSpendingByGeography).not.toHaveBeenCalled();
+  });
+
+  it('accepts 500 codes', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const shape_codes = COUNTY_AGGREGATE.slice(0, 500).map((r) => r.shape_code);
+    const result = await runGeo({ shape_codes, limit: 500 });
+    expect(result.isError).toBeFalsy();
+    expect(structuredOf(result).results).toHaveLength(500);
+  });
+});
+
+describe('spendingByGeographyTool truncation guidance (#72)', () => {
+  it('at limit 500, names shape_codes and does not suggest raising limit', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const sc = structuredOf(await runGeo({ limit: 500 }));
+    expect(sc.notice).toContain('500 highest-obligation areas of 700');
+    expect(sc.notice).toContain('shape_codes');
+    expect(sc.notice).not.toMatch(/raise limit/i);
+  });
+
+  it('below 500, offers both raising limit and shape_codes', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+    const sc = structuredOf(await runGeo({ limit: 10 }));
+    expect(sc.notice).toContain('Raise limit (max 500)');
+    expect(sc.notice).toContain('shape_codes');
   });
 });

@@ -4,8 +4,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import type { RawBudgetaryResources, RawSubAgencyEntry } from '@/services/usaspending/types.js';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import type { RawBudgetaryResources } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
@@ -13,10 +13,54 @@ import { formatPaginationLine } from './pagination.js';
 /** Sub-agency breakdown page size (the endpoint's natural page cap). */
 const SUB_AGENCY_PAGE_LIMIT = 10;
 
+/**
+ * How long the sub-agency request waits for the budget year before falling back to
+ * upstream's default year. `budgetary_resources/` answered in 0.2–2.8 s across
+ * agencies 014, 097, 012, and 075; the cap bounds the worst case at roughly this
+ * plus one request budget instead of two request budgets back to back. A budget
+ * answer past the cap leaves the breakdown on upstream's default year, which
+ * `sub_agency_fiscal_year` discloses.
+ */
+const BUDGET_YEAR_WAIT_MS = 5_000;
+
+const UnavailableSectionSchema = z
+  .object({
+    section: z
+      .enum(['budgetary_resources', 'sub_agencies'])
+      .describe(
+        'budgetary_resources: fiscal_year and the budget, obligation, and outlay totals. sub_agencies: the sub-agency breakdown and its pagination.',
+      ),
+    reason: z
+      .enum(['api_unavailable', 'api_timeout', 'upstream_error'])
+      .describe(
+        'api_unavailable: USAspending was unreachable or answered with a server error. api_timeout: no answer before the request deadline. upstream_error: USAspending rejected the request.',
+      ),
+    retryable: z.boolean().describe('Whether retrying the call may load this section.'),
+    message: z.string().describe('The failure message for this section.'),
+  })
+  .describe('A section omitted from the result because its request failed');
+
+type UnavailableSection = z.infer<typeof UnavailableSectionSchema>;
+
+/**
+ * The budget row the totals report: the most recent fiscal year carrying at least one
+ * amount. A new fiscal year opens with a row whose amounts are all null until the
+ * agency first reports, so that row is skipped; a 0 is data.
+ */
+function selectBudgetRow(rows: RawBudgetaryResources[] | undefined) {
+  return [...(rows ?? [])]
+    .sort((a, b) => (b.fiscal_year ?? 0) - (a.fiscal_year ?? 0))
+    .find((row) =>
+      [row.agency_budgetary_resources, row.agency_total_obligated, row.agency_total_outlayed].some(
+        (amount) => typeof amount === 'number',
+      ),
+    );
+}
+
 export const getAgencyTool = tool('usaspending_get_agency', {
   title: 'Get Agency Overview',
   description:
-    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year), sub-agency count, and DEF codes for disaster/emergency funding. Also returns a paginated sub-agency breakdown with obligation and transaction counts. Accepts either a 3-digit toptier_code (e.g., 097 for DoD, 012 for Agriculture) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results.",
+    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year with reported budget data), sub-agency count, and DEF codes for disaster/emergency funding. Also returns a paginated sub-agency breakdown with obligation and transaction counts for the same fiscal year as the budget totals (the current fiscal year when no budget year is available within 5 seconds); sub_agency_fiscal_year names the year it covers. Accepts exactly one of a 3-digit toptier_code (e.g., 097 for DoD, 012 for Agriculture) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results. When the budget or sub-agency request fails, the overview is still returned and unavailable_sections names each missing section with its reason.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -51,7 +95,9 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     fiscal_year: z
       .number()
       .optional()
-      .describe('Fiscal year the budgetary totals below reflect (most recent available)'),
+      .describe(
+        'Fiscal year the budgetary totals below reflect: the most recent year with reported budget data, which can trail the current fiscal year (a new year has no amounts until the agency first reports in it)',
+      ),
     budgetary_resources_amount: z
       .number()
       .optional()
@@ -79,6 +125,12 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       )
       .optional()
       .describe('Sub-agency breakdown within this toptier agency (one page)'),
+    sub_agency_fiscal_year: z
+      .number()
+      .optional()
+      .describe(
+        'Fiscal year the sub-agency breakdown covers, as upstream reports it: the same year as fiscal_year, or the current fiscal year when no budget year was available within 5 seconds — so it can differ from fiscal_year even when both are present. Absent when the sub-agency request failed, or when upstream reports no year for a breakdown requested without one.',
+      ),
     sub_agency_page_metadata: z
       .object({
         total: z.number().optional().describe('Total sub-agencies across all pages'),
@@ -103,20 +155,46 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     website: z.string().optional().describe('Agency website URL'),
   }),
 
-  // Agent-facing context: sub-agency pagination state and truncation guidance.
+  // Agent-facing context: sub-agency pagination state, truncation guidance, and failed sections.
   enrichment: {
-    sub_agency_page: z.number().describe('Current sub-agency page returned'),
-    has_more_sub_agencies: z.boolean().describe('Whether more sub-agency pages are available'),
+    sub_agency_page: z
+      .number()
+      .optional()
+      .describe('Current sub-agency page returned. Absent when the sub-agency request failed.'),
+    has_more_sub_agencies: z
+      .boolean()
+      .optional()
+      .describe(
+        'Whether more sub-agency pages are available. Absent when the sub-agency request failed, since pagination is then unknown.',
+      ),
     sub_agency_total: z
       .number()
       .optional()
       .describe('Total sub-agencies across all pages (when available)'),
+    unavailable_sections: z
+      .array(UnavailableSectionSchema)
+      .optional()
+      .describe(
+        'Sections omitted because their request failed while the agency overview loaded. Absent when every section loaded.',
+      ),
     notice: z
       .string()
       .optional()
       .describe(
-        'Guidance when the sub-agency breakdown is truncated — how to page for the rest. Absent when the last page is shown.',
+        'How to page for more sub-agencies when the breakdown is truncated, and which sections failed to load and whether a retry may recover them. Absent when neither applies.',
       ),
+  },
+
+  enrichmentTrailer: {
+    unavailable_sections: {
+      render: (sections) =>
+        [
+          '**Unavailable sections:**',
+          ...(sections ?? []).map(
+            (s) => `- ${s.section}: ${s.reason}${s.retryable ? ' (retryable)' : ''} — ${s.message}`,
+          ),
+        ].join('\n'),
+    },
   },
 
   errors: [
@@ -135,6 +213,13 @@ export const getAgencyTool = tool('usaspending_get_agency', {
         'Provide either a toptier_code (e.g., 097) or agency_slug (e.g., department-of-defense) — usaspending_list_agencies lists both.',
     },
     {
+      reason: 'conflicting_input',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'Both toptier_code and agency_slug were provided.',
+      recovery:
+        'Send exactly one identifier: a toptier_code (e.g., 097) or agency_slug (e.g., department-of-defense), not both.',
+    },
+    {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
@@ -148,13 +233,17 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       when: 'USAspending.gov did not respond before the request deadline elapsed.',
       retryable: true,
       thrownBy: 'service',
-      recovery: 'Retry the request; the sub-agency page is the slow part, so request one page.',
+      recovery:
+        'Retry the request after a few seconds; USAspending did not answer the agency lookup in time.',
     },
   ],
 
   async handler(input, ctx) {
     if (!input.toptier_code?.trim() && !input.agency_slug?.trim()) {
       throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required');
+    }
+    if (input.toptier_code?.trim() && input.agency_slug?.trim()) {
+      throw ctx.fail('conflicting_input', 'Received both toptier_code and agency_slug');
     }
 
     const svc = getUSASpendingService();
@@ -180,27 +269,90 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     if (!toptierCode) {
       throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required');
     }
-    const [detail, subAgenciesData, budgetData] = await Promise.all([
-      svc.getAgency(toptierCode, ctx),
-      svc
-        .getAgencySubAgencies(toptierCode, { page: input.page, limit: SUB_AGENCY_PAGE_LIMIT }, ctx)
-        .catch(() => ({ results: [] as RawSubAgencyEntry[], page_metadata: undefined })),
-      svc
-        .getAgencyBudgetaryResources(toptierCode, ctx)
-        .catch(() => ({ agency_data_by_year: [] as RawBudgetaryResources[] })),
-    ]);
+    const code = toptierCode;
+    const budgetRequest = svc.getAgencyBudgetaryResources(code, ctx);
+    /**
+     * The breakdown waits on the budget so it covers the same fiscal year as the totals,
+     * by the same rule on every page. Without a budget year — the request failed, no
+     * year carries data, or no answer inside BUDGET_YEAR_WAIT_MS — upstream's default
+     * (current) year is used, and sub_agency_fiscal_year discloses it. The budget
+     * request keeps running for the totals either way. Cancellation during the wait
+     * stops the chain before the sub-agency request is issued.
+     */
+    const budgetYear = new Promise<number | undefined>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(undefined), BUDGET_YEAR_WAIT_MS);
+      budgetRequest.then(
+        (budget) => {
+          clearTimeout(timer);
+          resolve(selectBudgetRow(budget.agency_data_by_year)?.fiscal_year ?? undefined);
+        },
+        (err: unknown) => {
+          clearTimeout(timer);
+          if (ctx.signal.aborted) reject(err);
+          else resolve(undefined);
+        },
+      );
+    });
+    const subRequest = budgetYear.then(async (fiscalYear) => ({
+      requestedYear: fiscalYear,
+      page: await svc.getAgencySubAgencies(
+        code,
+        {
+          page: input.page,
+          limit: SUB_AGENCY_PAGE_LIMIT,
+          ...(fiscalYear !== undefined ? { fiscal_year: fiscalYear } : {}),
+        },
+        ctx,
+      ),
+    }));
+    const overviewRequest = svc.getAgency(code, ctx);
+    // Settled up front, so a leg that rejects after the overview fails is still handled.
+    const legs = Promise.allSettled([subRequest, budgetRequest]);
 
+    /**
+     * The overview decides the call and is awaited alone, so its failure surfaces as
+     * soon as it settles rather than after the slower legs. It also decides existence:
+     * a nonexistent agency 404s on every leg, and its miss must surface as
+     * agency_not_found rather than as two unavailable sections.
+     */
+    const detail = await overviewRequest;
     if (!detail?.name) {
       throw ctx.fail('agency_not_found', `Agency not found: ${toptierCode}`);
     }
+    const [subLeg, budgetLeg] = await legs;
 
-    // Budget totals live on the budgetary-resources endpoint, not the agency overview.
-    // Pick the most recent fiscal year available.
-    const currentBudget = [...(budgetData.agency_data_by_year ?? [])].sort(
-      (a, b) => (b.fiscal_year ?? 0) - (a.fiscal_year ?? 0),
-    )[0];
+    /**
+     * A failed budget or sub-agency request degrades to a disclosed partial result
+     * rather than failing the call, since the overview alone still answers. Caller
+     * cancellation and unclassified (non-upstream) errors are rethrown.
+     */
+    const unavailable: UnavailableSection[] = [];
+    const settleLeg = <T>(section: UnavailableSection['section'], leg: PromiseSettledResult<T>) => {
+      if (leg.status === 'fulfilled') return leg.value;
+      const err: unknown = leg.reason;
+      if (ctx.signal.aborted || !(err instanceof McpError)) throw err;
+      const reason = err.data?.reason;
+      unavailable.push({
+        section,
+        reason:
+          reason === 'api_unavailable' || reason === 'api_timeout' ? reason : 'upstream_error',
+        retryable: err.data?.retryable === true,
+        message: err.message,
+      });
+      return;
+    };
+    const budgetData = settleLeg('budgetary_resources', budgetLeg);
+    const subLegData = settleLeg('sub_agencies', subLeg);
+    const subAgenciesData = subLegData?.page;
 
-    const subAgencies = (subAgenciesData.results ?? [])
+    const currentBudget = selectBudgetRow(budgetData?.agency_data_by_year);
+    // The year upstream says the breakdown covers; the year requested when it does not say.
+    const subYear =
+      typeof subAgenciesData?.fiscal_year === 'number'
+        ? subAgenciesData.fiscal_year
+        : subLegData?.requestedYear;
+
+    const subAgencies = (subAgenciesData?.results ?? [])
       .map((s) => ({
         ...(s.name ? { name: s.name } : {}),
         ...(s.abbreviation ? { abbreviation: s.abbreviation } : {}),
@@ -214,7 +366,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       }))
       .filter((s) => s.name);
 
-    const subMeta = subAgenciesData.page_metadata ?? {};
+    const subMeta = subAgenciesData?.page_metadata ?? {};
     const subPage = subMeta.page ?? input.page;
     /**
      * Direct read, verified: `agency/{code}/sub_agency/` was paged to the end of a
@@ -224,16 +376,32 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     const subHasNext = subMeta.hasNext ?? false;
     const subTotal = typeof subMeta.total === 'number' ? subMeta.total : undefined;
 
-    ctx.enrich({
-      sub_agency_page: subPage,
-      has_more_sub_agencies: subHasNext,
-      ...(subTotal !== undefined ? { sub_agency_total: subTotal } : {}),
-    });
-    if (subHasNext) {
-      ctx.enrich.notice(
-        `Showing sub-agency page ${subPage}${subTotal !== undefined ? ` of ${subTotal} total` : ''}. Call again with page=${subPage + 1} for more sub-agencies.`,
+    // `ctx.enrich.notice` is last-wins, so every notice source is composed into one string.
+    const notices: string[] = [];
+    if (subAgenciesData) {
+      ctx.enrich({
+        sub_agency_page: subPage,
+        has_more_sub_agencies: subHasNext,
+        ...(subTotal !== undefined ? { sub_agency_total: subTotal } : {}),
+      });
+      if (subHasNext) {
+        notices.push(
+          `Showing sub-agency page ${subPage}${subTotal !== undefined ? ` of ${subTotal} total` : ''}. Call again with page=${subPage + 1} for more sub-agencies.`,
+        );
+      }
+    }
+    if (unavailable.length > 0) {
+      ctx.enrich({ unavailable_sections: unavailable });
+      const retryable = unavailable.filter((s) => s.retryable).map((s) => s.section);
+      notices.push(
+        `Partial result: ${unavailable.map((s) => `${s.section} (${s.reason})`).join(' and ')} could not be fetched, so ${unavailable.length === 1 ? 'its fields are' : 'their fields are'} omitted. ${
+          retryable.length > 0
+            ? `Retry the call to load ${retryable.join(' and ')}.`
+            : 'Retrying is unlikely to help.'
+        }`,
       );
     }
+    if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
 
     return {
       ...(detail.name ? { name: detail.name } : {}),
@@ -261,6 +429,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
           ? { subtier_agency_count: detail.subtier_agency_count }
           : {}),
       ...(subAgencies.length > 0 ? { sub_agencies: subAgencies } : {}),
+      ...(subYear !== undefined ? { sub_agency_fiscal_year: subYear } : {}),
       ...(subAgencies.length > 0
         ? {
             sub_agency_page_metadata: {
@@ -301,6 +470,8 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       lines.push(`**Outlays:** ${formatCurrency(result.outlay_amount)}`);
     if (typeof result.subtier_agency_count === 'number')
       lines.push(`**Sub-agencies:** ${result.subtier_agency_count}`);
+    if (typeof result.sub_agency_fiscal_year === 'number')
+      lines.push(`**Sub-Agency Fiscal Year:** ${result.sub_agency_fiscal_year}`);
     if (result.website) lines.push(`**Website:** ${result.website}`);
 
     if (result.sub_agencies?.length || result.sub_agency_page_metadata) {

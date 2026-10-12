@@ -651,9 +651,202 @@ describe('disasterSpendingTool', () => {
 });
 
 /**
+ * `disaster/spending_by_geography/` is not paginated: it returns every area whatever
+ * paging the request carries, so the tool ranks and slices the whole set itself (#73).
+ * The fixture is shuffled, ties on amount (TX and WA at 50, AK and NY at 0), and carries
+ * the live unattributed row — null shape_code, display_name, population, and per_capita.
+ * Ranked: CA 100, unattributed 75, TX 50, WA 50, AK 0, NY 0, 06041 −10.
+ */
+describe('disasterSpendingTool geography paging (#73)', () => {
+  const AREAS = [
+    { shape_code: 'NY', display_name: 'New York', amount: 0, award_count: 1 },
+    { shape_code: 'WA', display_name: 'Washington', amount: 50, award_count: 2 },
+    {
+      shape_code: null,
+      display_name: null,
+      amount: 75,
+      population: null,
+      per_capita: null,
+      award_count: 782,
+    },
+    { shape_code: '06041', display_name: 'Marin', amount: -10, award_count: 4 },
+    { shape_code: 'CA', display_name: 'California', amount: 100, award_count: 9 },
+    { shape_code: 'AK', display_name: 'Alaska', amount: 0, award_count: 1 },
+    { shape_code: 'TX', display_name: 'Texas', amount: 50, award_count: 3 },
+  ];
+  const run = (args: Record<string, unknown>) => {
+    mockGetDisasterByGeography.mockResolvedValueOnce({
+      geo_layer: 'state',
+      scope: 'place_of_performance',
+      spending_type: 'obligation',
+      results: AREAS,
+    });
+    return runToolContract(disasterSpendingTool, {
+      dimension: 'geography',
+      filters: { def_codes: ['L'] },
+      ...args,
+    } as never);
+  };
+  type Row = { shape_code?: string; display_name?: string; aggregated_amount?: number };
+  const sc = (result: Awaited<ReturnType<typeof run>>) =>
+    result.structuredContent as {
+      results: Row[];
+      page_metadata: { has_next: boolean; page: number; limit: number; total: number };
+      totals?: unknown;
+      totalCount?: number;
+      has_next_page?: boolean;
+      current_page?: number;
+      truncated?: boolean;
+      shown?: number;
+      cap?: number;
+      truncationCeiling?: number;
+      notice?: string;
+    };
+  const textOf = (result: Awaited<ReturnType<typeof run>>) =>
+    result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sends the upstream no paging, which it ignores', async () => {
+    await run({ limit: 1, page: 3 });
+
+    const body = mockGetDisasterByGeography.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('pagination');
+    expect(body).not.toHaveProperty('limit');
+    expect(body).not.toHaveProperty('page');
+  });
+
+  it('returns one row, has_next, and the whole-set count for limit 1 page 1', async () => {
+    const result = await run({ limit: 1, page: 1 });
+
+    expect(result.isError).toBeFalsy();
+    const out = sc(result);
+    expect(out.results.map((r) => r.shape_code)).toEqual(['CA']);
+    expect(out.page_metadata).toEqual({ has_next: true, page: 1, limit: 1, total: 7 });
+    expect(out.totalCount).toBe(7);
+    expect(out.has_next_page).toBe(true);
+    expect(out.current_page).toBe(1);
+  });
+
+  it('ranks by amount descending with ties broken by shape_code, keeping the unattributed row', async () => {
+    const result = await run({ limit: 100 });
+
+    expect(sc(result).results.map((r) => r.shape_code ?? null)).toEqual([
+      'CA',
+      null,
+      'TX',
+      'WA',
+      'AK',
+      'NY',
+      '06041',
+    ]);
+  });
+
+  it('re-slices the ranking on a later page and discloses what lies beyond on both surfaces', async () => {
+    const result = await run({ limit: 2, page: 2 });
+
+    const out = sc(result);
+    expect(out.results.map((r) => r.shape_code)).toEqual(['TX', 'WA']);
+    expect(out.page_metadata).toEqual({ has_next: true, page: 2, limit: 2, total: 7 });
+    expect(out.truncated).toBe(true);
+    expect(out.shown).toBe(2);
+    expect(out.cap).toBe(2);
+    expect(out.truncationCeiling).toBe(50);
+    expect(out.notice).toContain('page 3');
+    const text = textOf(result);
+    expect(text).toContain('**truncationCeiling:** 50');
+    expect(text).toContain('page 3');
+  });
+
+  it('suggests raising limit only while it is below the 100 maximum', async () => {
+    expect(sc(await run({ limit: 2, page: 1 })).notice).toContain('raise limit (max 100)');
+
+    mockGetDisasterByGeography.mockResolvedValueOnce({
+      results: Array.from({ length: 101 }, (_, i) => ({
+        shape_code: String(i).padStart(5, '0'),
+        display_name: `County ${i}`,
+        amount: 1000 - i,
+      })),
+    });
+    const atMax = sc(
+      await runToolContract(disasterSpendingTool, {
+        dimension: 'geography',
+        filters: { def_codes: ['L'], geo_layer: 'county' },
+        limit: 100,
+      } as never),
+    );
+    expect(atMax.truncated).toBe(true);
+    expect(atMax.notice).toContain('Request page 2');
+    expect(atMax.notice).not.toMatch(/raise limit/i);
+  });
+
+  it('carries the unattributed amount as the ceiling when it closes the page', async () => {
+    const out = sc(await run({ limit: 2, page: 1 }));
+
+    expect(out.results.map((r) => r.aggregated_amount)).toEqual([100, 75]);
+    expect(out.truncationCeiling).toBe(75);
+  });
+
+  it('sets no truncation fields on the last page', async () => {
+    const out = sc(await run({ limit: 2, page: 4 }));
+
+    expect(out.results.map((r) => r.shape_code)).toEqual(['06041']);
+    expect(out.page_metadata).toEqual({ has_next: false, page: 4, limit: 2, total: 7 });
+    expect(out.truncated).toBeUndefined();
+    expect(out.shown).toBeUndefined();
+    expect(out.cap).toBeUndefined();
+    expect(out.truncationCeiling).toBeUndefined();
+    expect(out.notice).toBeUndefined();
+  });
+
+  it('sets no truncation on an exactly-full last page', async () => {
+    const out = sc(await run({ limit: 7, page: 1 }));
+
+    expect(out.results).toHaveLength(7);
+    expect(out.page_metadata.has_next).toBe(false);
+    expect(out.truncated).toBeUndefined();
+  });
+
+  it('returns no rows and the full total for a page past the end', async () => {
+    const result = await run({ limit: 2, page: 5 });
+
+    const out = sc(result);
+    expect(out.results).toEqual([]);
+    expect(out.page_metadata).toEqual({ has_next: false, page: 5, limit: 2, total: 7 });
+    expect(out.totalCount).toBe(7);
+    expect(out.truncated).toBeUndefined();
+    const text = textOf(result);
+    expect(text.toLowerCase()).not.toContain('no data found');
+    expect(text).toContain('past the end');
+  });
+
+  it('labels the unattributed row in format()', async () => {
+    const text = textOf(await run({ limit: 2, page: 1 }));
+
+    const row = text.split('\n').find((line) => line.includes('$75'));
+    expect(row).toContain('Unattributed');
+  });
+
+  it('computes no geography totals', async () => {
+    const result = await run({ limit: 3 });
+
+    expect(sc(result)).not.toHaveProperty('totals');
+    expect(textOf(result)).not.toContain('**Totals:**');
+  });
+
+  it('describes limit as applying to geography', () => {
+    const limitDescription = disasterSpendingTool.input.shape.limit.description ?? '';
+    expect(limitDescription).toContain('geography');
+    expect(limitDescription).not.toMatch(/ignored for[^.]*geography/);
+  });
+});
+
+/**
  * This entry's text reaches every timeout the tool sees (#57) — the service tags
  * the reason and the framework fills the recovery from it — so it has to name a lever that actually exists for each dimension: overview
- * applies neither def_codes nor limit, and geography is not paginated.
+ * applies neither def_codes nor limit, and the geography endpoint returns every area whatever limit asks for.
  */
 describe('disasterSpendingTool api_timeout recovery (#57)', () => {
   const hint = () => {
@@ -674,7 +867,7 @@ describe('disasterSpendingTool api_timeout recovery (#57)', () => {
     expect(text).toContain('smaller limit');
   });
 
-  it('points geography at fewer def_codes only — it is not paginated', () => {
+  it('points geography at fewer def_codes only — limit does not shrink its upstream response', () => {
     const text = clause('geography:', 'overview:');
     expect(text).toContain('fewer filters.def_codes');
     expect(text).not.toMatch(/limit/);

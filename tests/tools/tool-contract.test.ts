@@ -53,7 +53,7 @@ const awardFixture = {
   total_outlay: 4_200_000,
   date_signed: '2018-06-01',
   period_of_performance: { start_date: '2018-07-01', end_date: '2023-06-30' },
-  recipient: { recipient_name: 'Acme Corp', uei: 'AAAAAAAAAAAA' },
+  recipient: { recipient_name: 'Acme Corp', recipient_uei: 'AAAAAAAAAAAA' },
   awarding_agency: {
     toptier_agency: { name: 'Department of Defense', code: '097', slug: 'department-of-defense' },
   },

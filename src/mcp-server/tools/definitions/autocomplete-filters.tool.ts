@@ -9,17 +9,20 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { RawAgencyAutocomplete } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 
+/** Largest `limit` every autocomplete route accepts; 501 is rejected with HTTP 400. */
+const UPSTREAM_LIMIT_MAX = 500;
+
 export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', {
   title: 'Autocomplete Codes and Names',
   description:
-    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency names and IDs), or recipient (recipient names with UEI/DUNS). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
+    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency and sub-agency names, each with its tier and top-tier parent — the agency_name filters take the top-tier name), or recipient (recipient names with UEI/DUNS). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     type: z
       .enum(['naics', 'psc', 'cfda', 'awarding_agency', 'recipient'])
       .describe(
-        'Lookup table to search: naics (industry codes), psc (product/service codes), cfda (Assistance Listing program numbers, for usaspending_search_awards assistance_listings), awarding_agency (agency names), recipient (recipient names)',
+        'Lookup table to search: naics (industry codes), psc (product/service codes, for the psc_codes filter), cfda (Assistance Listing program numbers, for the assistance_listings filter), awarding_agency (agency and sub-agency names), recipient (recipient names). Both filters are taken by usaspending_search_awards and by the filters object of usaspending_spending_by_category, usaspending_spending_by_geography, and usaspending_spending_over_time.',
       ),
     search_text: z
       .string()
@@ -31,7 +34,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       .number()
       .int()
       .min(1)
-      .max(500)
+      .max(UPSTREAM_LIMIT_MAX)
       .default(10)
       .describe(
         'Maximum number of results to return (1–500), enforced client-side. The recipient lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x this value, so its results are capped to this limit before returning — the cap keeps them in bucket order, so name matches fill the page first and identifier matches appear only in whatever room is left. To resolve a specific UEI or DUNS, pass the identifier itself as search_text. naics/psc/cfda/awarding_agency honor this limit exactly.',
@@ -49,13 +52,38 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                'Code value (NAICS code, PSC code, Assistance Listing/CFDA number, or agency code); use this in filter parameters — an Assistance Listing number goes in usaspending_search_awards assistance_listings',
+                'Code value (NAICS code, PSC code, or Assistance Listing/CFDA number); use this in filter parameters — an Assistance Listing number goes in usaspending_search_awards assistance_listings. Agency rows carry toptier_code instead.',
               ),
-            name: z.string().optional().describe('Human-readable name or description'),
-            id: z
+            name: z
               .string()
               .optional()
-              .describe('Numeric or string ID (for the awarding_agency type)'),
+              .describe(
+                "Human-readable name or description; for awarding_agency, the matched agency's own name, which for a sub-agency differs from toptier_name",
+              ),
+            abbreviation: z
+              .string()
+              .optional()
+              .describe(
+                "awarding_agency only: the matched agency's own abbreviation, when it has one",
+              ),
+            tier: z
+              .enum(['toptier', 'subtier'])
+              .optional()
+              .describe(
+                'awarding_agency only: toptier for a department-level agency, subtier for a component under one',
+              ),
+            toptier_name: z
+              .string()
+              .optional()
+              .describe(
+                'awarding_agency only: the top-tier agency name — the value the agency_name filters on usaspending_search_awards, usaspending_spending_by_category, usaspending_spending_by_geography, and usaspending_spending_over_time take. Those filters are top-tier only, so a sub-agency filters at its parent and the results cover the whole department.',
+              ),
+            toptier_code: z
+              .string()
+              .optional()
+              .describe(
+                'awarding_agency only: the 3-digit top-tier agency code, accepted by usaspending_get_agency',
+              ),
             uei: z
               .string()
               .optional()
@@ -70,7 +98,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               ),
           })
           .describe(
-            'Matched entry — code/name for code lookups, name plus optional UEI/DUNS for recipients',
+            'Matched entry — code/name for code lookups, name with tier and top-tier parent for agencies, name plus optional UEI/DUNS for recipients',
           ),
       )
       .describe('Matching codes and names'),
@@ -78,14 +106,26 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
   }),
 
   // Agent-facing context: echoed query parameters and result count. The autocomplete
-  // endpoint returns no total, so a hit-the-cap signal discloses truncation.
+  // endpoints return no total, so the handler asks for one row past the limit and
+  // discloses truncation only when that row (or a recipient bucket overflow) came back.
   enrichment: {
     lookup_type: z.string().describe('Lookup table that was searched'),
     query: z.string().describe('Search text sent to the autocomplete API'),
     result_count: z.number().describe('Number of matching results returned'),
-    truncated: z.boolean().optional().describe('True when results were capped at the limit.'),
-    shown: z.number().optional().describe('Number of results returned.'),
-    cap: z.number().optional().describe('The limit that was applied.'),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when more matches exist beyond the limit and were left out. Absent when every match was returned.',
+      ),
+    shown: z.number().optional().describe('Number of results returned, when truncated.'),
+    cap: z.number().optional().describe('The limit that was applied, when truncated.'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'How to reach the matches left out when truncated, or — when limit is 500 and all 500 slots filled — that the upstream maximum was reached and more matches may exist. Absent otherwise.',
+      ),
   },
 
   errors: [
@@ -120,23 +160,38 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
     });
     const svc = getUSASpendingService();
 
-    type ResultItem = { code?: string; name?: string; id?: string; uei?: string; duns?: string };
+    type ResultItem = {
+      code?: string;
+      name?: string;
+      abbreviation?: string;
+      tier?: 'toptier' | 'subtier';
+      toptier_name?: string;
+      toptier_code?: string;
+      uei?: string;
+      duns?: string;
+    };
     let rawResults: ResultItem[] = [];
+    /**
+     * One row past `limit` tells a capped list from one that exactly fills the page. Every
+     * autocomplete route rejects `limit` above 500 with HTTP 400, so at 500 there is no
+     * room for the extra row and a full page can only say the ceiling was reached.
+     */
+    const requested = Math.min(input.limit + 1, UPSTREAM_LIMIT_MAX);
 
     if (input.type === 'naics') {
-      const resp = await svc.autocompleteNaics(input.search_text, input.limit, ctx);
+      const resp = await svc.autocompleteNaics(input.search_text, requested, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
         ...(r.naics ? { code: r.naics } : {}),
         ...(r.naics_description ? { name: r.naics_description } : {}),
       }));
     } else if (input.type === 'psc') {
-      const resp = await svc.autocompletePsc(input.search_text, input.limit, ctx);
+      const resp = await svc.autocompletePsc(input.search_text, requested, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
         ...(r.product_or_service_code ? { code: r.product_or_service_code } : {}),
         ...(r.psc_description ? { name: r.psc_description } : {}),
       }));
     } else if (input.type === 'cfda') {
-      const resp = await svc.autocompleteCfda(input.search_text, input.limit, ctx);
+      const resp = await svc.autocompleteCfda(input.search_text, requested, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
         ...(r.program_number ? { code: r.program_number } : {}),
         ...(r.program_title
@@ -146,14 +201,28 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
             : {}),
       }));
     } else if (input.type === 'awarding_agency') {
-      const resp = await svc.autocompleteAwardingAgency(input.search_text, input.limit, ctx);
-      rawResults = (resp.results ?? []).map((r: RawAgencyAutocomplete) => ({
-        ...(r.id != null ? { id: String(r.id) } : {}),
-        ...(r.toptier_agency?.name ? { name: r.toptier_agency.name } : {}),
-      }));
+      const resp = await svc.autocompleteAwardingAgency(input.search_text, requested, ctx);
+      rawResults = (resp.results ?? []).map((r: RawAgencyAutocomplete) => {
+        /**
+         * A top-tier row repeats the department under subtier_agency; a sub-agency row
+         * names itself there, with its parent under toptier_agency.
+         */
+        const own = r.toptier_flag ? r.toptier_agency : r.subtier_agency;
+        return {
+          ...(own?.name ? { name: own.name } : {}),
+          ...(own?.abbreviation ? { abbreviation: own.abbreviation } : {}),
+          ...(typeof r.toptier_flag === 'boolean'
+            ? { tier: r.toptier_flag ? ('toptier' as const) : ('subtier' as const) }
+            : {}),
+          ...(r.toptier_agency?.name ? { toptier_name: r.toptier_agency.name } : {}),
+          ...(r.toptier_agency?.toptier_code
+            ? { toptier_code: r.toptier_agency.toptier_code }
+            : {}),
+        };
+      });
     } else {
       // recipient
-      const resp = await svc.autocompleteRecipient(input.search_text, input.limit, ctx);
+      const resp = await svc.autocompleteRecipient(input.search_text, requested, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
         ...(r.recipient_name ? { name: r.recipient_name } : {}),
         ...(r.uei ? { uei: r.uei } : {}),
@@ -161,9 +230,13 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       }));
     }
 
-    // `autocomplete/recipient/` applies `limit` per match bucket (name, UEI, DUNS) and
-    // unions them, so it can hand back up to 3x what was asked for. The other four
-    // lookups already honor `limit`, so capping here is a no-op for them.
+    /**
+     * `autocomplete/recipient/` applies `limit` per match bucket (name, UEI, DUNS) and
+     * unions them, so it can hand back up to 3x what was asked for; the other four
+     * lookups return at most `requested`. Truncation is judged on everything received —
+     * for recipients, the bucket union — before the slice to `limit`.
+     */
+    const received = rawResults.length;
     rawResults = rawResults.slice(0, input.limit);
 
     if (rawResults.length === 0) {
@@ -179,20 +252,30 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       query: input.search_text,
       result_count: rawResults.length,
     });
-    if (rawResults.length >= input.limit) {
+    const narrow =
+      input.limit < UPSTREAM_LIMIT_MAX
+        ? `Raise limit (max ${UPSTREAM_LIMIT_MAX}) or use a more specific search term.`
+        : 'Use a more specific search term.';
+    if (received > input.limit) {
       ctx.enrich.truncated({
         shown: rawResults.length,
         cap: input.limit,
-        // The recipient cap is a head-slice over name-then-UEI-then-DUNS, and upstream
-        // fills the name bucket to `limit` on its own whenever the corpus allows. So a
-        // saturated recipient page holds name matches only, and raising `limit` raises
-        // the name bucket with it — it never reaches the identifier buckets behind it.
-        // Pointing that caller at `limit` would send them somewhere the rows are not.
+        /**
+         * The recipient cap is a head-slice over name-then-UEI-then-DUNS, and upstream
+         * fills the name bucket to the requested size on its own whenever the corpus
+         * allows. So a saturated recipient page holds name matches only, and raising
+         * `limit` raises the name bucket with it — it never reaches the identifier buckets
+         * behind it. Pointing that caller at `limit` alone would misdirect them.
+         */
         guidance:
           input.type === 'recipient'
-            ? 'More name matches may exist — raise limit (max 500) or use a more specific search term. Matches on a UEI or DUNS are not reachable this way once name matches fill the page; to resolve one, pass the identifier itself as search_text.'
-            : 'More matches may exist. Raise limit (max 500) or use a more specific search term.',
+            ? `More matches exist beyond limit. ${narrow} Matches on a UEI or DUNS are not reachable this way once name matches fill the page; to resolve one, pass the identifier itself as search_text.`
+            : `More matches exist beyond limit. ${narrow}`,
       });
+    } else if (requested === input.limit && received === input.limit) {
+      ctx.enrich.notice(
+        `Returned the upstream maximum of ${UPSTREAM_LIMIT_MAX} matches, so more may exist. ${narrow}`,
+      );
     }
     return {
       type: input.type,
@@ -207,8 +290,12 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
     for (const r of result.results) {
       const parts: string[] = [];
       if (r.code) parts.push(`**Code:** ${r.code}`);
-      if (r.id) parts.push(`**ID:** ${r.id}`);
-      if (r.name) parts.push(`**Name:** ${r.name}`);
+      if (r.name) parts.push(`**Name:** ${r.name}${r.abbreviation ? ` (${r.abbreviation})` : ''}`);
+      if (r.tier) parts.push(`**Tier:** ${r.tier}`);
+      if (r.toptier_name)
+        parts.push(
+          `**Top-tier agency:** ${r.toptier_name}${r.toptier_code ? ` (toptier_code ${r.toptier_code})` : ''}`,
+        );
       if (r.uei) parts.push(`**UEI:** ${r.uei}`);
       if (r.duns) parts.push(`**DUNS:** ${r.duns}`);
       lines.push(`- ${parts.join(' | ')}`);

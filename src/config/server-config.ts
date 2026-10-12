@@ -17,8 +17,10 @@ const ServerConfigSchema = z.object({
     .int()
     .min(1000)
     .max(120_000)
-    .default(30_000)
-    .describe('HTTP request timeout in milliseconds, per attempt'),
+    .default(45_000)
+    .describe(
+      'Per-attempt HTTP timeout in milliseconds. Each attempt is cut at this or at the time left in the request budget, whichever is smaller, and an attempt that times out is not retried.',
+    ),
   retryBudgetMs: z.coerce
     .number()
     .int()
@@ -26,7 +28,7 @@ const ServerConfigSchema = z.object({
     .max(300_000)
     .optional()
     .describe(
-      'Wall-clock budget covering every retry attempt of one request. Defaults to 1.5x the per-attempt timeout, which leaves room for one retry rather than four full timeouts plus backoff.',
+      'Wall-clock budget in milliseconds for one request, every attempt and retry backoff included. Fast transient failures (5xx, network errors) retry inside it. Defaults to 45000, or to the per-attempt timeout when that is higher, so one attempt can always run its full timeout.',
     ),
 });
 

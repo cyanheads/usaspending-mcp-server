@@ -89,6 +89,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           .optional()
           .describe('Geographic layer for geography dimension (state or county)'),
       })
+      .strict()
       .optional()
       .describe(
         'Filters — def_codes is required for all non-overview dimensions (agency, cfda, recipient, geography)',
@@ -100,7 +101,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .max(100)
       .default(10)
       .describe(
-        'Maximum results per page (1–100). Applies to the agency, cfda, and recipient dimensions; ignored for overview and geography, which are not paginated.',
+        'Maximum results per page (1–100). Applies to the agency, cfda, recipient, and geography dimensions; geography pages through its areas ranked by aggregated_amount, highest first. Ignored for overview.',
       ),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
@@ -117,13 +118,28 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     truncated: z
       .boolean()
       .optional()
-      .describe('True when the upstream capped the reachable result set rather than counting it.'),
+      .describe(
+        'recipient: true when the upstream capped the reachable result set rather than counting it. geography: true when more areas rank below this page.',
+      ),
     shown: z.number().optional().describe('Number of results returned on this page.'),
-    cap: z.number().optional().describe('The result-set ceiling the upstream applied.'),
+    cap: z
+      .number()
+      .optional()
+      .describe(
+        'recipient: the result-set ceiling the upstream applied. geography: the page size (limit).',
+      ),
+    truncationCeiling: z
+      .number()
+      .optional()
+      .describe(
+        'geography: the lowest aggregated_amount on this page — no area on a later page has a higher one.',
+      ),
     notice: z
       .string()
       .optional()
-      .describe('Caveat explaining a capped total and how to bring the set under the cap.'),
+      .describe(
+        'recipient: why the total is a cap and how to bring the set under it. geography: how many areas rank below this page and how to reach them.',
+      ),
   },
 
   output: z.object({
@@ -211,11 +227,18 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
               .number()
               .optional()
               .describe('Face value of loan guarantees in USD (loans spending_type)'),
-            shape_code: z.string().optional().describe('Geographic code (geography dimension)'),
+            shape_code: z
+              .string()
+              .optional()
+              .describe(
+                'Geographic code (geography dimension). Absent on the unattributed row: spending with no recorded place of performance, which still ranks and counts as an area.',
+              ),
             display_name: z
               .string()
               .optional()
-              .describe('Geographic display name (geography dimension)'),
+              .describe(
+                'Geographic display name (geography dimension); absent on the unattributed row',
+              ),
             aggregated_amount: z
               .number()
               .optional()
@@ -344,11 +367,12 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     } else if (input.dimension === 'recipient') {
       rawResults = await svc.getDisasterByRecipient(input.spending_type, paginationBody, ctx);
     } else {
-      // geography — this endpoint requires a spending_type from a vocabulary distinct from
-      // the breakdown dimensions (obligation | outlay | face_value_of_loan); omitting it
-      // returns HTTP 422. It reports totals across the whole result set in a single page
-      // (no pagination). Default to obligation — total obligated dollars, the comparable
-      // default measure — and report that as the effective spending_type.
+      /**
+       * geography — this endpoint requires a spending_type from a vocabulary distinct from
+       * the breakdown dimensions (obligation | outlay | face_value_of_loan); omitting it
+       * returns HTTP 422. Default to obligation — total obligated dollars, the comparable
+       * default measure — and report that as the effective spending_type.
+       */
       const geoSpendingType = 'obligation';
       const geoBody = {
         ...baseBody,
@@ -357,7 +381,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         spending_type: geoSpendingType,
       };
       const data = await svc.getDisasterByGeography(geoBody, ctx);
-      const geoResults = (data.results ?? []).map((r) => ({
+      const areas = (data.results ?? []).map((r) => ({
         ...(r.shape_code ? { shape_code: r.shape_code } : {}),
         ...(r.display_name ? { display_name: r.display_name } : {}),
         ...(typeof r.amount === 'number' ? { aggregated_amount: r.amount } : {}),
@@ -365,22 +389,42 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         ...(typeof r.population === 'number' ? { population: r.population } : {}),
         ...(typeof r.per_capita === 'number' ? { per_capita: r.per_capita } : {}),
       }));
-      ctx.enrich.total(geoResults.length);
+      /**
+       * The endpoint is not paginated: it returns every area whatever paging the request
+       * carries, so the page is ranked and sliced here. The unattributed row (no
+       * shape_code) stays in the ranking and the count; a code sorts before it on a tie.
+       */
+      areas.sort(
+        (a, b) =>
+          (b.aggregated_amount ?? 0) - (a.aggregated_amount ?? 0) ||
+          (a.shape_code === undefined ? 1 : 0) - (b.shape_code === undefined ? 1 : 0) ||
+          (a.shape_code ?? '').localeCompare(b.shape_code ?? ''),
+      );
+      const total = areas.length;
+      const start = (input.page - 1) * input.limit;
+      const pageAreas = areas.slice(start, start + input.limit);
+      const hasNext = input.page * input.limit < total;
+
+      ctx.enrich.total(total);
       ctx.enrich({
         applied_dimension: 'geography',
-        current_page: 1,
-        has_next_page: false,
+        current_page: input.page,
+        has_next_page: hasNext,
       });
+      if (hasNext) {
+        const ceiling = pageAreas.at(-1)?.aggregated_amount;
+        ctx.enrich.truncated({
+          shown: pageAreas.length,
+          cap: input.limit,
+          ...(ceiling !== undefined ? { ceiling } : {}),
+          guidance: `${(total - input.page * input.limit).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)}` : ''}. Request page ${input.page + 1} to continue${input.limit < 100 ? ', or raise limit (max 100)' : ''}.`,
+        });
+      }
       return {
         dimension: 'geography',
         spending_type: geoSpendingType,
-        results: geoResults,
-        page_metadata: {
-          has_next: false,
-          page: 1,
-          total: geoResults.length,
-          limit: geoResults.length,
-        },
+        results: pageAreas,
+        page_metadata: { has_next: hasNext, page: input.page, total, limit: input.limit },
       };
     }
 
@@ -491,7 +535,12 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }
 
     if (result.results.length === 0) {
-      if (!result.overview) {
+      const total = result.page_metadata?.total ?? 0;
+      if (total > 0) {
+        lines.push(
+          `\n> Page ${result.page_metadata?.page} is past the end of the ${total.toLocaleString()} matching rows. Request an earlier page.`,
+        );
+      } else if (!result.overview) {
         lines.push(
           '\n> No data found for the specified DEF codes and dimension. Try different DEF codes or another breakdown dimension — def_codes is required for all non-overview dimensions and cannot be removed.',
         );
@@ -509,9 +558,11 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       );
       for (const r of result.results) {
         const label =
-          r.display_name && r.name && r.display_name !== r.name
-            ? `${r.display_name} (${r.name})`
-            : (r.display_name ?? r.name ?? 'N/A');
+          result.dimension === 'geography' && r.shape_code === undefined
+            ? 'Unattributed (no place of performance recorded)'
+            : r.display_name && r.name && r.display_name !== r.name
+              ? `${r.display_name} (${r.name})`
+              : (r.display_name ?? r.name ?? 'N/A');
         const id = r.id ?? 'N/A';
         const code = r.code ?? 'N/A';
         const shape = r.shape_code ?? 'N/A';

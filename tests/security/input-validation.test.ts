@@ -295,6 +295,44 @@ describe('searchAwardsTool — input validation', () => {
       expect(result.error?.issues[0]?.path).toEqual(['assistance_listings', 0]);
     }
   });
+
+  it.each([
+    [
+      'psc_codes',
+      '^[0-9A-Za-z]{1,4}$',
+      ['Y1NE', 'y1', 'R', '1234'],
+      ['Y1NE5', 'Y1-N', '', ' Y1', 'Y1.'],
+    ],
+    ['def_codes', '^[0-9A-Za-z]{1,3}$', ['Z', 'l', 'AAB', '1'], ['ABCD', '', 'L ', 'L,M', '*']],
+  ])(
+    'advertises and enforces the %s pattern on the flat and nested keys (#77)',
+    (key, pattern, good, bad) => {
+      const schema = z.toJSONSchema(searchAwardsTool.input, { io: 'input' }) as {
+        properties: Record<
+          string,
+          {
+            items?: { pattern?: string };
+            properties?: Record<string, { items?: { pattern?: string } }>;
+          }
+        >;
+      };
+      expect(schema.properties[key]?.items?.pattern).toBe(pattern);
+      expect(schema.properties.filters?.properties?.[key]?.items?.pattern).toBe(pattern);
+
+      for (const value of good) {
+        expect(searchAwardsTool.input.safeParse({ [key]: [value] }).success).toBe(true);
+        expect(searchAwardsTool.input.safeParse({ filters: { [key]: [value] } }).success).toBe(
+          true,
+        );
+      }
+      for (const value of bad) {
+        const flat = searchAwardsTool.input.safeParse({ [key]: [value] });
+        expect(flat.error?.issues[0]?.path).toEqual([key, 0]);
+        const nested = searchAwardsTool.input.safeParse({ filters: { [key]: [value] } });
+        expect(nested.error?.issues[0]?.path).toEqual(['filters', key, 0]);
+      }
+    },
+  );
 });
 
 describe('autocompleteFiltersTool — input validation', () => {
@@ -345,10 +383,13 @@ describe('getRecipientTool — input validation', () => {
     expect(() => getRecipientTool.input.parse({})).toThrow();
   });
 
-  it('rejects invalid award_type enum', () => {
+  it('accepts only an integer fiscal_year within 2001–2030', () => {
     expect(() =>
-      getRecipientTool.input.parse({ recipient_id: 'abc', award_type: 'invalid' }),
-    ).toThrow();
+      getRecipientTool.input.parse({ recipient_id: 'abc', fiscal_year: 2020 }),
+    ).not.toThrow();
+    for (const fiscal_year of [2020.5, 2000, 2031, '2020x', Number.NaN]) {
+      expect(() => getRecipientTool.input.parse({ recipient_id: 'abc', fiscal_year })).toThrow();
+    }
   });
 });
 
@@ -763,19 +804,19 @@ describe('searchRecipientsTool — all valid award_type values', () => {
   });
 });
 
-describe('getRecipientTool — all valid award_type values', () => {
-  it('accepts all valid award_type enum values', () => {
-    const validTypes = [
+describe('getRecipientTool — former award_type values', () => {
+  it('rejects every former award_type value as an unrecognized key (#67)', () => {
+    const formerTypes = [
       'contracts',
       'grants',
       'direct_payments',
       'loans',
       'other_financial_assistance',
     ] as const;
-    for (const award_type of validTypes) {
-      expect(() =>
-        getRecipientTool.input.parse({ recipient_id: 'abc123', award_type }),
-      ).not.toThrow();
+    for (const award_type of formerTypes) {
+      expect(() => getRecipientTool.input.parse({ recipient_id: 'abc123', award_type })).toThrow(
+        /Unrecognized key/i,
+      );
     }
   });
 });
@@ -825,11 +866,16 @@ describe('spendingByCategoryTool — all valid category values', () => {
       'funding_subagency',
       'cfda',
       'recipient_duns',
-      'recipient_parent_duns',
     ] as const;
     for (const category of validCategories) {
       expect(() => spendingByCategoryTool.input.parse({ category })).not.toThrow();
     }
+  });
+
+  it('rejects recipient_parent_duns, a route USAspending no longer serves', () => {
+    expect(() =>
+      spendingByCategoryTool.input.parse({ category: 'recipient_parent_duns' }),
+    ).toThrow();
   });
 });
 
@@ -890,6 +936,7 @@ describe('Security — unicode and encoding in string fields', () => {
       recipient_level: 'P',
       alternate_names: ['SOCIETE GENERALE', 'SocGen'],
       total: { contracts: 5_000_000 },
+      period: 'trailing 12 months',
     };
     expect(() => getRecipientTool.format!(output)).not.toThrow();
     const text = (getRecipientTool.format!(output)[0] as { text: string }).text;
@@ -967,11 +1014,68 @@ describe('Security — undeclared argument keys are rejected, not stripped', () 
     },
   );
 
-  it('still strips an unknown key nested inside an input object', () => {
-    // Strictness is root-level only, matching `.strict()` itself.
-    const parsed = searchAwardsTool.input.parse({
+  it('rejects an unknown key nested inside an input object by its path (#74)', () => {
+    // The framework strictens the root only; each nested object declares
+    // `.strict()` itself, so a nested unsupported filter is rejected too.
+    const result = searchAwardsTool.input.safeParse({
       filters: { keywords: ['solar'], __nested_unknown__: 'x' },
     });
-    expect(parsed.filters).not.toHaveProperty('__nested_unknown__');
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues[0];
+    expect(issue?.code).toBe('unrecognized_keys');
+    expect(issue?.path).toEqual(['filters']);
   });
+
+  /** Every object-typed node below an input root, with its dotted path. */
+  const nestedObjects = (
+    node: Record<string, unknown>,
+    path: string,
+  ): [string, Record<string, unknown>][] => {
+    const found: [string, Record<string, unknown>][] =
+      path && node.type === 'object' && node.properties ? [[path, node]] : [];
+    const properties = (node.properties ?? {}) as Record<string, Record<string, unknown>>;
+    for (const [key, child] of Object.entries(properties)) {
+      found.push(...nestedObjects(child, path ? `${path}.${key}` : key));
+    }
+    const branches = [...((node.anyOf ?? []) as []), ...((node.oneOf ?? []) as [])];
+    for (const branch of branches) found.push(...nestedObjects(branch, path));
+    if (node.items) {
+      found.push(...nestedObjects(node.items as Record<string, unknown>, `${path}[]`));
+    }
+    return found;
+  };
+
+  it('finds the seven nested input objects the filter-taking tools declare (#74)', () => {
+    const paths = allToolDefinitions.flatMap((definition) =>
+      nestedObjects(z.toJSONSchema(definition.input, { io: 'input' }), '').map(
+        ([path]) => `${definition.name} ${path}`,
+      ),
+    );
+    expect(paths.sort()).toEqual([
+      'usaspending_disaster_spending filters',
+      'usaspending_search_awards filters',
+      'usaspending_search_awards location_filter',
+      'usaspending_search_awards time_period',
+      'usaspending_spending_by_category filters',
+      'usaspending_spending_by_geography filters',
+      'usaspending_spending_over_time filters',
+    ]);
+  });
+
+  it.each(allToolDefinitions.map((t) => [t.name, t] as const))(
+    '%s advertises additionalProperties: false and a description on every nested object (#74)',
+    (_name, definition) => {
+      const emitted = z.toJSONSchema(definition.input, { io: 'input' });
+      for (const [path, node] of nestedObjects(emitted, '')) {
+        expect({ path, additionalProperties: node.additionalProperties }).toEqual({
+          path,
+          additionalProperties: false,
+        });
+        expect({ path, description: typeof node.description }).toEqual({
+          path,
+          description: 'string',
+        });
+      }
+    },
+  );
 });

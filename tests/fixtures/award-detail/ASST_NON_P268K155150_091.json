@@ -1,0 +1,122 @@
+{
+  "id": 269893905,
+  "generated_unique_award_id": "ASST_NON_P268K155150_091",
+  "fain": "P268K155150",
+  "uri": null,
+  "category": "loans",
+  "type": "07",
+  "type_description": "DIRECT LOAN (E)",
+  "description": "2014-2015 DL BASE RECORD",
+  "subaward_count": 0,
+  "total_subaward_amount": null,
+  "total_subsidy_cost": 0.0,
+  "total_loan_value": 46402867113.0,
+  "total_obligation": 0.0,
+  "date_signed": "2014-04-16",
+  "base_and_all_options": null,
+  "base_exercised_options": null,
+  "non_federal_funding": 0.0,
+  "total_funding": 0.0,
+  "total_account_outlay": 0,
+  "total_account_obligation": 0,
+  "account_outlays_by_defc": [],
+  "account_obligations_by_defc": [],
+  "record_type": 2,
+  "cfda_info": [
+    {
+      "cfda_federal_agency": "OFFICE OF FEDERAL STUDENT AID, EDUCATION, DEPARTMENT OF",
+      "cfda_number": "84.268",
+      "cfda_popular_name": "",
+      "cfda_title": "Federal Direct Student Loans",
+      "cfda_website": "http://www.ifap.ed.gov/.",
+      "federal_action_obligation_amount": 0.0,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/dc9be278bc6d4423bbeba9113abb30ae/view",
+      "total_funding_amount": 0.0
+    }
+  ],
+  "transaction_obligated_amount": null,
+  "funding_agency": {
+    "id": 1068,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Education",
+      "code": "091",
+      "abbreviation": "ED",
+      "slug": "department-of-education"
+    },
+    "subtier_agency": {
+      "name": "Department of Education",
+      "code": "9100",
+      "abbreviation": "ED"
+    },
+    "office_agency_name": "OFFICE OF POSTSECONDARY EDUCATION"
+  },
+  "awarding_agency": {
+    "id": 1068,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Education",
+      "code": "091",
+      "abbreviation": "ED",
+      "slug": "department-of-education"
+    },
+    "subtier_agency": {
+      "name": "Department of Education",
+      "code": "9100",
+      "abbreviation": "ED"
+    },
+    "office_agency_name": "OFFICE OF POSTSECONDARY EDUCATION"
+  },
+  "period_of_performance": {
+    "start_date": "2014-01-01",
+    "end_date": "2036-07-31",
+    "last_modified_date": "2025-10-06"
+  },
+  "recipient": {
+    "recipient_hash": "8525a05d-624e-fd08-166a-9d018539fd7f-R",
+    "recipient_name": "PURDUE UNIVERSITY GLOBAL, INC.",
+    "recipient_uei": "FJ4QL9QR39Z8",
+    "recipient_unique_id": null,
+    "parent_recipient_hash": null,
+    "parent_recipient_name": "PURDUE UNIVERSITY GLOBAL, INC.",
+    "parent_recipient_uei": null,
+    "parent_recipient_unique_id": null,
+    "business_categories": ["Higher Education", "Higher Education (Public)"],
+    "location": {
+      "location_country_code": "USA",
+      "country_name": "UNITED STATES",
+      "state_code": "IN",
+      "state_name": "INDIANA",
+      "city_name": "INDIANAPOLIS",
+      "county_code": "097",
+      "county_name": "MARION",
+      "address_line1": "2550 NORTHWESTERN AVE STE 1100",
+      "address_line2": null,
+      "address_line3": null,
+      "congressional_code": "07",
+      "zip4": "2145",
+      "zip5": "46240",
+      "foreign_postal_code": null,
+      "foreign_province": null
+    }
+  },
+  "place_of_performance": {
+    "location_country_code": "USA",
+    "country_name": "UNITED STATES",
+    "county_code": "097",
+    "county_name": "MARION",
+    "city_name": "INDIANAPOLIS",
+    "state_code": "IN",
+    "state_name": "INDIANA",
+    "congressional_code": "07",
+    "zip4": "2145",
+    "zip5": "46240",
+    "address_line1": null,
+    "address_line2": null,
+    "address_line3": null,
+    "foreign_province": null,
+    "foreign_postal_code": null
+  },
+  "total_outlay": null
+}

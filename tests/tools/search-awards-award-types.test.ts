@@ -332,7 +332,12 @@ describe('usaspending_search_awards — award-type-aware sort (#60)', () => {
       'Subsidy Cost': 10,
       'Issued Date': '2024-06-01',
     }));
-    answer(rows);
+    // Capped means the upstream reports a next page (#76); a full page alone is not enough.
+    http.route({
+      method: 'POST',
+      match: ENDPOINT,
+      respond: Response.json({ results: rows, page_metadata: { page: 1, hasNext: true } }),
+    });
     const result = await run({ award_type_codes: ['07'] });
 
     const sc = result.structuredContent as {

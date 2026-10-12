@@ -1,0 +1,132 @@
+{
+  "id": 270332080,
+  "generated_unique_award_id": "ASST_NON_R24AP00702_014",
+  "fain": "R24AP00702",
+  "uri": null,
+  "category": "grant",
+  "type": "04",
+  "type_description": "PROJECT GRANT (B)",
+  "description": "THE TURLOCK IRRIGATION DISTRICT (DISTRICT), LOCATED IN THE SAN JOAQUIN VALLEY OF CALIFORNIA, WILL INSTALL A FLOATING SOLAR PHOTOVOLTAIC ENERGY GENERATION SYSTEM",
+  "subaward_count": 0,
+  "total_subaward_amount": null,
+  "total_subsidy_cost": 0.0,
+  "total_loan_value": 0.0,
+  "total_obligation": 5000000.0,
+  "date_signed": "2025-04-30",
+  "base_and_all_options": null,
+  "base_exercised_options": null,
+  "non_federal_funding": 5339634.0,
+  "total_funding": 10339634.0,
+  "total_account_outlay": 0.0,
+  "total_account_obligation": 5000000.0,
+  "account_outlays_by_defc": [
+    {
+      "code": "Z",
+      "amount": 0.0
+    }
+  ],
+  "account_obligations_by_defc": [
+    {
+      "code": "Z",
+      "amount": 5000000.0
+    }
+  ],
+  "record_type": 2,
+  "cfda_info": [
+    {
+      "cfda_federal_agency": "BUREAU OF RECLAMATION, INTERIOR, DEPARTMENT OF THE",
+      "cfda_number": "15.507",
+      "cfda_popular_name": "WaterSMART Grants - WEEG and SWEP",
+      "cfda_title": "WaterSMART (Sustain and Manage America’s Resources for Tomorrow)",
+      "cfda_website": "http://www.usbr.gov/WaterSMART/grants.html",
+      "federal_action_obligation_amount": 5000000.0,
+      "non_federal_funding_amount": 5339634.0,
+      "sam_website": "https://sam.gov/fal/4fc6ff527e214acf8f917a2a9e8f5d6d/view",
+      "total_funding_amount": 10339634.0
+    }
+  ],
+  "transaction_obligated_amount": 5000000.0,
+  "funding_agency": {
+    "id": 228,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of the Interior",
+      "code": "014",
+      "abbreviation": "DOI",
+      "slug": "department-of-the-interior"
+    },
+    "subtier_agency": {
+      "name": "Bureau of Reclamation",
+      "code": "1425",
+      "abbreviation": "BOR"
+    },
+    "office_agency_name": "DENVER FED CENTER"
+  },
+  "awarding_agency": {
+    "id": 228,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of the Interior",
+      "code": "014",
+      "abbreviation": "DOI",
+      "slug": "department-of-the-interior"
+    },
+    "subtier_agency": {
+      "name": "Bureau of Reclamation",
+      "code": "1425",
+      "abbreviation": "BOR"
+    },
+    "office_agency_name": "DENVER FED CENTER"
+  },
+  "period_of_performance": {
+    "start_date": "2025-04-30",
+    "end_date": "2027-06-30",
+    "last_modified_date": "2025-05-05"
+  },
+  "recipient": {
+    "recipient_hash": "8bbcbc66-94d6-bba8-7169-6930c70d6167-R",
+    "recipient_name": "TURLOCK IRRIGATION DISTRICT",
+    "recipient_uei": "LK3EXNEPLMD9",
+    "recipient_unique_id": null,
+    "parent_recipient_hash": null,
+    "parent_recipient_name": null,
+    "parent_recipient_uei": null,
+    "parent_recipient_unique_id": null,
+    "business_categories": ["Government", "U.S. Local Government"],
+    "location": {
+      "location_country_code": "USA",
+      "country_name": "UNITED STATES",
+      "state_code": "CA",
+      "state_name": "CALIFORNIA",
+      "city_name": "TURLOCK",
+      "county_code": "099",
+      "county_name": "STANISLAUS",
+      "address_line1": "333 E CANAL DR",
+      "address_line2": null,
+      "address_line3": null,
+      "congressional_code": "13",
+      "zip4": "3946",
+      "zip5": "95380",
+      "foreign_postal_code": null,
+      "foreign_province": null
+    }
+  },
+  "place_of_performance": {
+    "location_country_code": "USA",
+    "country_name": "UNITED STATES",
+    "county_code": "099",
+    "county_name": "STANISLAUS",
+    "city_name": null,
+    "state_code": "CA",
+    "state_name": "CALIFORNIA",
+    "congressional_code": "90",
+    "zip4": null,
+    "zip5": null,
+    "address_line1": null,
+    "address_line2": null,
+    "address_line3": null,
+    "foreign_province": null,
+    "foreign_postal_code": null
+  },
+  "total_outlay": null
+}

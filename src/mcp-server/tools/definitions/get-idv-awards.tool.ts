@@ -95,8 +95,8 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
   }),
 
   // Agent-facing context: pagination state and an optional notice for empty results.
-  // This endpoint returns no total count, so truncation is disclosed via the page-full
-  // signal (truncated/shown/cap) rather than a total.
+  // This endpoint returns no total count, so truncation is disclosed from the upstream
+  // next-page flag (truncated/shown/cap) rather than a total.
   enrichment: {
     parent_award_id: z.string().describe('Parent IDV award ID whose children were listed'),
     current_page: z.number().describe('Current page returned'),
@@ -108,14 +108,19 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
     truncated: z
       .boolean()
       .optional()
-      .describe('True when this page was full and more child awards may remain beyond it.'),
-    shown: z.number().optional().describe('Number of child awards returned on this page.'),
-    cap: z.number().optional().describe('The per-page limit that was applied.'),
+      .describe(
+        'True when the upstream reports more child awards beyond this page. Absent on a full page the upstream marks as last — has_next_page still says whether to request another.',
+      ),
+    shown: z
+      .number()
+      .optional()
+      .describe('Number of child awards returned on this page, when truncated.'),
+    cap: z.number().optional().describe('The per-page limit that was applied, when truncated.'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — the award may have no children of the requested type. Absent when results are present.',
+        'How to continue when truncated, or a recovery hint when results are empty — the award may have no children of the requested type. Absent otherwise.',
       ),
   },
 
@@ -206,11 +211,10 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
      * silent truncation in that untested region — on an endpoint that publishes no
      * total, leaving a caller no independent cross-check.
      *
-     * pageIsFull stays a separate local: it gates the truncation disclosure below, which
-     * fires on a full page regardless of whether more results exist. Collapsing the two
-     * would couple an agent-facing disclosure to the continuation decision.
+     * The truncation disclosure below keys on the upstream flag alone, not on that
+     * guard: `truncated` means child awards are known to exist past this page, and a
+     * full page the upstream marks as last carries no such evidence.
      */
-    const pageIsFull = results.length >= input.limit;
     const hasNext = resolveHasNext(rawHasNext, results.length, input.limit);
 
     ctx.enrich({
@@ -224,12 +228,12 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         `No child awards of type "${input.type}" found for IDV "${input.award_id}". ` +
           `Verify the award_id is a valid IDV and try type="child_idvs" if looking for sub-IDVs.`,
       );
-    } else if (pageIsFull) {
+    } else if (rawHasNext) {
       ctx.enrich.truncated({
         shown: results.length,
         cap: input.limit,
         guidance:
-          'A full page may have more child awards. Request the next page to continue; an empty or short page marks the end. Raise limit up to 100 for fewer round-trips.',
+          'More child awards remain beyond this page. Request the next page to continue; an empty or short page marks the end. Raise limit up to 100 for fewer round-trips.',
       });
     }
 

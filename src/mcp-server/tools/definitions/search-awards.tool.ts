@@ -1,6 +1,6 @@
 /**
  * @fileoverview Tool to search federal awards by keyword, recipient, agency, award type,
- * NAICS code, location, or date range.
+ * NAICS, Assistance Listing, PSC, or DEF code, location, or date range.
  * @module mcp-server/tools/definitions/search-awards.tool
  */
 
@@ -17,7 +17,18 @@ import {
   optionalIsoDate,
   resolveDateRange,
 } from './dates.js';
+import {
+  ASSISTANCE_AWARD_TYPE_CODES,
+  AWARD_TYPE_CODES,
+  applyCodeFilters,
+  CODE_FILTER_FIELDS,
+  codeFilterEcho,
+  describeCodeFilters,
+  normalizeCodeFilters,
+  PROCUREMENT_AWARD_TYPE_CODES,
+} from './filters.js';
 import { formatCurrency } from './formatting.js';
+import { describeLocation, LocationFilterSchema, resolveLocation } from './locations.js';
 import { resolveHasNext } from './pagination.js';
 
 /** Award search default fields — covers summary + chaining IDs. */
@@ -82,28 +93,20 @@ interface AwardTypeGroup {
  * kind and sort by their own. Labels follow USAspending's type names.
  */
 const AWARD_TYPE_GROUPS = {
-  contracts: { label: 'contracts', codes: ['A', 'B', 'C', 'D'], sorts: CONTRACT_SORTS },
+  contracts: { label: 'contracts', codes: AWARD_TYPE_CODES.contracts, sorts: CONTRACT_SORTS },
   idvs: {
     label: 'IDVs',
-    codes: ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E'],
+    codes: AWARD_TYPE_CODES.idvs,
     sorts: CONTRACT_SORTS.filter((sort) => sort !== 'End Date'),
   },
-  grants: {
-    label: 'grants',
-    codes: ['02', '03', '04', '05', 'F001', 'F002'],
-    sorts: CONTRACT_SORTS,
-  },
+  grants: { label: 'grants', codes: AWARD_TYPE_CODES.grants, sorts: CONTRACT_SORTS },
   direct_payments: {
     label: 'direct payments',
-    codes: ['06', '10', 'F006', 'F007'],
+    codes: AWARD_TYPE_CODES.direct_payments,
     sorts: CONTRACT_SORTS,
   },
-  loans: { label: 'loans', codes: ['07', '08', 'F003', 'F004'], sorts: LOAN_SORTS },
-  other: {
-    label: 'other',
-    codes: ['09', '11', '-1', 'F005', 'F008', 'F009', 'F010'],
-    sorts: CONTRACT_SORTS,
-  },
+  loans: { label: 'loans', codes: AWARD_TYPE_CODES.loans, sorts: LOAN_SORTS },
+  other: { label: 'other', codes: AWARD_TYPE_CODES.other, sorts: CONTRACT_SORTS },
 } satisfies Record<string, AwardTypeGroup>;
 
 /**
@@ -118,20 +121,11 @@ function resolveAwardTypeGroup(codes: readonly string[]): AwardTypeGroup | undef
   return groups.size === 1 ? only : undefined;
 }
 
-/** Codes that never carry an assistance listing: contracts and IDVs. */
-const NON_ASSISTANCE_CODES = new Set([
-  ...AWARD_TYPE_GROUPS.contracts.codes,
-  ...AWARD_TYPE_GROUPS.idvs.codes,
-]);
-
 /** The flat `time_period` object's field paths, as messages name them. */
 const FLAT_DATE_FIELDS = {
   start: 'time_period.start_date',
   end: 'time_period.end_date',
 } as const satisfies DateFields;
-
-/** Assistance Listing (CFDA) number: two digits, a dot, three digits or capitals (`11.67A`). */
-const ASSISTANCE_LISTING_PATTERN = /^\d{2}\.[0-9A-Z]{3}$/;
 
 /**
  * Page-number pagination on search/spending_by_award/ caps at a 50,000-result offset
@@ -153,7 +147,7 @@ const CURSOR_WINDOW_OFFSET = 10_000;
 export const searchAwardsTool = tool('usaspending_search_awards', {
   title: 'Search Federal Awards',
   description:
-    'Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, location, or date range. Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
+    'Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, PSC, DEF code, location, or date range. Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -172,7 +166,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe(
-        'Filter to a specific awarding agency by name (e.g., "Department of Defense"). Use usaspending_autocomplete_filters type=awarding_agency to find exact names.',
+        'Filter to one awarding agency by its top-tier name (e.g., "Department of Defense"). Top-tier only: a sub-agency name matches no awards. Take the value from toptier_name in usaspending_autocomplete_filters type=awarding_agency — for a sub-agency that is its parent, so results cover the whole department.',
       ),
     recipient_name: z
       .string()
@@ -186,20 +180,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe(
         'Filter by NAICS industry codes (e.g., ["541512"]). Use usaspending_autocomplete_filters type=naics to look up codes.',
       ),
-    assistance_listings: z
-      .array(
-        z
-          .string()
-          .regex(
-            ASSISTANCE_LISTING_PATTERN,
-            'Expected an Assistance Listing number as NN.NNN (e.g. 93.866 or 11.67A)',
-          )
-          .describe('Assistance Listing number, e.g. 93.866'),
-      )
-      .optional()
-      .describe(
-        'Filter by Assistance Listing (CFDA) program numbers, e.g. ["93.866"]: two digits, a dot, then three digits or capital letters (11.67A). Matches an award when any of its listings equals one of these exactly; several values match any of them. A row\'s primary listing can differ from the one requested, and its amount is the whole award, not that listing\'s share. Assistance award types only — set award_type_codes to grants, direct payments, loans, or other assistance; contracts and IDVs carry no listings, so pairing them (including the default award_type_codes) is rejected. Use usaspending_autocomplete_filters type=cfda to look up numbers.',
-      ),
+    ...CODE_FILTER_FIELDS,
     time_period: z
       .object({
         start_date: blankableIsoDate(
@@ -209,24 +190,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           'End date in ISO 8601 format (YYYY-MM-DD). Blank ("") leaves the end open, filled with today (UTC).',
         ),
       })
+      .strict()
       .optional()
       .describe(
         'Filter awards by date range (action date). Both blank means no date filter; one blank end is filled and named in the notice.',
       ),
-    location_filter: z
-      .object({
-        country: z.string().optional().describe('ISO 3166-1 alpha-3 country code (e.g., USA)'),
-        state: z.string().optional().describe('Two-letter US state abbreviation (e.g., CA)'),
-        county: z
-          .string()
-          .optional()
-          .describe('FIPS county code (e.g., 06037 for Los Angeles County)'),
-        city: z.string().optional().describe('City name'),
-      })
-      .optional()
-      .describe(
-        'Filter by place of performance location. Uses FIPS codes and 2-letter state abbreviations, not place names — use a geocoding server to resolve names to codes first.',
-      ),
+    location_filter: LocationFilterSchema,
     sort: z
       .enum([
         'Award Amount',
@@ -289,7 +258,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         agency_name: z
           .string()
           .optional()
-          .describe('Awarding agency name (toptier), e.g., "Department of Defense"'),
+          .describe(
+            'Awarding agency name, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches no awards',
+          ),
         recipient_name: z
           .string()
           .optional()
@@ -300,6 +271,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           .array(z.string())
           .optional()
           .describe('NAICS industry codes to require, e.g., ["541512"]'),
+        ...CODE_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC).',
         ),
@@ -307,9 +279,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           'End date (YYYY-MM-DD). Given alone, the range starts at 2007-10-01, the earliest searchable date.',
         ),
       })
+      .strict()
       .optional()
       .describe(
-        'Optional analytics-style filter object mirroring the shape the spending analytics tools accept, for reusing one filter set across tools. When both this object and the equivalent top-level flat filters are given, this object wins per-field. recipient_id is intentionally not accepted — this endpoint silently ignores it; filter by recipient via recipient_name.',
+        'Optional analytics-style filter object mirroring the shape the spending analytics tools accept, for reusing one filter set across tools. When both this object and the equivalent top-level flat filters are given, this object wins per-field. recipient_id is rejected — this endpoint silently ignores it; filter by recipient via recipient_name.',
       ),
   }),
 
@@ -413,10 +386,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .boolean()
       .optional()
       .describe(
-        'True when this page was capped at `limit` and more results may remain (continue via page or the cursor).',
+        `True when the upstream reports more results beyond this page (continue via page or the cursor). Absent on a full page the upstream marks as last, including every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset where the upstream stops reporting continuation — has_next still says whether to request another.`,
       ),
-    shown: z.number().optional().describe('Number of awards returned on this page.'),
-    cap: z.number().optional().describe('Per-page cap (limit) applied to this page.'),
+    shown: z
+      .number()
+      .optional()
+      .describe('Number of awards returned on this page, when truncated.'),
+    cap: z
+      .number()
+      .optional()
+      .describe('Per-page cap (limit) applied to this page, when truncated.'),
     upstream_messages: z
       .array(z.string())
       .optional()
@@ -433,6 +412,20 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe('Assistance Listing numbers filter applied (comma-separated)'),
+    applied_psc_codes: z
+      .string()
+      .optional()
+      .describe('PSC codes sent, uppercased (comma-separated)'),
+    applied_def_codes: z
+      .string()
+      .optional()
+      .describe('DEF codes sent, uppercased (comma-separated)'),
+    applied_location: z
+      .string()
+      .optional()
+      .describe(
+        'Place of performance location sent, as normalized (e.g. country=USA, state=NM, county=049)',
+      ),
     applied_time_period_start: z
       .string()
       .optional()
@@ -524,6 +517,22 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       recovery:
         'Set award_type_codes to one assistance group — grants 02/03/04/05/F001/F002, direct payments 06/10/F006/F007, loans 07/08/F003/F004, or other assistance 09/11/-1/F005/F008/F009/F010 — alongside assistance_listings.',
     },
+    {
+      reason: 'psc_codes_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'psc_codes was given while the award type codes include assistance codes.',
+      retryable: false,
+      recovery:
+        'Set award_type_codes to contracts A/B/C/D (the default) or IDVs IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E alongside psc_codes.',
+    },
+    {
+      reason: 'invalid_location',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'location_filter names an unknown US state, a county without a state or under an armed-forces code, a county or FIPS-number state under a non-USA country, or parts that place it in different states.',
+      retryable: false,
+      recovery:
+        "Under country USA (the default) or a US territory code, send location_filter.state as a postal code (NM) or 2-digit FIPS code (35), and location_filter.county as 3 digits with that state or as the 5-digit state + county code (35049). Under another country, send state as that country's own 2-letter subdivision code and no county.",
+    },
   ],
 
   async handler(input, ctx) {
@@ -554,9 +563,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       );
     }
 
-    // Merge the analytics-style `filters` object over the flat inputs (nested wins
-    // per-field). recipient_id is intentionally never mapped: search/spending_by_award/
-    // silently ignores it (it comes back in the response `messages` as unused).
+    /**
+     * Merge the analytics-style `filters` object over the flat inputs (nested wins
+     * per-field). The strict `filters` schema rejects recipient_id before this point:
+     * search/spending_by_award/ silently ignores it (it comes back in the response
+     * `messages` as unused).
+     */
     const f = input.filters;
     const keywords =
       f?.keywords && f.keywords.length > 0
@@ -602,13 +614,36 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail('date_before_earliest', beforeFloor);
     }
 
-    // Contracts and IDVs carry no listings: upstream answers 200 with zero rows and
-    // no message, which reads as "no such awards" rather than a mismatched filter.
-    const listings = input.assistance_listings?.length ? input.assistance_listings : undefined;
-    if (listings && awardTypeCodes.some((code) => NON_ASSISTANCE_CODES.has(code))) {
+    /**
+     * Code filters merge like the rest, nested winning per field; PSC and DEF codes
+     * are uppercased and an empty list is unset, since upstream 422s on either.
+     */
+    const codes = normalizeCodeFilters({
+      assistance_listings: f?.assistance_listings?.length
+        ? f.assistance_listings
+        : input.assistance_listings,
+      psc_codes: f?.psc_codes?.length ? f.psc_codes : input.psc_codes,
+      def_codes: f?.def_codes?.length ? f.def_codes : input.def_codes,
+    });
+
+    /**
+     * Contracts and IDVs carry no listings, and assistance awards no PSC: upstream
+     * answers either pairing with 200, zero rows, and no message, which reads as
+     * "no such awards" rather than a mismatched filter.
+     */
+    if (
+      codes.assistance_listings &&
+      awardTypeCodes.some((code) => PROCUREMENT_AWARD_TYPE_CODES.has(code))
+    ) {
       throw ctx.fail(
         'assistance_listings_type_mismatch',
         `assistance_listings match only assistance awards, but award_type_codes [${awardTypeCodes.join(', ')}] include contract or IDV codes, which carry no listings. award_type_codes defaults to contracts when omitted.`,
+      );
+    }
+    if (codes.psc_codes && awardTypeCodes.some((code) => ASSISTANCE_AWARD_TYPE_CODES.has(code))) {
+      throw ctx.fail(
+        'psc_codes_type_mismatch',
+        `psc_codes match only contracts and IDVs, but award_type_codes [${awardTypeCodes.join(', ')}] include assistance codes, which carry no PSC.`,
       );
     }
 
@@ -624,6 +659,17 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       );
     }
 
+    /**
+     * Upstream 422s on a missing country or a 5-digit county, and answers an empty
+     * page for a FIPS-number state or a territory's ISO code, so the location is
+     * normalized to the one shape it matches, or rejected, before the request.
+     */
+    const resolvedLocation = resolveLocation(input.location_filter);
+    if (!resolvedLocation.ok) {
+      throw ctx.fail('invalid_location', resolvedLocation.message);
+    }
+    const location = resolvedLocation.location;
+
     const filters: Record<string, unknown> = {};
     if (keywords?.length) filters.keywords = keywords;
     filters.award_type_codes = awardTypeCodes;
@@ -634,24 +680,11 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     if (naicsCodes?.length) {
       filters.naics_codes = { require: naicsCodes };
     }
-    if (listings) filters.program_numbers = listings;
+    applyCodeFilters(filters, codes);
     if (timePeriod) {
       filters.time_period = [{ start_date: timePeriod.start_date, end_date: timePeriod.end_date }];
     }
-    if (
-      input.location_filter &&
-      (input.location_filter.country ||
-        input.location_filter.state ||
-        input.location_filter.county ||
-        input.location_filter.city)
-    ) {
-      const loc: Record<string, string> = {};
-      if (input.location_filter.country) loc.country = input.location_filter.country;
-      if (input.location_filter.state) loc.state = input.location_filter.state;
-      if (input.location_filter.county) loc.county = input.location_filter.county;
-      if (input.location_filter.city) loc.city = input.location_filter.city;
-      filters.place_of_performance_locations = [loc];
-    }
+    if (location) filters.place_of_performance_locations = [location];
 
     const data = await svc.searchAwards(
       {
@@ -746,7 +779,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ...(keywords?.length ? { applied_keyword: keywords.join(', ') } : {}),
       ...(agencyName ? { applied_agency_name: agencyName } : {}),
       ...(naicsCodes?.length ? { applied_naics_codes: naicsCodes.join(', ') } : {}),
-      ...(listings ? { applied_assistance_listings: listings.join(', ') } : {}),
+      ...codeFilterEcho(codes),
+      ...(location ? { applied_location: describeLocation(location) } : {}),
       ...(timePeriod
         ? {
             applied_time_period_start: timePeriod.start_date,
@@ -759,11 +793,17 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     // every notice source joins into one string written at the end.
     const notices: (string | undefined)[] = [];
 
-    // Disclose page-based truncation: a capped page with more results behind has_next
-    // (this endpoint returns no total, so the cap/shown pair is the honest signal).
+    /**
+     * Paging guidance follows has_next, which keeps the page-fullness fallback. The
+     * truncated/shown/cap disclosure needs evidence that rows exist past this page — the
+     * upstream hasNext — so an exactly-full final page and every page past the
+     * CURSOR_WINDOW_OFFSET (where hasNext is always false) carry the notice alone.
+     */
     if (page_metadata.has_next) {
       const guidance = `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`;
-      ctx.enrich.truncated({ shown: results.length, cap: input.limit, guidance });
+      if (pageMeta.hasNext) {
+        ctx.enrich.truncated({ shown: results.length, cap: input.limit, guidance });
+      }
       notices.push(guidance);
     }
     notices.push(filledBoundNotice(timePeriod, filledFields));
@@ -772,7 +812,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       const filterParts: string[] = [];
       if (keywords?.length) filterParts.push(`keyword="${keywords.join(', ')}"`);
       if (agencyName) filterParts.push(`agency="${agencyName}"`);
-      if (listings) filterParts.push(`assistance_listings=${listings.join(',')}`);
+      filterParts.push(...describeCodeFilters(codes));
+      if (location) filterParts.push(`location="${describeLocation(location)}"`);
       if (awardTypeCodes?.length) {
         filterParts.push(`types=${awardTypeCodes.join(',')}`);
       }

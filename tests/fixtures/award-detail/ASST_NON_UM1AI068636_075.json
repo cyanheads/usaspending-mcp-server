@@ -1,0 +1,219 @@
+{
+  "id": 271711892,
+  "generated_unique_award_id": "ASST_NON_UM1AI068636_075",
+  "fain": "UM1AI068636",
+  "uri": "UM1AI068636-654533622",
+  "category": "grant",
+  "type": "05",
+  "type_description": "COOPERATIVE AGREEMENT (B)",
+  "description": "AIDS CLINICAL TRIALS GROUP NETWORK",
+  "subaward_count": 0,
+  "total_subaward_amount": null,
+  "total_subsidy_cost": 0.0,
+  "total_loan_value": 0.0,
+  "total_obligation": 976983003.37,
+  "date_signed": "2011-06-01",
+  "base_and_all_options": null,
+  "base_exercised_options": null,
+  "non_federal_funding": 0.0,
+  "total_funding": 976983003.37,
+  "total_account_outlay": 519167275.23,
+  "total_account_obligation": 604301531.22,
+  "account_outlays_by_defc": [
+    {
+      "code": "Q",
+      "amount": 196440774.08
+    },
+    {
+      "code": "N",
+      "amount": 159998639.35
+    },
+    {
+      "code": "V",
+      "amount": 152888307.9
+    },
+    {
+      "code": "U",
+      "amount": 8869656.57
+    },
+    {
+      "code": "L",
+      "amount": 969897.33
+    }
+  ],
+  "account_obligations_by_defc": [
+    {
+      "code": "Q",
+      "amount": 269679636.8
+    },
+    {
+      "code": "N",
+      "amount": 167378806.13
+    },
+    {
+      "code": "V",
+      "amount": 156743986.16
+    },
+    {
+      "code": "U",
+      "amount": 9529204.8
+    },
+    {
+      "code": "L",
+      "amount": 969897.33
+    }
+  ],
+  "record_type": 2,
+  "cfda_info": [
+    {
+      "cfda_federal_agency": "NATIONAL INSTITUTES OF HEALTH, HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+      "cfda_number": "93.855",
+      "cfda_popular_name": "National Institutes of Allergy and Infectious Diseases",
+      "cfda_title": "Allergy and Infectious Diseases Research",
+      "cfda_website": "http://www.niaid.nih.gov",
+      "federal_action_obligation_amount": 956445678.37,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/dab90bbd42704331b5990aaac2ac282f/view",
+      "total_funding_amount": 956445678.37
+    },
+    {
+      "cfda_federal_agency": "NATIONAL INSTITUTES OF HEALTH, HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+      "cfda_number": "93.279",
+      "cfda_popular_name": "",
+      "cfda_title": "Drug Use and Addiction Research Programs",
+      "cfda_website": "https://nida.nih.gov/",
+      "federal_action_obligation_amount": 9000000.0,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/7169f75327974d768c3c88769d62d31b/view",
+      "total_funding_amount": 9000000.0
+    },
+    {
+      "cfda_federal_agency": "NATIONAL INSTITUTES OF HEALTH, HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+      "cfda_number": "93.853",
+      "cfda_popular_name": "",
+      "cfda_title": "Extramural Research Programs in the Neurosciences and Neurological Disorders",
+      "cfda_website": "http://www.ninds.nih.gov/",
+      "federal_action_obligation_amount": 7000000.0,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/a68454c7e05d4c04ae6e4aaf7719ac53/view",
+      "total_funding_amount": 7000000.0
+    },
+    {
+      "cfda_federal_agency": "NATIONAL INSTITUTES OF HEALTH, HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+      "cfda_number": "93.242",
+      "cfda_popular_name": "",
+      "cfda_title": "Mental Health Research Grants",
+      "cfda_website": "http://www.nimh.nih.gov",
+      "federal_action_obligation_amount": 2241243.0,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/240b0d9177a049d9af41a5f7e7c424e4/view",
+      "total_funding_amount": 2241243.0
+    },
+    {
+      "cfda_federal_agency": "NATIONAL INSTITUTES OF HEALTH, HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+      "cfda_number": "93.866",
+      "cfda_popular_name": "(Aging)",
+      "cfda_title": "Aging Research",
+      "cfda_website": "http://www.nia.nih.gov/",
+      "federal_action_obligation_amount": 1247744.0,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/571e780222b243c5a70e0d375d364007/view",
+      "total_funding_amount": 1247744.0
+    },
+    {
+      "cfda_federal_agency": "NATIONAL INSTITUTES OF HEALTH, HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+      "cfda_number": "93.310",
+      "cfda_popular_name": "NIH-wide Research Support",
+      "cfda_title": "Trans-NIH Research Support",
+      "cfda_website": "",
+      "federal_action_obligation_amount": 1048338.0,
+      "non_federal_funding_amount": 0.0,
+      "sam_website": "https://sam.gov/fal/e223c7a52ff24d3fb1558c3c886b3ccb/view",
+      "total_funding_amount": 1048338.0
+    }
+  ],
+  "transaction_obligated_amount": 730885542.22,
+  "funding_agency": {
+    "id": 830,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Health and Human Services",
+      "code": "075",
+      "abbreviation": "HHS",
+      "slug": "department-of-health-and-human-services"
+    },
+    "subtier_agency": {
+      "name": "National Institutes of Health",
+      "code": "7529",
+      "abbreviation": "NIH"
+    },
+    "office_agency_name": "NIH National Institute of Neurological Disorders and Stroke"
+  },
+  "awarding_agency": {
+    "id": 830,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Health and Human Services",
+      "code": "075",
+      "abbreviation": "HHS",
+      "slug": "department-of-health-and-human-services"
+    },
+    "subtier_agency": {
+      "name": "National Institutes of Health",
+      "code": "7529",
+      "abbreviation": "NIH"
+    },
+    "office_agency_name": "NIH National Institute of Allergy and Infectious Diseases"
+  },
+  "period_of_performance": {
+    "start_date": "2006-06-29",
+    "end_date": "2027-11-30",
+    "last_modified_date": "2026-09-21"
+  },
+  "recipient": {
+    "recipient_hash": "f371179b-9f27-8013-f81c-4fd314b1f981-C",
+    "recipient_name": "UNIVERSITY OF NORTH CAROLINA AT CHAPEL HILL",
+    "recipient_uei": "D3LHU66KBLD5",
+    "recipient_unique_id": null,
+    "parent_recipient_hash": "df0bb95d-2513-b362-53c8-018e392b1a38-P",
+    "parent_recipient_name": "UNIVERSITY OF NORTH CAROLINA SYSTEM OFFICE",
+    "parent_recipient_uei": "NEYCH3CVBTR6",
+    "parent_recipient_unique_id": null,
+    "business_categories": ["Higher Education", "Higher Education (Public)"],
+    "location": {
+      "location_country_code": "USA",
+      "country_name": "UNITED STATES",
+      "state_code": "NC",
+      "state_name": "NORTH CAROLINA",
+      "city_name": "CHAPEL HILL",
+      "county_code": "135",
+      "county_name": "ORANGE",
+      "address_line1": "104 AIRPORT DR STE 2200",
+      "address_line2": null,
+      "address_line3": null,
+      "congressional_code": "04",
+      "zip4": "5023",
+      "zip5": "27599",
+      "foreign_postal_code": null,
+      "foreign_province": null
+    }
+  },
+  "place_of_performance": {
+    "location_country_code": "USA",
+    "country_name": "UNITED STATES",
+    "county_code": "135",
+    "county_name": "ORANGE",
+    "city_name": "CHAPEL HILL",
+    "state_code": "NC",
+    "state_name": "NORTH CAROLINA",
+    "congressional_code": "04",
+    "zip4": null,
+    "zip5": "27599",
+    "address_line1": null,
+    "address_line2": null,
+    "address_line3": null,
+    "foreign_province": null,
+    "foreign_postal_code": null
+  },
+  "total_outlay": 519167275.23
+}

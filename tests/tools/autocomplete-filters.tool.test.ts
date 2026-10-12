@@ -3,10 +3,15 @@
  * @module tests/tools/autocomplete-filters.tool.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { autocompleteFiltersTool } from '@/mcp-server/tools/definitions/autocomplete-filters.tool.js';
+import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
+import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
+import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
+import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 
 const mockAutocompleteNaics = vi.fn();
 const mockAutocompletePsc = vi.fn();
@@ -56,28 +61,6 @@ describe('autocompleteFiltersTool', () => {
     expect(enrichment.result_count).toBe(2);
   });
 
-  it('discloses truncation when results fill the limit', async () => {
-    mockAutocompleteNaics.mockResolvedValueOnce({
-      results: Array.from({ length: 5 }, (_, i) => ({
-        naics: `5135${i}0`,
-        naics_description: `Industry ${i}`,
-      })),
-    });
-
-    const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
-    const input = autocompleteFiltersTool.input.parse({
-      type: 'naics',
-      search_text: 'soft',
-      limit: 5,
-    });
-    await autocompleteFiltersTool.handler(input, ctx);
-
-    const enrichment = getEnrichment(ctx);
-    expect(enrichment.truncated).toBe(true);
-    expect(enrichment.shown).toBe(5);
-    expect(enrichment.cap).toBe(5);
-  });
-
   it('maps psc field names correctly', async () => {
     mockAutocompletePsc.mockResolvedValueOnce({
       results: [{ product_or_service_code: 'AC60', psc_description: 'R&D-ELECTRONICS & COMM EQ' }],
@@ -110,7 +93,7 @@ describe('autocompleteFiltersTool', () => {
     expect(result.results[0]!.name).toBe('Farm Labor Housing Loans and Grants');
   });
 
-  it('maps awarding_agency nested toptier_agency.name', async () => {
+  it('maps a top-tier awarding_agency match with name equal to toptier_name and no id (#71)', async () => {
     mockAutocompleteAwardingAgency.mockResolvedValueOnce({
       results: [
         {
@@ -133,8 +116,129 @@ describe('autocompleteFiltersTool', () => {
     });
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
-    expect(result.results[0]!.id).toBe('1173');
-    expect(result.results[0]!.name).toBe('Department of Defense');
+    expect(result.results[0]).toEqual({
+      name: 'Department of Defense',
+      abbreviation: 'DOD',
+      tier: 'toptier',
+      toptier_name: 'Department of Defense',
+      toptier_code: '097',
+    });
+  });
+
+  describe('agency rows carry their own name and tier (#71)', () => {
+    // Live autocomplete/awarding_agency/ rows for "Geological" and "Interior".
+    const USGS = {
+      id: 233,
+      toptier_flag: false,
+      toptier_agency: {
+        toptier_code: '014',
+        abbreviation: 'DOI',
+        name: 'Department of the Interior',
+      },
+      subtier_agency: { abbreviation: 'USGS', name: 'U.S. Geological Survey' },
+    };
+    const INTERIOR = {
+      id: 209,
+      toptier_flag: true,
+      toptier_agency: {
+        toptier_code: '014',
+        abbreviation: 'DOI',
+        name: 'Department of the Interior',
+      },
+      subtier_agency: { abbreviation: 'DOI', name: 'Department of the Interior' },
+    };
+    const UNDER_SECRETARY = {
+      id: 211,
+      toptier_flag: false,
+      toptier_agency: {
+        toptier_code: '014',
+        abbreviation: 'DOI',
+        name: 'Department of the Interior',
+      },
+      subtier_agency: { abbreviation: null, name: 'Office of the Under Secretary of the Interior' },
+    };
+    const run = (search_text: string, rows: unknown[]) => {
+      mockAutocompleteAwardingAgency.mockResolvedValueOnce({ results: rows });
+      return runToolContract(autocompleteFiltersTool, {
+        type: 'awarding_agency',
+        search_text,
+        limit: 5,
+      });
+    };
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
+    it('keeps a sub-agency match under its own name with its parent alongside', async () => {
+      const result = await run('Geological', [USGS]);
+
+      expect(result.isError).toBeFalsy();
+      const rows = (result.structuredContent as { results: unknown[] }).results;
+      expect(rows).toEqual([
+        {
+          name: 'U.S. Geological Survey',
+          abbreviation: 'USGS',
+          tier: 'subtier',
+          toptier_name: 'Department of the Interior',
+          toptier_code: '014',
+        },
+      ]);
+      const text = textOf(result);
+      expect(text).toContain('U.S. Geological Survey');
+      expect(text).toContain('USGS');
+      expect(text).toContain('subtier');
+      expect(text).toContain('Department of the Interior');
+      expect(text).toContain('014');
+      expect(text).not.toContain('233');
+    });
+
+    it('distinguishes a department from a same-parent office', async () => {
+      const result = await run('Interior', [INTERIOR, UNDER_SECRETARY]);
+
+      const rows = (result.structuredContent as { results: Record<string, unknown>[] }).results;
+      expect(rows.map((r) => [r.name, r.tier])).toEqual([
+        ['Department of the Interior', 'toptier'],
+        ['Office of the Under Secretary of the Interior', 'subtier'],
+      ]);
+      expect(rows[0]!.name).toBe(rows[0]!.toptier_name);
+      // No abbreviation upstream stays absent rather than inheriting the parent's.
+      expect(rows[1]).not.toHaveProperty('abbreviation');
+      expect(rows[1]!.toptier_name).toBe('Department of the Interior');
+      for (const row of rows) expect(row).not.toHaveProperty('id');
+    });
+
+    it('drops id from the output schema and points toptier_name at the agency_name filters', () => {
+      const row = autocompleteFiltersTool.output.shape.results.element;
+      expect(row.shape).not.toHaveProperty('id');
+      const toptierName = row.shape.toptier_name.description ?? '';
+      expect(toptierName).toContain('agency_name');
+      expect(toptierName).toMatch(/sub-agency/i);
+      expect(autocompleteFiltersTool.description).not.toMatch(/\bIDs?\b/);
+    });
+
+    it.each([
+      searchAwardsTool,
+      spendingByCategoryTool,
+      spendingByGeographyTool,
+      spendingOverTimeTool,
+    ])('$name: every agency_name says top-tier only and points at toptier_name', (def) => {
+      const descriptions: string[] = [];
+      const walk = (node: unknown): void => {
+        if (!node || typeof node !== 'object') return;
+        for (const [key, value] of Object.entries(node)) {
+          if (key === 'agency_name' && value && typeof value === 'object') {
+            descriptions.push(String((value as { description?: string }).description));
+          }
+          walk(value);
+        }
+      };
+      walk(z.toJSONSchema(def.input));
+
+      expect(descriptions.length).toBeGreaterThan(0);
+      for (const description of descriptions) {
+        expect(description).toMatch(/top-tier/i);
+        expect(description).toContain('toptier_name');
+      }
+    });
   });
 
   it('maps recipient_name to name for recipient type', async () => {
@@ -149,8 +253,8 @@ describe('autocompleteFiltersTool', () => {
     const result = await autocompleteFiltersTool.handler(input, ctx);
 
     expect(result.results[0]!.name).toBe('Acme Corporation');
-    // recipient_id / legal_business_name don't exist on this endpoint — id stays unset
-    expect(result.results[0]!.id).toBeUndefined();
+    // recipient_id / legal_business_name don't exist on this endpoint — no id on the row
+    expect(result.results[0]).not.toHaveProperty('id');
     expect(result.results[0]!.uei).toBeUndefined();
     expect(result.results[0]!.duns).toBeUndefined();
   });
@@ -177,7 +281,7 @@ describe('autocompleteFiltersTool', () => {
     expect(result.results[0]!.name).toBe('MICROSOFT CORPORATION');
     expect(result.results[0]!.uei).toBe('FMVPEWNJGLM1');
     expect(result.results[0]!.duns).toBe('081466849');
-    expect(result.results[0]!.id).toBeUndefined();
+    expect(result.results[0]).not.toHaveProperty('id');
   });
 
   it('caps the recipient union at limit when upstream returns one bucket per match type', async () => {
@@ -252,9 +356,9 @@ describe('autocompleteFiltersTool', () => {
 
   it('keeps the plain limit guidance for lookups that honor limit exactly', async () => {
     mockAutocompleteNaics.mockResolvedValueOnce({
-      results: Array.from({ length: 5 }, (_, i) => ({
-        code: `54151${i}`,
-        description: `Computer Systems Design ${i}`,
+      results: Array.from({ length: 6 }, (_, i) => ({
+        naics: `54151${i}`,
+        naics_description: `Computer Systems Design ${i}`,
       })),
     });
 
@@ -340,6 +444,136 @@ describe('autocompleteFiltersTool', () => {
     await autocompleteFiltersTool.handler(input, ctx);
 
     expect(mockAutocompleteNaics).toHaveBeenCalledWith('soft', 500, ctx);
+  });
+
+  describe('truncation evidence (#76)', () => {
+    const naicsRows = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        naics: `22131${i}`,
+        naics_description: `Water Industry ${i}`,
+      }));
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
+    it('requests one row past the limit so a full page can be told from a capped one', async () => {
+      mockAutocompleteNaics.mockResolvedValueOnce({ results: naicsRows(3) });
+      const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
+      const input = autocompleteFiltersTool.input.parse({
+        type: 'naics',
+        search_text: 'Water',
+        limit: 10,
+      });
+      await autocompleteFiltersTool.handler(input, ctx);
+
+      expect(mockAutocompleteNaics).toHaveBeenLastCalledWith('Water', 11, ctx);
+    });
+
+    it('sets no truncated when the whole match set exactly fills limit', async () => {
+      // Upstream answers "Water" with the same ten codes at limit 10, 11, and 500.
+      mockAutocompleteNaics.mockResolvedValueOnce({ results: naicsRows(10) });
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'naics',
+        search_text: 'Water',
+        limit: 10,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect((sc.results as unknown[]).length).toBe(10);
+      expect(sc.truncated).toBeUndefined();
+      expect(sc.shown).toBeUndefined();
+      expect(sc.cap).toBeUndefined();
+      expect(sc.notice).toBeUndefined();
+    });
+
+    it('sets truncated when more rows came back than limit, and slices to limit', async () => {
+      mockAutocompleteNaics.mockResolvedValueOnce({ results: naicsRows(10) });
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'naics',
+        search_text: 'Water',
+        limit: 9,
+      });
+
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect((sc.results as unknown[]).length).toBe(9);
+      expect(sc.total).toBe(9);
+      expect(sc.truncated).toBe(true);
+      expect(sc.shown).toBe(9);
+      expect(sc.cap).toBe(9);
+      expect(sc.notice).toContain('Raise limit');
+      expect(textOf(result)).toContain('Raise limit');
+    });
+
+    it('at the 500 ceiling discloses the upstream maximum instead of truncation', async () => {
+      // Every autocomplete route rejects limit 501 with HTTP 400, so no probe row is available.
+      mockAutocompleteNaics.mockResolvedValueOnce({ results: naicsRows(500) });
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'naics',
+        search_text: 'a',
+        limit: 500,
+      });
+
+      expect(mockAutocompleteNaics).toHaveBeenLastCalledWith('a', 500, expect.anything());
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect((sc.results as unknown[]).length).toBe(500);
+      expect(sc.truncated).toBeUndefined();
+      expect(sc.notice).toContain('upstream maximum of 500');
+      expect(textOf(result)).toContain('upstream maximum of 500');
+    });
+
+    it('below the ceiling at 500 sets neither truncated nor the maximum notice', async () => {
+      mockAutocompleteNaics.mockResolvedValueOnce({ results: naicsRows(499) });
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'naics',
+        search_text: 'a',
+        limit: 500,
+      });
+
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc.truncated).toBeUndefined();
+      expect(sc.notice).toBeUndefined();
+    });
+
+    it('judges recipient truncation on the bucket union before slicing', async () => {
+      // Name bucket short of limit, but identifier hits push the union past it.
+      mockAutocompleteRecipient.mockResolvedValueOnce({
+        results: [
+          ...Array.from({ length: 4 }, (_, i) => ({ recipient_name: `NAME ${i}`, uei: null })),
+          { recipient_name: 'UEI HIT', uei: 'UEI0', duns: null },
+          { recipient_name: 'DUNS HIT', uei: null, duns: 'DUNS0' },
+        ],
+      });
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'recipient',
+        search_text: 'a',
+        limit: 5,
+      });
+
+      expect(mockAutocompleteRecipient).toHaveBeenLastCalledWith('a', 6, expect.anything());
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect((sc.results as { name: string }[]).map((r) => r.name)).toEqual([
+        'NAME 0',
+        'NAME 1',
+        'NAME 2',
+        'NAME 3',
+        'UEI HIT',
+      ]);
+      expect(sc.truncated).toBe(true);
+      expect(sc.notice).toContain('search_text');
+    });
+
+    it('leaves an exactly-full recipient union untruncated', async () => {
+      mockAutocompleteRecipient.mockResolvedValueOnce({
+        results: Array.from({ length: 5 }, (_, i) => ({ recipient_name: `NAME ${i}` })),
+      });
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'recipient',
+        search_text: 'a',
+        limit: 5,
+      });
+
+      expect((result.structuredContent as Record<string, unknown>).truncated).toBeUndefined();
+    });
   });
 
   it('formats output with codes and names', () => {

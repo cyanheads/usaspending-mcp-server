@@ -35,16 +35,16 @@ const fullAwardFixture = {
   place_of_performance: {
     city_name: 'Seattle',
     state_code: 'WA',
-    country_code: 'USA',
+    location_country_code: 'USA',
     zip5: '98101',
   },
   recipient: {
     recipient_name: 'Acme Corp',
-    uei: 'AAAAAAAAAAAA',
+    recipient_uei: 'AAAAAAAAAAAA',
     recipient_hash: 'abc123',
     parent_recipient_name: 'Acme Holdings',
-    business_types: ['23'],
-    location: { city_name: 'Seattle', state_code: 'WA', country_code: 'USA' },
+    business_categories: ['Category Business'],
+    location: { city_name: 'Seattle', state_code: 'WA', location_country_code: 'USA' },
   },
   awarding_agency: {
     toptier_agency: { name: 'Department of Defense', code: '097', slug: 'department-of-defense' },
@@ -149,7 +149,7 @@ describe('getAwardTool', () => {
       type_description: 'Block Grant',
       category: 'grant',
       total_obligation: 100_000,
-      latest_transaction_assistance_data: { cfda_number: '10.001', cfda_title: 'Farm Income' },
+      cfda_info: [{ cfda_number: '10.001', cfda_title: 'Farm Income' }],
     });
 
     const ctx = createMockContext({ errors: getAwardTool.errors });
@@ -157,7 +157,7 @@ describe('getAwardTool', () => {
     const result = await getAwardTool.handler(input, ctx);
 
     expect(result.fain).toBe('GRANT001');
-    expect(result.cfda?.number).toBe('10.001');
+    expect(result.assistance_listings?.[0]?.number).toBe('10.001');
     expect(result.naics).toBeUndefined();
     expect(result.piid).toBeUndefined();
   });
@@ -190,7 +190,7 @@ describe('getAwardTool', () => {
     expect(result.parent_award?.type_description).toBe('GWAC');
   });
 
-  it('handles loan award with face_value and cfda', async () => {
+  it('handles loan award with loan value and assistance listing', async () => {
     mockGetAward.mockResolvedValueOnce({
       generated_unique_award_id: 'ASST_AWD_LOAN_001',
       fain: 'LOAN001',
@@ -198,10 +198,9 @@ describe('getAwardTool', () => {
       type_description: 'Direct Loan',
       category: 'loans',
       total_obligation: 250_000,
-      latest_transaction_assistance_data: {
-        cfda_number: '59.012',
-        cfda_title: 'Small Business Loans',
-      },
+      total_loan_value: 1_000_000,
+      total_subsidy_cost: 12_000,
+      cfda_info: [{ cfda_number: '59.012', cfda_title: 'Small Business Loans' }],
     });
 
     const ctx = createMockContext({ errors: getAwardTool.errors });
@@ -210,12 +209,14 @@ describe('getAwardTool', () => {
 
     expect(result.fain).toBe('LOAN001');
     expect(result.type).toBe('07');
-    expect(result.cfda?.number).toBe('59.012');
-    expect(result.cfda?.title).toBe('Small Business Loans');
+    expect(result.assistance_listings?.[0]?.number).toBe('59.012');
+    expect(result.assistance_listings?.[0]?.title).toBe('Small Business Loans');
+    expect(result.total_loan_value).toBe(1_000_000);
+    expect(result.total_subsidy_cost).toBe(12_000);
     expect(result.naics).toBeUndefined();
   });
 
-  it('uses recipient_id field when recipient_hash is absent', async () => {
+  it('takes recipient_id from recipient_hash only, ignoring the retired recipient_id path', async () => {
     mockGetAward.mockResolvedValueOnce({
       generated_unique_award_id: 'CONT_AWD_REC_ID',
       piid: 'PIID-REC',
@@ -231,7 +232,7 @@ describe('getAwardTool', () => {
     const input = getAwardTool.input.parse({ award_id: 'CONT_AWD_REC_ID' });
     const result = await getAwardTool.handler(input, ctx);
 
-    expect(result.recipient?.recipient_id).toBe('explicit-hash-P');
+    expect(result.recipient).toEqual({ recipient_name: 'Test Corp' });
   });
 
   it('formats output with recipient, agency, and amount fields', () => {
@@ -263,7 +264,7 @@ describe('getAwardTool', () => {
         uei: 'UUUUUUUUUUUU',
         recipient_id: 'hash-abc',
         parent_recipient_name: 'Parent Inc',
-        business_types: ['23'],
+        business_categories: ['Category Business'],
         location: { city_name: 'Seattle', state_code: 'WA', country_code: 'USA' },
       },
       awarding_agency: {

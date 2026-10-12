@@ -13,14 +13,20 @@ import {
   invertedRangeMessage,
   optionalIsoDate,
 } from './dates.js';
-import { buildFilters } from './filters.js';
+import {
+  analyticsTypeMismatch,
+  buildFilters,
+  CODE_FILTER_FIELDS,
+  codeFilterEcho,
+  describeCodeFilters,
+} from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
   title: 'Spending by Category',
   description:
-    'Aggregate federal spending grouped by a specific dimension: NAICS industry code, PSC product/service code, awarding agency, funding agency, CFDA assistance program, or recipient. Returns top items with obligation amounts — useful for trend and breakdown analysis. Chain NAICS codes into usaspending_search_awards filters or usaspending_autocomplete_filters lookups.',
+    'Aggregate federal spending grouped by a specific dimension: NAICS industry code, PSC product/service code, awarding agency, funding agency, CFDA assistance program, or recipient. Returns top items with obligation amounts — useful for trend and breakdown analysis. Filter by keyword, award type, agency, recipient, NAICS code, Assistance Listing, PSC, DEF code, or date range. Chain NAICS, PSC, and CFDA codes back into these filters, into usaspending_search_awards filters, or into usaspending_autocomplete_filters lookups. recipient_duns rows carry recipient_id, which opens the recipient profile in usaspending_get_recipient, and uei.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -34,10 +40,9 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
         'funding_subagency',
         'cfda',
         'recipient_duns',
-        'recipient_parent_duns',
       ])
       .describe(
-        'Breakdown dimension: naics (industry), psc (product/service code), awarding_agency, awarding_subagency, funding_agency, funding_subagency, cfda (assistance programs), recipient_duns, or recipient_parent_duns',
+        'Breakdown dimension: naics (industry), psc (product/service code), awarding_agency, awarding_subagency, funding_agency, funding_subagency, cfda (assistance programs), or recipient_duns (recipients)',
       ),
     filters: z
       .object({
@@ -46,9 +51,15 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
           .array(z.string())
           .optional()
           .describe('Award type code filters (A/B/C/D, 02–05, etc.)'),
-        agency_name: z.string().optional().describe('Awarding agency name filter'),
+        agency_name: z
+          .string()
+          .optional()
+          .describe(
+            'Awarding agency name filter, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches nothing',
+          ),
         recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
         naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
+        ...CODE_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start date (YYYY-MM-DD), 2007-10-01 or later. Given alone, the window runs through today (UTC).',
         ),
@@ -56,6 +67,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
           'End date (YYYY-MM-DD). Given alone, the window starts at 2007-10-01, the earliest searchable date.',
         ),
       })
+      .strict()
       .optional()
       .describe('Optional filters to scope the aggregation'),
     limit: z.number().int().min(1).max(100).default(10).describe('Maximum items to return (1–100)'),
@@ -69,9 +81,24 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
         z
           .object({
             id: z.string().optional().describe('Item identifier (varies by category)'),
-            code: z.string().optional().describe('Code value (NAICS, PSC, CFDA number, etc.)'),
+            code: z
+              .string()
+              .optional()
+              .describe('Code value (NAICS, PSC, CFDA number, recipient DUNS, etc.)'),
             name: z.string().optional().describe('Item name or description'),
             amount: z.number().optional().describe('Total obligation amount in USD'),
+            recipient_id: z
+              .string()
+              .optional()
+              .describe(
+                'Recipient hash ID (recipient_duns rows) — pass to usaspending_get_recipient for the profile. Absent when upstream has none.',
+              ),
+            uei: z
+              .string()
+              .optional()
+              .describe(
+                'Recipient Unique Entity Identifier (recipient_duns rows). Absent when upstream has none.',
+              ),
           })
           .describe('Category item with code, name, and obligation amount'),
       )
@@ -100,6 +127,18 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       .string()
       .optional()
       .describe('NAICS code filters applied (comma-separated)'),
+    applied_assistance_listings: z
+      .string()
+      .optional()
+      .describe('Assistance Listing numbers sent (comma-separated)'),
+    applied_psc_codes: z
+      .string()
+      .optional()
+      .describe('PSC codes sent, uppercased (comma-separated)'),
+    applied_def_codes: z
+      .string()
+      .optional()
+      .describe('DEF codes sent, uppercased (comma-separated)'),
     applied_time_period_start: z
       .string()
       .optional()
@@ -112,7 +151,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       .string()
       .optional()
       .describe(
-        'Names a date bound that was filled in because only the other was supplied, and suggests how to broaden filters when results are empty. Absent when neither applies.',
+        'Names a date bound that was filled in because only the other was supplied, and — when results are empty — names any Assistance Listing, PSC, or DEF codes sent and suggests how to broaden filters. Absent when neither applies.',
       ),
   },
 
@@ -149,6 +188,22 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       recovery:
         'Re-request with a start date of 2007-10-01 or later. For award data back to 2000-10-01, use the Custom Award Download feature on usaspending.gov or the bulk_download API endpoints.',
     },
+    {
+      reason: 'assistance_listings_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'filters.assistance_listings was given while every code in filters.award_type_codes is a contract or IDV code.',
+      retryable: false,
+      recovery:
+        'Add an assistance group to filters.award_type_codes — grants 02/03/04/05/F001/F002, direct payments 06/10/F006/F007, loans 07/08/F003/F004, or other assistance 09/11/-1/F005/F008/F009/F010 — or leave award_type_codes out to cover every award type.',
+    },
+    {
+      reason: 'psc_codes_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'filters.psc_codes was given while every code in filters.award_type_codes is an assistance code.',
+      retryable: false,
+      recovery:
+        'Add contracts A/B/C/D or IDVs IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E to filters.award_type_codes, or leave award_type_codes out to cover every award type.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -159,7 +214,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     });
     const svc = getUSASpendingService();
 
-    const { filters, timePeriod } = buildFilters(input.filters);
+    const { filters, timePeriod, codes } = buildFilters(input.filters);
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
     if (inverted) {
       throw ctx.fail('date_range_inverted', inverted);
@@ -168,6 +223,18 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     const beforeFloor = floorViolationMessage(timePeriod);
     if (beforeFloor) {
       throw ctx.fail('date_before_earliest', beforeFloor);
+    }
+    // Upstream answers a code filter no award type here can carry with $0 and no message.
+    const mismatch = analyticsTypeMismatch(
+      codes,
+      input.filters?.award_type_codes,
+      'filters.award_type_codes',
+    );
+    if (mismatch?.filter === 'assistance_listings') {
+      throw ctx.fail('assistance_listings_type_mismatch', mismatch.message);
+    }
+    if (mismatch?.filter === 'psc_codes') {
+      throw ctx.fail('psc_codes_type_mismatch', mismatch.message);
     }
     const data = await svc.spendingByCategory(
       input.category,
@@ -180,6 +247,8 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       ...(r.code ? { code: r.code } : {}),
       ...(r.name || r.description ? { name: r.name ?? r.description ?? undefined } : {}),
       ...(typeof r.amount === 'number' ? { amount: r.amount } : {}),
+      ...(r.recipient_id ? { recipient_id: r.recipient_id } : {}),
+      ...(r.uei ? { uei: r.uei } : {}),
     }));
 
     const pageMeta = data.page_metadata ?? {};
@@ -208,6 +277,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       ...(input.filters?.naics_codes?.length
         ? { applied_naics_codes: input.filters.naics_codes.join(', ') }
         : {}),
+      ...codeFilterEcho(codes),
       ...(timePeriod
         ? {
             applied_time_period_start: timePeriod.start_date,
@@ -219,8 +289,9 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     // enrich.notice is last-wins, so every notice source joins into one string.
     const notices = [filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS)];
     if (results.length === 0) {
+      const codeParts = describeCodeFilters(codes);
       notices.push(
-        `No ${input.category} data matched the filters. Try broadening filters or selecting a different category.`,
+        `No ${input.category} data matched the filters${codeParts.length ? ` (${codeParts.join(', ')})` : ''}. Try broadening filters or selecting a different category.`,
       );
     }
     const notice = notices.filter(Boolean).join(' ');
@@ -235,13 +306,24 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       formatPaginationLine(result.page_metadata),
     ];
     if (result.results.length > 0) {
+      /**
+       * Recipient identifiers get their own columns only when a row carries one, so
+       * other categories keep their table; a missing one is an empty cell.
+       */
+      const recipientCols = result.results.some((r) => r.recipient_id || r.uei);
       lines.push('');
-      lines.push('| Rank | ID | Name | Code | Obligation |');
-      lines.push('|:-----|:---|:-----|:-----|:-----------|');
+      if (recipientCols) {
+        lines.push('| Rank | ID | Name | Code | UEI | Recipient ID | Obligation |');
+        lines.push('|:-----|:---|:-----|:-----|:----|:-------------|:-----------|');
+      } else {
+        lines.push('| Rank | ID | Name | Code | Obligation |');
+        lines.push('|:-----|:---|:-----|:-----|:-----------|');
+      }
       result.results.forEach((r, i) => {
         const amt = r.amount !== undefined ? formatCurrency(r.amount) : 'N/A';
+        const recipient = recipientCols ? ` ${r.uei ?? ''} | ${r.recipient_id ?? ''} |` : '';
         lines.push(
-          `| ${i + 1} | ${r.id ?? 'N/A'} | ${r.name ?? 'N/A'} | ${r.code ?? 'N/A'} | ${amt} |`,
+          `| ${i + 1} | ${r.id ?? 'N/A'} | ${r.name ?? 'N/A'} | ${r.code ?? 'N/A'} |${recipient} ${amt} |`,
         );
       });
     }

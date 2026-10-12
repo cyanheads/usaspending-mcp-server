@@ -87,6 +87,12 @@ export interface RawAwardDetail {
   base_and_all_options?: number | null;
   base_exercised_options?: number | null;
   category?: string | null;
+  /** Assistance listings in upstream order; absent on contracts and IDVs. */
+  cfda_info?: Array<{
+    cfda_number?: string | null;
+    cfda_title?: string | null;
+    federal_action_obligation_amount?: number | null;
+  }> | null;
   date_signed?: string | null;
   description?: string | null;
   executive_details?: {
@@ -111,12 +117,6 @@ export interface RawAwardDetail {
   } | null;
   generated_unique_award_id?: string | null;
   id?: number | null;
-  latest_transaction_assistance_data?: {
-    cfda_number?: string | null;
-    cfda_title?: string | null;
-    face_value_loan_guarantee?: number | null;
-    original_loan_subsidy_cost?: number | null;
-  } | null;
   latest_transaction_contract_data?: {
     naics?: string | null;
     naics_description?: string | null;
@@ -151,7 +151,6 @@ export interface RawAwardDetail {
     state_code?: string | null;
     state_name?: string | null;
     country_name?: string | null;
-    country_code?: string | null;
     zip5?: string | null;
     congressional_code?: string | null;
     location_country_code?: string | null;
@@ -159,12 +158,12 @@ export interface RawAwardDetail {
   recipient?: {
     recipient_name?: string | null;
     recipient_hash?: string | null;
+    recipient_uei?: string | null;
     recipient_unique_id?: string | null;
-    parent_recipient_unique_id?: string | null;
+    parent_recipient_hash?: string | null;
     parent_recipient_name?: string | null;
-    recipient_id?: string | null;
-    uei?: string | null;
-    parent_uei?: string | null;
+    parent_recipient_uei?: string | null;
+    parent_recipient_unique_id?: string | null;
     location?: {
       address_line1?: string | null;
       address_line2?: string | null;
@@ -173,9 +172,10 @@ export interface RawAwardDetail {
       zip5?: string | null;
       zip4?: string | null;
       country_name?: string | null;
-      country_code?: string | null;
+      location_country_code?: string | null;
     } | null;
-    business_types?: string[] | null;
+    /** Human-readable category names (e.g. "U.S. Local Government"), not business type codes. */
+    business_categories?: string[] | null;
   } | null;
   subaward_count?: number | null;
   total_account_obligation?: number | null;
@@ -412,17 +412,23 @@ export interface RawBudgetaryResources {
   fiscal_year?: number | null;
 }
 
-/** Raw geography spending result */
+/**
+ * Raw `search/spending_by_geography/` row. The endpoint returns these five fields
+ * and no award count.
+ */
 export interface RawGeographyResult {
   aggregated_amount?: number | null;
-  award_count?: number | null;
   display_name?: string | null;
   per_capita?: number | null;
   population?: number | null;
   shape_code?: string | null;
 }
 
-/** Raw spending by category result */
+/**
+ * Raw spending by category result. `recipient_duns` rows carry no `id`; they
+ * carry `recipient_id` (the recipient hash) and `uei` instead, either of which
+ * can be null.
+ */
 export interface RawSpendingByCategoryResult {
   amount?: number | null;
   category?: string | null;
@@ -430,6 +436,8 @@ export interface RawSpendingByCategoryResult {
   description?: string | null;
   id?: number | string | null;
   name?: string | null;
+  recipient_id?: string | null;
+  uei?: string | null;
 }
 
 /**

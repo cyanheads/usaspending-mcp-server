@@ -14,6 +14,7 @@ import {
 } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import {
+  defaultIsTransient,
   type FetchWithTimeoutOptions,
   fetchWithTimeout,
   withRetry,
@@ -54,9 +55,10 @@ import type {
  * endpoints. Verified against the live API per endpoint:
  *
  * - `recipient/{id}/` — 400 for a well-formed miss ("Recipient ID not found")
- *   and for a malformed identifier ("Invalid Recipient-Level"). The
- *   `fiscal_year` / `award_type` query params are ignored rather than
- *   rejected, so no existing recipient can answer 400.
+ *   and for a malformed identifier ("Invalid Recipient-Level"). It also
+ *   answers a malformed `year` ("Invalid year: abc.") with 400, so
+ *   `getRecipient` only ever sends an integer `year` — any integer, in range
+ *   or not, answers 200 — and no existing recipient can answer 400.
  * - `federal_accounts/{code}/` — 400 for a well-formed miss ("Cannot find
  *   Federal Account"), 404 when the code shape fails URL routing.
  * - `agency/{code}/` and `awards/{id}/` — 404 for both a miss and a malformed
@@ -71,6 +73,27 @@ const ENTITY_MISS_STATUSES = new Set([400, 404]);
 
 /** Backoff before the first retry; subsequent waits double from here. */
 const RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * Request budget when `USASPENDING_RETRY_BUDGET_MS` is unset — raised to the
+ * per-attempt timeout when that is higher, so one attempt can always run its full
+ * timeout.
+ */
+const DEFAULT_REQUEST_BUDGET_MS = 45_000;
+
+/** `fetchWithTimeout`'s own per-attempt timeout firing, header or body phase. */
+function isAttemptTimeout(err: unknown): boolean {
+  return (
+    err instanceof McpError &&
+    err.code === JsonRpcErrorCode.Timeout &&
+    err.data?.errorSource === 'FetchTimeout'
+  );
+}
+
+/** `withRetry`'s `deadlineMs` clock expiring, mid-attempt or in place of a backoff. */
+function isBudgetExpiry(err: unknown): boolean {
+  return err instanceof McpError && err.data?.reason === 'retry_deadline_exceeded';
+}
 
 /**
  * Bytes of a non-2xx body read for diagnostics. The framework's default
@@ -188,7 +211,8 @@ export class USASpendingService {
       ? serverConfig.baseUrl
       : `${serverConfig.baseUrl}/`;
     this.timeoutMs = serverConfig.timeoutMs;
-    this.retryBudgetMs = serverConfig.retryBudgetMs ?? Math.round(serverConfig.timeoutMs * 1.5);
+    this.retryBudgetMs =
+      serverConfig.retryBudgetMs ?? Math.max(DEFAULT_REQUEST_BUDGET_MS, serverConfig.timeoutMs);
   }
 
   // --- HTTP primitives ---
@@ -197,33 +221,38 @@ export class USASpendingService {
    * Issues one upstream request under a wall-clock deadline spanning the whole
    * retry loop.
    *
-   * `withRetry` re-runs a transient failure three more times by default and a
-   * per-request timeout classifies as transient, so an endpoint that cannot
-   * answer inside `USASPENDING_TIMEOUT_MS` re-pays that budget on every attempt
-   * — measured at 128s against the 30s default. A timeout is not evidence the
-   * next attempt will be faster, so a single deadline signal, composed with the
-   * caller's and threaded into both `withRetry` and `fetchWithTimeout`, caps the
-   * total instead of letting it scale with the attempt count.
+   * One call-level budget (#52). `withRetry` re-runs a transient failure three
+   * more times by default, so with only a per-attempt timeout an endpoint that
+   * cannot answer re-pays that timeout on every attempt — measured at 128s
+   * against a 30s timeout. `withRetry`'s `deadlineMs` clock, composed with the
+   * caller's signal and threaded into `fetchWithTimeout`, caps the total instead
+   * of letting it scale with the attempt count; a backoff that would outlast what
+   * is left fails at once rather than sleeping into a certain timeout.
+   *
+   * Each attempt is cut at the smaller of `USASPENDING_TIMEOUT_MS` and the time
+   * left in that budget, and an attempt that times out is not retried (#79). A
+   * timeout is not evidence the next attempt will be faster: the uncached
+   * aggregations behind the slow calls repeat the same work, so a retry started
+   * with whatever the first attempt left over is cut too, and an answer that
+   * would have arrived inside the budget is lost to the earlier cut. Fast
+   * transient failures — a 5xx, an upstream 504, a network error, an HTML or
+   * unparseable body — still retry inside the budget.
    *
    * Worst case is `USASPENDING_RETRY_BUDGET_MS` plus the time to unwind an
-   * in-flight fetch: ~45s at the defaults, and ~180s if a caller raises
-   * `USASPENDING_TIMEOUT_MS` to its 120000 ceiling and leaves the budget derived
-   * — where the unbounded loop ran roughly eight minutes.
+   * in-flight fetch: 45s at the defaults, where a never-answering upstream sees
+   * exactly one request.
    *
-   * `this.timeoutMs` bounds the whole exchange, not just the header phase: a 2xx
-   * carrying a body comes back as a passthrough wrapper that keeps that deadline
-   * armed until the body closes, so the `await response.text()` below is covered
-   * too and a peer that answers headers and then stalls the stream cannot hold
-   * an attempt open past its timeout.
+   * The attempt timeout bounds the whole exchange, not just the header phase: a
+   * 2xx carrying a body comes back as a passthrough wrapper that keeps that
+   * deadline armed until the body closes, so the `await response.text()` below
+   * is covered too and a peer that answers headers and then stalls the stream
+   * cannot hold an attempt open past its timeout.
    *
-   * Deadline expiry reaches this frame two ways, neither coherent on its own.
-   * Aborted mid-fetch, `fetchWithTimeout` throws its `FetchAborted`
-   * `RequestCancelled` ("was aborted") and `withRetry` re-throws it verbatim,
-   * naming no deadline. Aborted mid-backoff, `withRetry`'s internal sleep
-   * rejects with the raw abort reason, which bypasses its error-enrichment path
-   * entirely and surfaces a bare `AbortError`. Both are normalized here into one
-   * `Timeout` naming the budget it exhausted. A caller-initiated abort is left
-   * untouched.
+   * A timeout reaches this frame as `fetchWithTimeout`'s own `FetchTimeout` or as
+   * `withRetry`'s `retry_deadline_exceeded` expiry, whichever clock fires first;
+   * both become one `Timeout` naming the limit that ended the call — the request
+   * budget when the attempt was cut at the time left in it, the per-attempt
+   * timeout otherwise. A caller-initiated abort is left untouched.
    *
    * Every other failure goes through {@link classifyUpstreamError}, so a
    * `Timeout` or `ServiceUnavailable` reaches the caller as the calling tool's
@@ -236,14 +265,12 @@ export class USASpendingService {
     ctx: Context,
     init: FetchWithTimeoutOptions,
   ): Promise<T> {
-    const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(), this.retryBudgetMs);
-    const signal = ctx.signal ? AbortSignal.any([deadline.signal, ctx.signal]) : deadline.signal;
-
+    let cutAtBudget = false;
     try {
       return await withRetry(
-        async () => {
-          const response = await fetchWithTimeout(url, this.timeoutMs, ctx, {
+        async ({ signal, remainingMs }) => {
+          cutAtBudget = remainingMs <= this.timeoutMs;
+          const response = await fetchWithTimeout(url, Math.min(this.timeoutMs, remainingMs), ctx, {
             ...init,
             signal,
             errorBodyLimit: ERROR_BODY_READ_BYTES,
@@ -255,28 +282,32 @@ export class USASpendingService {
           operation,
           context: ctx,
           baseDelayMs: RETRY_BASE_DELAY_MS,
-          signal,
+          signal: ctx.signal,
+          deadlineMs: this.retryBudgetMs,
+          isTransient: (err) => !isAttemptTimeout(err) && defaultIsTransient(err),
         },
       );
     } catch (err) {
       if (ctx.signal?.aborted) throw err;
-      if (deadline.signal.aborted) {
+      const attemptTimedOut = isAttemptTimeout(err);
+      const budgetSpent = isBudgetExpiry(err) || (attemptTimedOut && cutAtBudget);
+      if (budgetSpent || attemptTimedOut) {
         throw timeout(
-          `USAspending did not answer ${operation} within the ${this.retryBudgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`,
+          budgetSpent
+            ? `USAspending did not answer ${operation} within the ${this.retryBudgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`
+            : `USAspending did not answer ${operation} within the ${this.timeoutMs}ms per-attempt timeout; a timed-out attempt is not retried.`,
           {
             url,
             operation,
             budgetMs: this.retryBudgetMs,
             timeoutMs: this.timeoutMs,
-            errorSource: 'RequestBudgetExhausted',
+            errorSource: budgetSpent ? 'RequestBudgetExhausted' : 'AttemptTimeout',
             ...upstreamFailure('api_timeout'),
           },
           { cause: err },
         );
       }
       throw classifyUpstreamError(err, operation);
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -313,9 +344,10 @@ export class USASpendingService {
    * upstream failures into empty successes.
    *
    * The two agency sub-resources still declare the same `expectedStatuses`,
-   * because `usaspending_get_agency` resolves them alongside the agency detail
-   * and catches their rejection — a miss there is an expected outcome and logs
-   * at `debug`, while the still-thrown error reaches that caller's catch.
+   * because `usaspending_get_agency` resolves them alongside the agency detail,
+   * which decides existence: a miss there is an expected outcome and logs at
+   * `debug`, while the still-thrown error reaches that tool, which reports a
+   * failed sub-resource as an unavailable section of a partial result.
    * `listAgencies` and `getDisasterOverview` have no such caller, so their
    * misses stay at `error`.
    */
@@ -442,18 +474,21 @@ export class USASpendingService {
     return this.post<RawRecipientSearchResponse>('recipient/', params, ctx);
   }
 
+  /**
+   * Fetches a recipient profile. The endpoint scopes its totals by `year` alone
+   * (a fiscal year; omitted, the trailing 12 months) and has no award-type
+   * selector. `fiscal_year` must be an integer: a malformed `year` draws a 400,
+   * which {@link getEntity} would read as a missing recipient.
+   */
   async getRecipient(
     recipientId: string,
-    params: { fiscal_year?: number; award_type?: string },
+    params: { fiscal_year?: number },
     ctx: Context,
   ): Promise<RawRecipientDetail | undefined> {
-    ctx.log.debug('getRecipient', { recipientId });
-    const qs = new URLSearchParams();
-    if (params.fiscal_year) qs.set('fiscal_year', String(params.fiscal_year));
-    if (params.award_type) qs.set('award_type', params.award_type);
-    const query = qs.toString();
+    ctx.log.debug('getRecipient', { recipientId, fiscalYear: params.fiscal_year });
+    const query = params.fiscal_year !== undefined ? `?year=${params.fiscal_year}` : '';
     return await this.getEntity<RawRecipientDetail>(
-      `recipient/${encodeURIComponent(recipientId)}/${query ? `?${query}` : ''}`,
+      `recipient/${encodeURIComponent(recipientId)}/${query}`,
       ctx,
     );
   }
@@ -480,21 +515,37 @@ export class USASpendingService {
     return await this.getEntity<RawAgencyDetail>(`agency/${encodeURIComponent(toptierCode)}/`, ctx);
   }
 
+  /**
+   * One page of an agency's sub-agency breakdown. Without `fiscal_year` the
+   * upstream answers for the current fiscal year; the response's `fiscal_year`
+   * names the year it covered either way.
+   */
   async getAgencySubAgencies(
     toptierCode: string,
-    params: { page?: number; limit?: number },
+    params: { page?: number; limit?: number; fiscal_year?: number },
     ctx: Context,
-  ): Promise<{ results: RawSubAgencyEntry[]; page_metadata?: RawPageMetadata }> {
-    ctx.log.debug('getAgencySubAgencies', { toptierCode, page: params.page });
+  ): Promise<{
+    fiscal_year?: number | null;
+    results: RawSubAgencyEntry[];
+    page_metadata?: RawPageMetadata;
+  }> {
+    ctx.log.debug('getAgencySubAgencies', {
+      toptierCode,
+      page: params.page,
+      fiscalYear: params.fiscal_year,
+    });
     const qs = new URLSearchParams();
     if (params.page) qs.set('page', String(params.page));
     if (params.limit) qs.set('limit', String(params.limit));
+    if (params.fiscal_year !== undefined) qs.set('fiscal_year', String(params.fiscal_year));
     const query = qs.toString();
-    return await this.get<{ results: RawSubAgencyEntry[]; page_metadata?: RawPageMetadata }>(
-      `agency/${encodeURIComponent(toptierCode)}/sub_agency/${query ? `?${query}` : ''}`,
-      ctx,
-      [...ENTITY_MISS_STATUSES],
-    );
+    return await this.get<{
+      fiscal_year?: number | null;
+      results: RawSubAgencyEntry[];
+      page_metadata?: RawPageMetadata;
+    }>(`agency/${encodeURIComponent(toptierCode)}/sub_agency/${query ? `?${query}` : ''}`, ctx, [
+      ...ENTITY_MISS_STATUSES,
+    ]);
   }
 
   async getAgencyBudgetaryResources(

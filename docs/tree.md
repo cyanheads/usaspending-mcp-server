@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-10-07 11:28:26
+Generated on: 2026-10-12 19:10:28
 
 ```text
 usaspending-mcp-server/
@@ -28,6 +28,7 @@ usaspending-mcp-server/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
+│   ├── 0.5.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -159,6 +160,7 @@ usaspending-mcp-server/
 │   │           ├── get-recipient.tool.ts
 │   │           ├── index.ts
 │   │           ├── list-agencies.tool.ts
+│   │           ├── locations.ts
 │   │           ├── pagination.ts
 │   │           ├── search-awards.tool.ts
 │   │           ├── search-federal-accounts.tool.ts
@@ -174,6 +176,13 @@ usaspending-mcp-server/
 ├── tests/
 │   ├── config/
 │   │   └── session-mode.test.ts
+│   ├── fixtures/
+│   │   └── award-detail/
+│   │       ├── ASST_NON_P268K155150_091.json
+│   │       ├── ASST_NON_R24AP00702_014.json
+│   │       ├── ASST_NON_UM1AI068636_075.json
+│   │       ├── CONT_AWD_36C10B22F0089_3600_47QTCA22D003G_4732.json
+│   │       └── CONT_IDV_47QTCA22D003G_4732.json
 │   ├── scripts/
 │   │   └── build-changelog.test.ts
 │   ├── security/
@@ -185,16 +194,19 @@ usaspending-mcp-server/
 │   │   ├── date-filters.test.ts
 │   │   ├── disaster-spending.tool.test.ts
 │   │   ├── formatting.test.ts
+│   │   ├── get-agency-upstream.test.ts
 │   │   ├── get-agency.tool.test.ts
 │   │   ├── get-award-federal-accounts.tool.test.ts
 │   │   ├── get-award-subawards.tool.test.ts
 │   │   ├── get-award-transactions.tool.test.ts
+│   │   ├── get-award-upstream.test.ts
 │   │   ├── get-award.tool.test.ts
 │   │   ├── get-federal-account-breakdown.tool.test.ts
 │   │   ├── get-federal-account.tool.test.ts
 │   │   ├── get-idv-awards.tool.test.ts
 │   │   ├── get-recipient.tool.test.ts
 │   │   ├── list-agencies.tool.test.ts
+│   │   ├── nested-input-strict.test.ts
 │   │   ├── pagination.test.ts
 │   │   ├── search-awards-award-types.test.ts
 │   │   ├── search-awards.tool.test.ts
@@ -202,6 +214,7 @@ usaspending-mcp-server/
 │   │   ├── search-recipients.tool.test.ts
 │   │   ├── spending-by-category.tool.test.ts
 │   │   ├── spending-by-geography.tool.test.ts
+│   │   ├── spending-code-filters.test.ts
 │   │   ├── spending-over-time.tool.test.ts
 │   │   └── tool-contract.test.ts
 │   └── utils/

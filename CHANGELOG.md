@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-12 · ⚠️ Breaking
+
+Autocomplete agency rows drop id and name the matched agency; get_agency rejects both identifiers; nested filter keys are strict. Fixes location_filter normalization, analytics code filters, geography shape_codes, award-detail fields, recipient fiscal-year totals, agency budget years, truncation labels, and request timeouts.
+
 ## [0.4.5](changelog/0.4.x/0.4.5.md) — 2026-10-07
 
 Built on mcp-ts-core 0.13.13: tool errors carry a request ID, each tool's declared recovery hint is filled in by the framework, and the MCP Registry entry now starts the HTTP transport when HTTP is chosen.

@@ -29,6 +29,20 @@ export function resolveHasNext(
   return (upstreamHasNext ?? false) || shown >= limit;
 }
 
+/** Describes an empty page without inferring zero matches from missing rows. */
+export function emptyPageNotice(
+  page: number,
+  limit: number,
+  total: number | undefined,
+  zeroTotalNotice: string,
+): string {
+  if (total === 0) return zeroTotalNotice;
+  if (total !== undefined && total > 0 && (page - 1) * limit >= total) {
+    return `Page ${page} is past the end of the ${total.toLocaleString()} matching results. Request an earlier page with the same filters.`;
+  }
+  return `Page ${page} returned no results.${total !== undefined ? ` The API reports ${total.toLocaleString()} matching results across all pages.` : ' The API did not supply a total match count.'}`;
+}
+
 /**
  * Renders the pagination summary segment shared by paginated tools' `format()`:
  * `**Page:** <page> | **Total items:** ~<total> | **Per page:** <limit> | **Has next:** <Yes|No>`.

@@ -7,7 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
-import { formatPaginationLine } from './pagination.js';
+import { emptyPageNotice, formatPaginationLine } from './pagination.js';
 
 export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_accounts', {
   title: 'Get Award Federal Accounts',
@@ -102,7 +102,7 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — the award_id may not exist or may have no account linkage. Absent when results are present.',
+        'Recovery for an empty page, distinguished from a known zero total; absent when results are present.',
       ),
   },
 
@@ -176,9 +176,12 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
 
     if (results.length === 0) {
       ctx.enrich.notice(
-        `No federal accounts fund award "${input.award_id}". ` +
-          'Verify the award_id is a generated_unique_award_id from usaspending_search_awards ' +
-          '(generated_internal_id field) — a nonexistent award_id returns this same empty result.',
+        emptyPageNotice(
+          currentPage,
+          input.limit,
+          total,
+          `No federal accounts fund award "${input.award_id}". Verify the award_id is a generated_unique_award_id from usaspending_search_awards (generated_internal_id field) — a nonexistent award_id returns this same empty result.`,
+        ),
       );
     }
 

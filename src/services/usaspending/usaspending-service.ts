@@ -463,7 +463,7 @@ export class USASpendingService {
 
   searchRecipients(
     params: {
-      keyword: string;
+      keyword?: string;
       award_type?: string;
       limit?: number;
       page?: number;
@@ -606,9 +606,12 @@ export class USASpendingService {
 
   // --- Disaster ---
 
-  getDisasterOverview(ctx: Context): Promise<RawDisasterOverview> {
+  getDisasterOverview(ctx: Context, defCodes?: string[]): Promise<RawDisasterOverview> {
     ctx.log.debug('getDisasterOverview');
-    return this.get<RawDisasterOverview>('disaster/overview/', ctx);
+    const query = defCodes?.length
+      ? `?${new URLSearchParams({ def_codes: defCodes.join(',') })}`
+      : '';
+    return this.get<RawDisasterOverview>(`disaster/overview/${query}`, ctx);
   }
 
   getDisasterByAgency(

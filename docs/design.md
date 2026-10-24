@@ -144,6 +144,8 @@ This tool dispatches across the disaster endpoint family on `dimension`, one rou
 
 This consolidates the disaster endpoints into one tool. The agent selects the breakdown axis (`dimension`) without knowing endpoint topology.
 
+Overview accepts optional `filters.def_codes`, encoded as one comma-delimited `def_codes` query parameter; absent or empty codes leave it unfiltered. Other dimensions require at least one code (`missing_def_codes`, a non-retryable validation error). Recipient `filters.query` is trimmed and sent under `filter.query`; blank text applies no query. Applied codes and recipient query are echoed. Declared filters that do not apply to a dimension remain accepted with an ignored-filter notice: query outside recipient, geo_layer outside geography, and award_type_codes on overview. Filtering overview can still time out; recovery retains retry and agency-breakdown alternatives.
+
 ---
 
 ## Design Decisions
@@ -221,7 +223,7 @@ A total count is not universal, so `has_next` is the only continuation signal ev
 | `search/spending_by_category/{category}/` | `usaspending_spending_by_category` |
 | `idvs/awards/` | `usaspending_get_idv_awards` |
 
-Among the endpoints that do publish one, `awards/accounts/` and `federal_accounts/` name it `count` rather than `total`, and `disaster/recipient/spending/` reports a 10,000 ceiling rather than a count — `usaspending_disaster_spending` discloses the cap on the response.
+Among the endpoints that do publish one, `awards/accounts/` and `federal_accounts/` name it `count` rather than `total`, and `disaster/recipient/spending/` reports a 10,000 reachable ceiling rather than an exact count. That ceiling is a lower bound on possible matches; `usaspending_disaster_spending` preserves the total and discloses the cap with guidance to narrow using `filters.query`. Upstream messages, ignored filters, cap disclosures, and empty-page recovery compose in one notice on both surfaces. An empty page suggests an earlier page with the same filters only when its offset reaches a known positive total; an empty interior page reports the inconsistency without claiming exhaustion. An absent total is never treated as zero. Overview's deliberately empty results do not trigger pagination recovery.
 
 `disaster/spending_by_geography/` is not paginated: it returns every area whatever paging the request carries (960 counties for `def_codes: ["L"]`, 3,189 for `["N"]`). `usaspending_disaster_spending` ranks the whole set by `aggregated_amount` descending, ties by `shape_code`, and slices page `page` of size `limit`; `total` counts every area, including the unattributed row (null `shape_code`), and `has_next` is `page × limit < total`. Each page re-fetches the full set. While `has_next` is true the response sets `truncated` / `shown` / `cap` and `truncationCeiling`, the lowest amount shown and an upper bound on every later page. No geography totals are computed.
 

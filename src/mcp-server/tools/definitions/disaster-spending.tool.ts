@@ -5,7 +5,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type {
   RawDisasterBreakdownResponse,
   RawDisasterResult,
@@ -13,7 +13,7 @@ import type {
 } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
-import { formatPaginationLine } from './pagination.js';
+import { emptyPageNotice, formatPaginationLine } from './pagination.js';
 
 /**
  * `disaster/recipient/spending/` reports this number as a ceiling, not a count.
@@ -57,6 +57,9 @@ function rowId(id: RawDisasterResult['id']): string | undefined {
   return id == null ? undefined : String(id);
 }
 
+const ZERO_TOTAL_NOTICE =
+  'No data found for the specified DEF codes and dimension. Try different DEF codes or another breakdown dimension — def_codes is required for all non-overview dimensions and cannot be removed.';
+
 export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   title: 'Disaster and Emergency Spending',
   description:
@@ -81,9 +84,15 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           .array(z.string())
           .optional()
           .describe(
-            'DEF codes to filter by (e.g., ["L", "M", "N", "O", "P"] for COVID-19). Required for all dimensions except overview — the upstream API returns HTTP 422 when omitted for agency, cfda, recipient, and geography breakdowns. DEF codes appear in usaspending_get_agency def_codes fields.',
+            'DEF codes to filter by (e.g., ["L", "M", "N", "O", "P"] for COVID-19). Optional for overview totals and funding; required for agency, cfda, recipient, and geography breakdowns. DEF codes appear in usaspending_get_agency def_codes fields.',
           ),
         award_type_codes: z.array(z.string()).optional().describe('Award type code filters'),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            'Recipient search text, trimmed before sending. Omitted or blank means no query filter. Ignored with a notice on other dimensions.',
+          ),
         geo_layer: z
           .enum(['state', 'county'])
           .optional()
@@ -109,6 +118,8 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   // Agent-facing context: the dimension applied and pagination for non-overview dimensions.
   enrichment: {
     applied_dimension: z.string().describe('Breakdown dimension applied'),
+    applied_def_codes: z.string().optional().describe('DEF codes applied (comma-separated)'),
+    applied_query: z.string().optional().describe('Trimmed recipient query sent upstream'),
     totalCount: z
       .number()
       .optional()
@@ -138,7 +149,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .string()
       .optional()
       .describe(
-        'recipient: why the total is a cap and how to bring the set under it. geography: how many areas rank below this page and how to reach them.',
+        'Upstream messages, ignored filters, empty-page recovery, and guidance for recipient ceilings or remaining geography areas.',
       ),
   },
 
@@ -270,6 +281,14 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
   errors: [
     {
+      reason: 'missing_def_codes',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A non-overview dimension has no DEF codes.',
+      retryable: false,
+      recovery:
+        'Provide at least one code in filters.def_codes, or use dimension "overview" without codes. Find codes in usaspending_get_agency def_codes fields.',
+    },
+    {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'USAspending.gov API is unreachable or returns an error.',
@@ -284,7 +303,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       retryable: true,
       thrownBy: 'service',
       recovery:
-        'By dimension — agency, cfda, recipient: pass fewer filters.def_codes or a smaller limit, then retry. geography: pass fewer filters.def_codes, then retry. overview: the upstream endpoint can run past the request budget on its own, so retry later, or call dimension "agency" with filters.def_codes (e.g. ["L", "M", "N", "O", "P"] for COVID-19), spending_type "total", and limit 100 for per-agency obligations and outlays plus overall totals.',
+        'By dimension — agency, cfda, recipient: pass fewer filters.def_codes or a smaller limit, then retry. geography: pass fewer filters.def_codes, then retry. overview: narrow with optional filters.def_codes; filtered requests can still time out, so retry later, or call dimension "agency" with filters.def_codes (e.g. ["L", "M", "N", "O", "P"] for COVID-19), spending_type "total", and limit 100 for per-agency obligations and outlays plus overall totals.',
     },
   ],
 
@@ -295,26 +314,38 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     });
 
     if (input.dimension !== 'overview' && !input.filters?.def_codes?.length) {
-      throw validationError(
-        `def_codes is required when dimension is "${input.dimension}". ` +
-          'The USAspending API returns HTTP 422 when def_codes is omitted for non-overview dimensions. ' +
-          'Provide at least one DEF code (e.g., ["L", "M", "N", "O", "P"] for COVID-19). ' +
-          'DEF codes are listed in the usaspending_get_agency def_codes fields.',
+      throw ctx.fail(
+        'missing_def_codes',
+        `def_codes is required when dimension is "${input.dimension}". Provide at least one DEF code in filters.def_codes (e.g., ["L", "M", "N", "O", "P"] for COVID-19). DEF codes are listed in the usaspending_get_agency def_codes fields.`,
         { dimension: input.dimension, missing_field: 'filters.def_codes' },
       );
     }
 
     const svc = getUSASpendingService();
+    const notices: string[] = [];
+    const query = input.filters?.query?.trim();
+    const ignoredFilters: string[] = [];
+    if (query && input.dimension !== 'recipient') ignoredFilters.push('filters.query');
+    if (input.filters?.geo_layer && input.dimension !== 'geography')
+      ignoredFilters.push('filters.geo_layer');
+    if (input.filters?.award_type_codes?.length && input.dimension === 'overview')
+      ignoredFilters.push('filters.award_type_codes');
+    if (ignoredFilters.length)
+      notices.push(`Ignored for dimension "${input.dimension}": ${ignoredFilters.join(', ')}.`);
+    if (input.filters?.def_codes?.length)
+      ctx.enrich({ applied_def_codes: input.filters.def_codes.join(', ') });
+    if (query && input.dimension === 'recipient') ctx.enrich({ applied_query: query });
 
     const baseBody: Record<string, unknown> = {};
     const filterBody: Record<string, unknown> = {};
     if (input.filters?.def_codes?.length) filterBody.def_codes = input.filters.def_codes;
     if (input.filters?.award_type_codes?.length)
       filterBody.award_type_codes = input.filters.award_type_codes;
+    if (query && input.dimension === 'recipient') filterBody.query = query;
     if (Object.keys(filterBody).length > 0) baseBody.filter = filterBody;
 
     if (input.dimension === 'overview') {
-      const data = await svc.getDisasterOverview(ctx);
+      const data = await svc.getDisasterOverview(ctx, input.filters?.def_codes);
       const funding = (data.funding ?? []).map((f) => ({
         ...(f.def_code ? { def_code: f.def_code } : {}),
         ...(typeof f.amount === 'number' ? { amount: f.amount } : {}),
@@ -323,6 +354,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       }));
       const spending = data.spending ?? {};
       ctx.enrich({ applied_dimension: 'overview' });
+      if (notices.length) ctx.enrich.notice(notices.join(' '));
       return {
         dimension: 'overview',
         spending_type: 'spending',
@@ -413,13 +445,19 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       });
       if (hasNext) {
         const ceiling = pageAreas.at(-1)?.aggregated_amount;
+        notices.push(
+          `${(total - input.page * input.limit).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)}` : ''}. Request page ${input.page + 1} to continue${input.limit < 100 ? ', or raise limit (max 100)' : ''}.`,
+        );
         ctx.enrich.truncated({
           shown: pageAreas.length,
           cap: input.limit,
           ...(ceiling !== undefined ? { ceiling } : {}),
-          guidance: `${(total - input.page * input.limit).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)}` : ''}. Request page ${input.page + 1} to continue${input.limit < 100 ? ', or raise limit (max 100)' : ''}.`,
+          guidance: notices.join(' '),
         });
       }
+      if (pageAreas.length === 0)
+        notices.push(emptyPageNotice(input.page, input.limit, total, ZERO_TOTAL_NOTICE));
+      if (notices.length) ctx.enrich.notice(notices.join(' '));
       return {
         dimension: 'geography',
         spending_type: geoSpendingType,
@@ -463,12 +501,19 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
     if (input.dimension === 'recipient' && pageMeta.total === RECIPIENT_TOTAL_CEILING) {
       const ceiling = RECIPIENT_TOTAL_CEILING.toLocaleString();
+      notices.push(
+        `The recipient breakdown caps its reachable result set at ${ceiling} and reports that ceiling as the total. It is a lower bound on possible matches, not an exact count — recipients past the ${ceiling}th cannot be paged to. Narrow with filters.query, or fewer filters.def_codes, to bring the result set below the ceiling and get a countable total.`,
+      );
       ctx.enrich.truncated({
         shown: results.length,
         cap: RECIPIENT_TOTAL_CEILING,
-        guidance: `The recipient breakdown caps its reachable result set at ${ceiling} and reports that cap as the total, so this total is an upper bound rather than a count — recipients past the ${ceiling}th cannot be paged to. Narrow filters.def_codes to a single code or a smaller set to bring the result set under the cap and get a countable total.`,
+        guidance: notices.join(' '),
       });
     }
+    notices.push(...(rawResults.messages ?? []));
+    if (results.length === 0)
+      notices.push(emptyPageNotice(currentPage, input.limit, pageMeta.total, ZERO_TOTAL_NOTICE));
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       dimension: input.dimension,
@@ -534,18 +579,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       lines.push(formatPaginationLine(result.page_metadata));
     }
 
-    if (result.results.length === 0) {
-      const total = result.page_metadata?.total ?? 0;
-      if (total > 0) {
-        lines.push(
-          `\n> Page ${result.page_metadata?.page} is past the end of the ${total.toLocaleString()} matching rows. Request an earlier page.`,
-        );
-      } else if (!result.overview) {
-        lines.push(
-          '\n> No data found for the specified DEF codes and dimension. Try different DEF codes or another breakdown dimension — def_codes is required for all non-overview dimensions and cannot be removed.',
-        );
-      }
-    } else {
+    if (result.results.length > 0) {
       // Only the agency breakdown under spending_type total carries per-row budgetary
       // resources; elsewhere the column would be all N/A.
       const showBudgetary = result.results.some((r) => r.total_budgetary_resources !== undefined);

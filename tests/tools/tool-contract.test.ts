@@ -62,7 +62,8 @@ const awardFixture = {
 vi.mock('@/services/usaspending/usaspending-service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/usaspending/usaspending-service.js')>()),
   getUSASpendingService: () => ({
-    getDisasterOverview: (ctx: Context) => realService().getDisasterOverview(ctx),
+    getDisasterOverview: (ctx: Context, defCodes?: string[]) =>
+      realService().getDisasterOverview(ctx, defCodes),
     getDisasterByAgency: (
       spendingType: 'award' | 'total',
       body: Record<string, unknown>,

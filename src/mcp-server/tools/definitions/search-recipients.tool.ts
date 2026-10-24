@@ -7,7 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
-import { formatPaginationLine } from './pagination.js';
+import { emptyPageNotice, formatPaginationLine } from './pagination.js';
 
 export const searchRecipientsTool = tool('usaspending_search_recipients', {
   title: 'Search Award Recipients',
@@ -19,7 +19,9 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     keyword: z
       .string()
       .min(1)
-      .describe('Name, UEI, DUNS, or keyword to search for — partial matches are supported'),
+      .describe(
+        'Name, UEI, DUNS, or keyword to search for — partial matches are supported. Surrounding whitespace is trimmed; blank text applies no keyword filter and is disclosed.',
+      ),
     award_type: z
       .enum(['contracts', 'grants', 'direct_payments', 'loans', 'other_financial_assistance'])
       .optional()
@@ -92,7 +94,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       .string()
       .optional()
       .describe(
-        'Recovery hint — how to continue to the next page when more results exist, or how to broaden the search when empty. Absent when the full match set fits on this page.',
+        'Blank-keyword disclosure and pagination recovery. An empty page is distinguished from a known zero total; absent when no notice applies.',
       ),
   },
 
@@ -122,9 +124,10 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       limit: input.limit,
     });
     const svc = getUSASpendingService();
+    const keyword = input.keyword.trim();
     const data = await svc.searchRecipients(
       {
-        keyword: input.keyword,
+        ...(keyword ? { keyword } : {}),
         ...(input.award_type !== undefined ? { award_type: input.award_type } : {}),
         limit: input.limit,
         page: input.page,
@@ -155,17 +158,27 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     ctx.enrich({ recipient_count: results.length, page: currentPage, has_next: hasNext });
     if (total !== undefined) ctx.enrich.total(total);
 
+    const notices: string[] = [];
+    if (!keyword)
+      notices.push(
+        'No keyword filter was applied because keyword was blank after trimming; any award_type filter still applies.',
+      );
     if (results.length === 0) {
-      const pageNote = input.page > 1 ? ` on page ${input.page}` : '';
-      ctx.enrich.notice(
-        `No recipients matched "${input.keyword}"${pageNote}. Try a partial name, different spelling, or a UEI number directly.`,
+      notices.push(
+        emptyPageNotice(
+          currentPage,
+          input.limit,
+          total,
+          `No recipients matched${keyword ? ` "${keyword}"` : ' the selected filters'}. Try a partial name, different spelling, or a UEI number directly.`,
+        ),
       );
     } else if (hasNext) {
       const totalNote = total !== undefined ? ` (${total.toLocaleString()} total)` : '';
-      ctx.enrich.notice(
+      notices.push(
         `More recipients match${totalNote}. Request page ${currentPage + 1} to continue.`,
       );
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       results,

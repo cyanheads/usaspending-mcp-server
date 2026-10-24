@@ -494,7 +494,7 @@ describe('usaspending_search_awards — assistance_listings filter (#61)', () =>
     const result = await run({ assistance_listings: ['99.999'], award_type_codes: ['02'] });
 
     const notice = (result.structuredContent as { notice?: string }).notice;
-    expect(notice).toContain('No awards matched');
+    expect(notice).toContain('Page 1 returned no awards');
     expect(notice).toContain('assistance_listings=99.999');
   });
 });

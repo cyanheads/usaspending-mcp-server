@@ -29,6 +29,7 @@ export interface RawAwardSummary {
   'Place of Performance Country Code'?: string | null;
   'Place of Performance State Code'?: string | null;
   'Place of Performance Zip5'?: string | null;
+  'Primary Place of Performance'?: { city_name?: string | null } | null;
   program_activities?: unknown;
   'Recipient City Name'?: string | null;
   'Recipient Country Code'?: string | null;
@@ -510,6 +511,7 @@ export interface RawDisasterTotals {
 
 /** Raw disaster breakdown response (agency/cfda/recipient) */
 export interface RawDisasterBreakdownResponse {
+  messages?: string[];
   page_metadata?: RawPageMetadata;
   results?: RawDisasterResult[];
   totals?: RawDisasterTotals | null;

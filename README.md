@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.5.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.5.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## Overview
 
-Federal award, recipient, agency, and spending data from USAspending.gov, the US Treasury's DATA Act transparency platform. Search and trace awards down to transactions, subawards, and funding accounts; profile recipients and agencies; and aggregate spending by geography, category, time, and disaster appropriation. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Where federal money goes, from USAspending.gov: awards, recipients, agencies, and spending. Search and trace awards down to transactions, subawards, and funding accounts; profile recipients and agencies; and aggregate spending by geography, category, time, and disaster appropriation.
 
 ### Tools
 
@@ -120,7 +120,7 @@ Federal award, recipient, agency, and spending data from USAspending.gov, the US
 
 ### `usaspending_search_recipients` <sub>tool</sub>
 
-- `keyword` matches names, UEI, or DUNS, partial matches included; optional `award_type` scopes the totals; `limit` up to 100
+- `keyword` matches names, UEI, or DUNS, partial matches included; surrounding whitespace is trimmed, and blank text applies no keyword filter with a notice. Optional `award_type` still scopes the totals; `limit` up to 100
 - Rows carry `id` (a hash suffixed `-P` parent, `-C` child, or `-R` standalone) for `usaspending_get_recipient`, plus `uei`, `duns`, `recipient_level`, and `amount`; `page_metadata.total` is the full match count
 
 ---
@@ -166,9 +166,10 @@ Federal award, recipient, agency, and spending data from USAspending.gov, the US
 
 ### `usaspending_disaster_spending` <sub>tool</sub>
 
-- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; every dimension except `overview` requires `filters.def_codes` (e.g. `["L", "M", "N", "O", "P"]` for COVID-19); `limit` up to 100 on every dimension but `overview`; `spending_type` (`award`, the default, or `total`) applies to agency only, and geography takes `filters.geo_layer` (`state`, `county`)
-- Rows carry `obligation`, `outlay`, and `award_count`, plus `total_budgetary_resources` on agency rows under `spending_type: total`; `overview` returns totals and `funding_by_def_code`. A recipient row's `id` chains to `usaspending_get_recipient`. The recipient total tops out at 10,000, and a response at that cap is flagged `truncated`. Geography areas are ranked by `aggregated_amount` and paged with `limit` and `page`, with the full area count as `total`; a page with areas below it is flagged `truncated`, and `truncationCeiling` is the lowest amount shown. Spending with no recorded place of performance ranks as one unattributed area
-- Agency, cfda, and recipient also return `totals` across every matching row: `obligation`, `outlay`, and either `total_budgetary_resources` (agency, `total`) or `award_count`. When `overview` outlasts the request budget, the agency breakdown with `spending_type: total` still reports obligations, outlays, and budgetary resources
+- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; `filters.def_codes` is optional for `overview` and required for every other dimension (`missing_def_codes` when absent/empty). Codes such as `["L", "M", "N", "O", "P"]` isolate COVID-19 funding and are echoed as `applied_def_codes`. `limit` is up to 100 on every dimension but `overview`; `spending_type` (`award`, the default, or `total`) applies to agency only, and geography takes `filters.geo_layer` (`state`, `county`)
+- Rows carry `obligation`, `outlay`, and `award_count`, plus `total_budgetary_resources` on agency rows under `spending_type: total`; `overview` returns totals and `funding_by_def_code`. A recipient row's `id` chains to `usaspending_get_recipient`. Recipient `filters.query` narrows by search text; it is trimmed and echoed as `applied_query`, with blanks applying no query. A recipient total of 10,000 is a reachable ceiling and a lower bound on possible matches, flagged `truncated`; narrow with `filters.query` to reach the tail. Geography areas are ranked by `aggregated_amount` and paged with `limit` and `page`, with the full area count as `total`; a page with areas below it is flagged `truncated`, and `truncationCeiling` is the lowest amount shown. Spending with no recorded place of performance ranks as one unattributed area
+- Agency, cfda, and recipient also return `totals` across every matching row: `obligation`, `outlay`, and either `total_budgetary_resources` (agency, `total`) or `award_count`. Overview can still time out with codes supplied: narrow `filters.def_codes`, retry later, or use the agency breakdown with `spending_type: total` for obligations, outlays, and budgetary resources
+- Notices preserve upstream messages, ignored filters, cap guidance, and empty-page recovery on both output surfaces. `query` is ignored outside recipient, `geo_layer` outside geography, and `award_type_codes` on overview. An empty page whose offset reaches a positive total directs callers to an earlier page with the same filters; an empty interior page reports the total without claiming exhaustion, and an absent total stays unknown
 
 ---
 
@@ -206,8 +207,8 @@ Agent-friendly output:
 
 - Chaining IDs as explicit fields: `generated_internal_id`, `agency_slug`, `recipient.recipient_id`, `federal_account`, and `account_number`, so agents follow the money without parsing display strings
 - Honest pagination: `page_metadata.has_next` on every list, a `total` or `count` where the upstream publishes one, and `truncated` / `shown` / `cap` only when rows are known to exist beyond those returned. A full page with no such evidence keeps `has_next` without claiming truncation
-- Empty results are notices, not errors: an empty page carries a `notice` echoing the filters and how to broaden them. The ID-keyed list tools (transactions, subawards, funding accounts, IDV children, account breakdown) return an empty list for an unknown ID rather than failing
-- Typed failures with recovery hints: `award_not_found`, `recipient_not_found`, `agency_not_found`, `account_not_found`, `no_match`, `conflicting_input`, `date_before_earliest`, `date_range_inverted`, `unsupported_sort`, `assistance_listings_type_mismatch`, `psc_codes_type_mismatch`, `invalid_location`, `pagination_limit_exceeded`
+- Empty results are notices, not errors: account funding, account breakdown, and recipient search distinguish a known zero total from an empty page past the total, which directs callers to an earlier page with the same filters. Without a total, notices describe only the page; award search never supplies a total. The ID-keyed list tools (transactions, subawards, funding accounts, IDV children, account breakdown) return an empty list for an unknown ID rather than failing
+- Typed failures with recovery hints: `award_not_found`, `recipient_not_found`, `agency_not_found`, `account_not_found`, `no_match`, `conflicting_input`, `date_before_earliest`, `date_range_inverted`, `unsupported_sort`, `assistance_listings_type_mismatch`, `psc_codes_type_mismatch`, `invalid_location`, `pagination_limit_exceeded`, `incomplete_cursor`, `missing_def_codes`
 
 ## Getting started
 

@@ -36,7 +36,7 @@ describe('searchAwardsTool', () => {
           'End Date': '2024-12-31',
           Description: 'IT services contract',
           'Funding Agency': 'Department of Defense',
-          'Place of Performance City Code': 'Seattle',
+          'Primary Place of Performance': { city_name: 'Seattle' },
           'Place of Performance State Code': 'WA',
           'Place of Performance Country Code': 'USA',
           'Awarding Agency Code': '097',
@@ -219,7 +219,7 @@ describe('searchAwardsTool', () => {
 
     expect(result.results).toHaveLength(0);
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.notice).toContain('No awards matched');
+    expect(enrichment.notice).toContain('Page 1 returned no awards');
   });
 
   it('formats output with no place_of_performance when fields are absent', () => {

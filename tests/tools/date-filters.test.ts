@@ -371,7 +371,7 @@ describe('usaspending_search_awards — date specifics (#58, #62)', () => {
     });
 
     const notice = (result.structuredContent as { notice?: string }).notice;
-    expect(notice).toContain('No awards matched');
+    expect(notice).toContain('Page 1 returned no awards');
     expect(notice).toContain('filters.time_period_end');
   });
 });

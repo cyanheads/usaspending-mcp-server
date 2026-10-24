@@ -503,7 +503,7 @@ describe('usaspending_search_awards code filters (#77)', () => {
     const result = await runSearch({ psc_codes: ['zz'], def_codes: ['q'] });
 
     const notice = (result.structuredContent as { notice?: string }).notice;
-    expect(notice).toContain('No awards matched');
+    expect(notice).toContain('Page 1 returned no awards');
     expect(notice).toContain('psc_codes=ZZ');
     expect(notice).toContain('def_codes=Q');
   });

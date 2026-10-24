@@ -8,7 +8,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
-import { formatPaginationLine } from './pagination.js';
+import { emptyPageNotice, formatPaginationLine } from './pagination.js';
 
 export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_account_breakdown', {
   title: 'Get Federal Account Breakdown',
@@ -90,7 +90,7 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — the account code may not exist or may have no obligations on this axis. Absent when results are present.',
+        'Recovery for an empty page, distinguished from a known zero total; absent when results are present.',
       ),
   },
 
@@ -155,10 +155,12 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
 
     if (results.length === 0) {
       ctx.enrich.notice(
-        `No ${input.dimension} obligations found for federal account "${input.account_code}". ` +
-          'Verify the code with usaspending_search_federal_accounts and pass its account_number value ' +
-          '— a nonexistent account code returns this same empty result. ' +
-          `Try dimension="${input.dimension === 'program_activity' ? 'object_class' : 'program_activity'}" for the other breakdown axis.`,
+        emptyPageNotice(
+          currentPage,
+          input.limit,
+          total,
+          `No ${input.dimension} obligations found for federal account "${input.account_code}". Verify the code with usaspending_search_federal_accounts and pass its account_number value — a nonexistent account code returns this same empty result. Try dimension="${input.dimension === 'program_activity' ? 'object_class' : 'program_activity'}" for the other breakdown axis.`,
+        ),
       );
     }
 

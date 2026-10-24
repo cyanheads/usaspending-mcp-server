@@ -5,7 +5,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import {
   ANALYTICS_DATE_FIELDS,
@@ -47,7 +47,7 @@ const AWARD_SEARCH_FIELDS = [
   'generated_internal_id',
   'Last Modified Date',
   'Funding Agency',
-  'Place of Performance City Code',
+  'Primary Place of Performance',
   'Place of Performance State Code',
   'Place of Performance Country Code',
   'Awarding Agency Code',
@@ -438,7 +438,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe(
-        'How to page on when more results may remain, which date bound was filled in when only the other was supplied, and — when results are empty — the applied filters with how to broaden. Absent when none applies.',
+        'How to page on when more results may remain, which date bound was filled in when only the other was supplied, and the applied filters on an empty page. This endpoint supplies no total, so an empty page does not establish zero matches. Absent when none applies.',
       ),
   },
 
@@ -462,6 +462,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   },
 
   errors: [
+    {
+      reason: 'incomplete_cursor',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'Only one of last_record_sort_value and last_record_unique_id was supplied.',
+      retryable: false,
+      recovery:
+        'Provide both last_record_sort_value and last_record_unique_id from a prior page_metadata, or omit both to use page-number pagination.',
+    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -548,7 +556,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     const hasSortValue = input.last_record_sort_value !== undefined;
     const hasUniqueId = input.last_record_unique_id !== undefined;
     if (hasSortValue !== hasUniqueId) {
-      throw validationError(
+      throw ctx.fail(
+        'incomplete_cursor',
         'Cursor pagination requires both last_record_sort_value and last_record_unique_id — provide both (from a prior page_metadata) or neither.',
       );
     }
@@ -728,13 +737,13 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ...(r['End Date'] ? { end_date: String(r['End Date']) } : {}),
       ...(r.Description ? { description: String(r.Description) } : {}),
       ...(r['Funding Agency'] ? { funding_agency: String(r['Funding Agency']) } : {}),
-      ...(r['Place of Performance City Code'] ||
+      ...(r['Primary Place of Performance']?.city_name ||
       r['Place of Performance State Code'] ||
       r['Place of Performance Country Code']
         ? {
             place_of_performance: {
-              ...(r['Place of Performance City Code']
-                ? { city: String(r['Place of Performance City Code']) }
+              ...(r['Primary Place of Performance']?.city_name
+                ? { city: r['Primary Place of Performance'].city_name }
                 : {}),
               ...(r['Place of Performance State Code']
                 ? { state: String(r['Place of Performance State Code']) }
@@ -819,8 +828,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       }
       notices.push(
         filterParts.length > 0
-          ? `No awards matched: ${filterParts.join(', ')}. Try removing filters or broadening the date range.`
-          : 'No awards matched your search. Try a different keyword or remove filters.',
+          ? `Page ${page_metadata.page} returned no awards for ${filterParts.join(', ')}. The API does not supply a total match count.`
+          : `Page ${page_metadata.page} returned no awards. The API does not supply a total match count.`,
       );
     }
     const notice = notices.filter(Boolean).join(' ');

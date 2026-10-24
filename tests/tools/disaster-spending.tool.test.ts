@@ -365,7 +365,7 @@ describe('disasterSpendingTool', () => {
     expect(enrichment.truncated).toBe(true);
     expect(enrichment.cap).toBe(10_000);
     expect(enrichment.shown).toBe(1);
-    expect(enrichment.notice).toContain('upper bound rather than a count');
+    expect(enrichment.notice).toContain('lower bound on possible matches');
   });
 
   it('leaves an honest recipient total undisclosed', async () => {
@@ -596,16 +596,18 @@ describe('disasterSpendingTool', () => {
     expect(reasons).toContain('api_unavailable');
   });
 
-  it('empty-results message does not tell callers to remove required DEF codes (issue #35)', () => {
-    const output = {
-      dimension: 'agency',
-      spending_type: 'award',
+  it('empty-results message does not tell callers to remove required DEF codes (issue #35)', async () => {
+    mockGetDisasterByAgency.mockResolvedValueOnce({
       results: [],
-      page_metadata: { has_next: false, page: 1, total: 0, limit: 10 },
-    };
-
-    const blocks = disasterSpendingTool.format!(output);
-    const text = (blocks[0] as { text: string }).text;
+      page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
+    });
+    const result = await runToolContract(disasterSpendingTool, {
+      dimension: 'agency',
+      filters: { def_codes: ['L'] },
+    });
+    const text = result.content
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('\n');
     expect(text).not.toMatch(/remov(e|ing) DEF/i);
     expect(text.toLowerCase()).toContain('no data found');
   });
@@ -846,7 +848,7 @@ describe('disasterSpendingTool geography paging (#73)', () => {
 /**
  * This entry's text reaches every timeout the tool sees (#57) — the service tags
  * the reason and the framework fills the recovery from it — so it has to name a lever that actually exists for each dimension: overview
- * applies neither def_codes nor limit, and the geography endpoint returns every area whatever limit asks for.
+ * accepts optional def_codes but no limit, and the geography endpoint returns every area whatever limit asks for.
  */
 describe('disasterSpendingTool api_timeout recovery (#57)', () => {
   const hint = () => {
@@ -873,9 +875,10 @@ describe('disasterSpendingTool api_timeout recovery (#57)', () => {
     expect(text).not.toMatch(/limit/);
   });
 
-  it('points overview at a later retry or the agency breakdown, never at narrowing', () => {
+  it('points overview at optional codes, a later retry, or the agency breakdown', () => {
     const text = clause('overview:');
-    expect(text).not.toMatch(/fewer|smaller/);
+    expect(text).toContain('optional filters.def_codes');
+    expect(text).toContain('filtered requests can still time out');
     expect(text).toContain('retry later');
     expect(text).toContain('dimension "agency"');
     expect(text).toContain('spending_type "total"');

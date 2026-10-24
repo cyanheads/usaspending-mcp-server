@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-10-24
+
+Correct search results and disaster spending recovery
+
 ## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-12 · ⚠️ Breaking
 
 Autocomplete agency rows drop id and name the matched agency; get_agency rejects both identifiers; nested filter keys are strict. Fixes location_filter normalization, analytics code filters, geography shape_codes, award-detail fields, recipient fiscal-year totals, agency budget years, truncation labels, and request timeouts.

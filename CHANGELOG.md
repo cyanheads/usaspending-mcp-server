@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-10-24 · ⚠️ Breaking
+
+Federal spending drilldowns preserve provider identities and reporting periods.
+
 ## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-10-24
 
 Correct search results and disaster spending recovery

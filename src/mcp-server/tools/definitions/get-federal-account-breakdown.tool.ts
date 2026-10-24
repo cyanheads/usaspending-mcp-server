@@ -6,17 +6,20 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { accountFiscalYearRange, accountFiscalYearSchema } from './fiscal-year.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
 
 export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_account_breakdown', {
   title: 'Get Federal Account Breakdown',
   description:
-    "Fetch a federal account's obligations broken down by program activity (what the money funds) or object class (what it buys — personnel, supplies, contracts). Use the dimension parameter to select the axis. Account codes are AGENCY-MAIN format and come from usaspending_search_federal_accounts (its account_number output field), usaspending_get_award_federal_accounts (its federal_account field), or usaspending_get_federal_account. Paginated with an honest total count. For the account's own metadata and top-level totals, use usaspending_get_federal_account.",
+    "Fetch a federal account's obligations broken down by program activity (what the money funds) or object class (what it buys — personnel, supplies, contracts). Use the dimension parameter to select the axis. fiscal_year scopes financial reporting periods to the full October–September year, not award action dates; omit it for all available periods. Account codes are AGENCY-MAIN format and come from usaspending_search_federal_accounts (its account_number output field), usaspending_get_award_federal_accounts (its federal_account field), or usaspending_get_federal_account. Paginated with an honest total count. For the account's own metadata and top-level totals, use usaspending_get_federal_account.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
+    fiscal_year: accountFiscalYearSchema,
     account_code: z
       .string()
       .min(1)
@@ -39,6 +42,23 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
   }),
 
   output: z.object({
+    fiscal_year: z
+      .number()
+      .int()
+      .optional()
+      .describe('Fiscal year selected by the caller; omitted for all available periods'),
+    period: z.string().describe('FY<year> for a selected year, otherwise all available periods'),
+    time_period: z
+      .object({
+        start_date: z
+          .string()
+          .describe('Inclusive financial reporting period start date (YYYY-MM-DD)'),
+        end_date: z.string().describe('Inclusive financial reporting period end date (YYYY-MM-DD)'),
+      })
+      .optional()
+      .describe(
+        'Full fiscal-year range applied to financial reporting periods, not award action dates; omitted for all available periods',
+      ),
     account_code: z.string().describe('Federal account code queried'),
     dimension: z.string().describe('Breakdown dimension returned'),
     results: z
@@ -94,6 +114,10 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       ),
   },
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -121,7 +145,13 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
     });
     const svc = getUSASpendingService();
 
-    const body = { limit: input.limit, page: input.page };
+    const fiscalYear = typeof input.fiscal_year === 'number' ? input.fiscal_year : undefined;
+    const timePeriod = fiscalYear !== undefined ? accountFiscalYearRange(fiscalYear) : undefined;
+    const body = {
+      limit: input.limit,
+      page: input.page,
+      ...(timePeriod ? { filters: { time_period: [timePeriod] } } : {}),
+    };
     const data =
       input.dimension === 'program_activity'
         ? await svc.getFederalAccountProgramActivities(input.account_code, body, ctx)
@@ -165,6 +195,9 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
     }
 
     return {
+      ...(fiscalYear !== undefined ? { fiscal_year: fiscalYear } : {}),
+      period: fiscalYear !== undefined ? `FY${fiscalYear}` : 'all available periods',
+      ...(timePeriod ? { time_period: timePeriod } : {}),
       account_code: input.account_code,
       dimension: input.dimension,
       results,
@@ -180,8 +213,14 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
 
   format: (result) => {
     const lines: string[] = [
-      `## Federal Account ${result.account_code} — ${result.dimension} breakdown`,
+      `## Federal Account ${escapeMarkdownInline(result.account_code)} — ${escapeMarkdownInline(result.dimension)} breakdown`,
     ];
+    lines.push(`**Period:** ${result.period}`);
+    if (result.fiscal_year !== undefined) lines.push(`**Fiscal Year:** ${result.fiscal_year}`);
+    if (result.time_period)
+      lines.push(
+        `**Reporting Dates:** ${result.time_period.start_date} through ${result.time_period.end_date}`,
+      );
     const paginationLine = formatPaginationLine({
       page: result.page_metadata.page,
       limit: result.page_metadata.limit,
@@ -207,8 +246,8 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       for (const r of result.results) {
         const obligations =
           typeof r.obligations === 'number' ? formatCurrency(r.obligations) : 'N/A';
-        const row = `| ${r.code ?? 'N/A'} | ${r.name ?? 'N/A'} | ${obligations} |`;
-        lines.push(hasType ? `${row} ${r.type ?? 'N/A'} |` : row);
+        const row = `| ${escapeMarkdownInline(r.code ?? 'N/A')} | ${escapeMarkdownInline(r.name ?? 'N/A')} | ${obligations} |`;
+        lines.push(hasType ? `${row} ${escapeMarkdownInline(r.type ?? 'N/A')} |` : row);
       }
     }
 

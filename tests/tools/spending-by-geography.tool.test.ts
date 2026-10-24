@@ -26,6 +26,24 @@ const LIVE_STATE_ROW = {
 };
 
 describe('spendingByGeographyTool row fields (#82)', () => {
+  it('wires both agency tiers and preserves the echo on an empty result', async () => {
+    mockSpendingByGeography.mockResolvedValueOnce({ results: [] });
+    const response = await runToolContract(spendingByGeographyTool, {
+      scope: 'place_of_performance',
+      geo_layer: 'state',
+      filters: { agency_name: 'U.S. Geological Survey' },
+    });
+    expect(response.isError).toBeFalsy();
+    expect(mockSpendingByGeography.mock.lastCall?.[0].filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name: 'U.S. Geological Survey' },
+      { type: 'awarding', tier: 'subtier', name: 'U.S. Geological Survey' },
+    ]);
+    expect(response.structuredContent).toMatchObject({
+      results: [],
+      applied_agency_name: 'U.S. Geological Survey',
+    });
+    expect(textOf(response)).toContain('U.S. Geological Survey');
+  });
   it('advertises no award_count, which the endpoint never returns', () => {
     const rowShape = spendingByGeographyTool.output.shape.results.element.shape;
     expect(Object.keys(rowShape).sort()).toEqual(

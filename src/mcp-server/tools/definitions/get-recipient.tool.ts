@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 
@@ -159,14 +160,17 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
   },
 
   format: (result) => {
-    const lines: string[] = [`## Recipient: ${result.name ?? 'Unknown'}`];
-    lines.push(`**Period:** ${result.period}`);
-    if (result.recipient_id) lines.push(`**Recipient ID:** ${result.recipient_id}`);
-    if (result.uei) lines.push(`**UEI:** ${result.uei}`);
-    if (result.duns) lines.push(`**DUNS:** ${result.duns}`);
-    if (result.recipient_level) lines.push(`**Level:** ${result.recipient_level}`);
-    if (result.parent_name) lines.push(`**Parent Org:** ${result.parent_name}`);
-    if (result.parent_uei) lines.push(`**Parent UEI:** ${result.parent_uei}`);
+    const lines: string[] = [`## Recipient: ${escapeMarkdownInline(result.name ?? 'Unknown')}`];
+    lines.push(`**Period:** ${escapeMarkdownInline(result.period)}`);
+    if (result.recipient_id)
+      lines.push(`**Recipient ID:** ${escapeMarkdownInline(result.recipient_id)}`);
+    if (result.uei) lines.push(`**UEI:** ${escapeMarkdownInline(result.uei)}`);
+    if (result.duns) lines.push(`**DUNS:** ${escapeMarkdownInline(result.duns)}`);
+    if (result.recipient_level)
+      lines.push(`**Level:** ${escapeMarkdownInline(result.recipient_level)}`);
+    if (result.parent_name)
+      lines.push(`**Parent Org:** ${escapeMarkdownInline(result.parent_name)}`);
+    if (result.parent_uei) lines.push(`**Parent UEI:** ${escapeMarkdownInline(result.parent_uei)}`);
     if (result.location) {
       const loc = result.location;
       const zip = [loc.zip, loc.zip4].filter(Boolean).join('-');
@@ -180,12 +184,14 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       ]
         .filter(Boolean)
         .join(', ');
-      if (addr) lines.push(`**Address:** ${addr}`);
+      if (addr) lines.push(`**Address:** ${escapeMarkdownInline(addr)}`);
     }
     if (result.business_types?.length)
-      lines.push(`**Business Type Codes:** ${result.business_types.join(', ')}`);
+      lines.push(
+        `**Business Type Codes:** ${escapeMarkdownInline(result.business_types.join(', '))}`,
+      );
     if (result.alternate_names?.length) {
-      lines.push(`**Alternate Names:** ${result.alternate_names.join(', ')}`);
+      lines.push(`**Alternate Names:** ${escapeMarkdownInline(result.alternate_names.join(', '))}`);
     }
 
     const hasTotals =

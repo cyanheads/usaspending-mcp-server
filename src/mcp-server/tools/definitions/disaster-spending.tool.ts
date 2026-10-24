@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import type {
   RawDisasterBreakdownResponse,
   RawDisasterResult,
@@ -279,6 +280,10 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .describe('Pagination metadata (non-overview dimensions)'),
   }),
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'missing_def_codes',
@@ -531,7 +536,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
   format: (result) => {
     const lines: string[] = [
-      `## Disaster/Emergency Spending — ${result.dimension}${result.spending_type !== 'spending' ? ` (${result.spending_type})` : ''}`,
+      `## Disaster/Emergency Spending — ${escapeMarkdownInline(result.dimension)}${result.spending_type !== 'spending' ? ` (${escapeMarkdownInline(result.spending_type)})` : ''}`,
     ];
 
     if (result.overview) {
@@ -556,7 +561,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         for (const f of o.funding_by_def_code) {
           const amt = f.amount !== undefined ? formatCurrency(f.amount) : 'N/A';
           lines.push(
-            `- **${f.def_code ?? 'N/A'}** — ${f.label ?? 'N/A'} (${f.public_law ?? 'N/A'}): ${amt}`,
+            `- **${escapeMarkdownInline(f.def_code ?? 'N/A')}** — ${escapeMarkdownInline(f.label ?? 'N/A')} (${escapeMarkdownInline(f.public_law ?? 'N/A')}): ${amt}`,
           );
         }
       }
@@ -612,7 +617,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           r.face_value_of_loan !== undefined ? formatCurrency(r.face_value_of_loan) : 'N/A';
         const awards = r.award_count !== undefined ? String(r.award_count) : 'N/A';
         lines.push(
-          `| ${label} | ${id} | ${code} | ${shape} | ${oblig} | ${outlay} |${budgetary} ${agg} | ${population} | ${perCapita} | ${loans} | ${awards} |`,
+          `| ${escapeMarkdownInline(label)} | ${escapeMarkdownInline(id)} | ${escapeMarkdownInline(code)} | ${escapeMarkdownInline(shape)} | ${oblig} | ${outlay} |${budgetary} ${agg} | ${population} | ${perCapita} | ${loans} | ${awards} |`,
         );
       }
     }

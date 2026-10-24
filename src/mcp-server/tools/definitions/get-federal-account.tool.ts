@@ -5,16 +5,19 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { accountFiscalYearSchema, normalizeAccountFiscalYear } from './fiscal-year.js';
 import { formatCurrency } from './formatting.js';
 
 export const getFederalAccountTool = tool('usaspending_get_federal_account', {
   title: 'Get Federal Account',
   description:
-    "Fetch a federal account's budget data: total obligations, gross outlays, and budgetary resources, plus the per-Treasury-Account-Symbol (TAS) component breakdown in children. Federal accounts connect appropriations law to actual agency spending. Account codes come from usaspending_search_federal_accounts (its account_number output field) or usaspending_get_award_federal_accounts (its federal_account field), and are formatted as AGENCY-MAIN (e.g., 097-0100 for DoD Operation and Maintenance). For obligations broken down by program activity or object class, use usaspending_get_federal_account_breakdown.",
+    "Fetch a federal account's budget data: total obligations, gross outlays, and budgetary resources, plus the per-Treasury-Account-Symbol (TAS) component breakdown in children. fiscal_year selects a reporting year; omit it for the current federal fiscal year. An empty year retains metadata and a notice, without substituting another year. Federal accounts connect appropriations law to actual agency spending. Account codes come from usaspending_search_federal_accounts (its account_number output field) or usaspending_get_award_federal_accounts (its federal_account field), and are formatted as AGENCY-MAIN (e.g., 097-0100 for DoD Operation and Maintenance). For obligations broken down by program activity or object class, use usaspending_get_federal_account_breakdown.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
+    fiscal_year: accountFiscalYearSchema,
     account_code: z
       .string()
       .min(1)
@@ -66,6 +69,19 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       ),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Explains when the selected fiscal year has no financial totals or Treasury Account Symbol components; no alternative year is substituted',
+      ),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'account_not_found',
@@ -97,10 +113,24 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
     ctx.log.info('usaspending_get_federal_account', { account_code: input.account_code });
     const svc = getUSASpendingService();
 
-    const account = await svc.getFederalAccount(input.account_code, ctx);
+    const account =
+      typeof input.fiscal_year === 'number'
+        ? await svc.getFederalAccount(input.account_code, ctx, input.fiscal_year)
+        : await svc.getFederalAccount(input.account_code, ctx);
 
     if (!account?.account_title) {
       throw ctx.fail('account_not_found', `Federal account not found: ${input.account_code}`);
+    }
+    const fiscalYear = normalizeAccountFiscalYear(account.fiscal_year);
+    if (
+      typeof account.total_obligated_amount !== 'number' &&
+      typeof account.total_gross_outlay_amount !== 'number' &&
+      typeof account.total_budgetary_resources !== 'number' &&
+      !account.children?.length
+    ) {
+      ctx.enrich.notice(
+        `No financial totals or Treasury Account Symbol components were reported${fiscalYear !== undefined ? ` for FY${fiscalYear}` : ''}. Account metadata is retained; no alternative fiscal year was substituted. Select a different fiscal_year to inspect another reporting period.`,
+      );
     }
 
     const children = (account.children ?? []).map((c) => ({
@@ -133,20 +163,24 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
       ...(typeof account.total_budgetary_resources === 'number'
         ? { total_budgetary_resources: account.total_budgetary_resources }
         : {}),
-      ...(typeof account.fiscal_year === 'number' ? { fiscal_year: account.fiscal_year } : {}),
+      ...(fiscalYear !== undefined ? { fiscal_year: fiscalYear } : {}),
       ...(children.length > 0 ? { children } : {}),
     };
   },
 
   format: (result) => {
     const lines: string[] = [
-      `## Federal Account: ${result.account_title ?? result.federal_account_code ?? 'Unknown'}`,
+      `## Federal Account: ${escapeMarkdownInline(result.account_title ?? result.federal_account_code ?? 'Unknown')}`,
     ];
-    if (result.federal_account_code) lines.push(`**Code:** ${result.federal_account_code}`);
-    if (result.agency_identifier) lines.push(`**Agency Identifier:** ${result.agency_identifier}`);
-    if (result.main_account_code) lines.push(`**Main Account Code:** ${result.main_account_code}`);
-    if (result.parent_agency_name) lines.push(`**Parent Agency:** ${result.parent_agency_name}`);
-    if (result.bureau_name) lines.push(`**Bureau:** ${result.bureau_name}`);
+    if (result.federal_account_code)
+      lines.push(`**Code:** ${escapeMarkdownInline(result.federal_account_code)}`);
+    if (result.agency_identifier)
+      lines.push(`**Agency Identifier:** ${escapeMarkdownInline(result.agency_identifier)}`);
+    if (result.main_account_code)
+      lines.push(`**Main Account Code:** ${escapeMarkdownInline(result.main_account_code)}`);
+    if (result.parent_agency_name)
+      lines.push(`**Parent Agency:** ${escapeMarkdownInline(result.parent_agency_name)}`);
+    if (result.bureau_name) lines.push(`**Bureau:** ${escapeMarkdownInline(result.bureau_name)}`);
     if (result.fiscal_year) lines.push(`**Fiscal Year:** ${result.fiscal_year}`);
 
     if (
@@ -181,7 +215,7 @@ export const getFederalAccountTool = tool('usaspending_get_federal_account', {
             ? formatCurrency(c.budgetary_resources_amount)
             : 'N/A';
         lines.push(
-          `| ${c.code ?? 'N/A'} | ${c.name ?? 'N/A'} | ${obligated} | ${outlay} | ${resources} |`,
+          `| ${escapeMarkdownInline(c.code ?? 'N/A')} | ${escapeMarkdownInline(c.name ?? 'N/A')} | ${obligated} | ${outlay} | ${resources} |`,
         );
       }
     }

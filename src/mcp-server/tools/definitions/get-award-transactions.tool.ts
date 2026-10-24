@@ -5,7 +5,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { AWARD_TYPE_CODES } from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
@@ -41,7 +43,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .array(
         z
           .object({
-            id: z.number().optional().describe('Transaction internal ID'),
+            id: z.string().optional().describe('Generated transaction ID (ASST_TX or CONT_TX)'),
             type: z.string().optional().describe('Transaction type code'),
             type_description: z.string().optional().describe('Transaction type description'),
             action_date: z.string().optional().describe('Transaction action date (YYYY-MM-DD)'),
@@ -55,8 +57,18 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
               ),
             modification_number: z.string().optional().describe('Modification number or amendment'),
             description: z.string().optional().describe('Transaction description'),
-            recipient_name: z.string().optional().describe('Recipient name at time of transaction'),
-            awarding_agency_name: z.string().optional().describe('Awarding agency name'),
+            face_value_loan_guarantee: z
+              .number()
+              .optional()
+              .describe('Loan face value in USD; absent for non-loan transactions'),
+            original_loan_subsidy_cost: z
+              .number()
+              .optional()
+              .describe('Original loan subsidy cost in USD; absent for non-loan transactions'),
+            cfda_number: z
+              .string()
+              .optional()
+              .describe('Assistance Listing (CFDA) number for assistance transactions'),
           })
           .describe('Transaction record with modification details and obligation change'),
       )
@@ -94,6 +106,10 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
    * notice rather than a failure. Declaring one would advertise a failure mode
    * no input can produce.
    */
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -130,21 +146,31 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       ctx,
     );
 
-    const results = (data.results ?? []).map((t) => ({
-      ...(typeof t.id === 'number' ? { id: t.id } : {}),
-      ...(t.type ? { type: t.type } : {}),
-      ...(t.type_description ? { type_description: t.type_description } : {}),
-      ...(t.action_date ? { action_date: t.action_date } : {}),
-      ...(t.action_type ? { action_type: t.action_type } : {}),
-      ...(t.action_type_description ? { action_type_description: t.action_type_description } : {}),
-      ...(typeof t.federal_action_obligation === 'number'
-        ? { federal_action_obligation: t.federal_action_obligation }
-        : {}),
-      ...(t.modification_number ? { modification_number: t.modification_number } : {}),
-      ...(t.description ? { description: t.description } : {}),
-      ...(t.recipient_name ? { recipient_name: t.recipient_name } : {}),
-      ...(t.awarding_agency_name ? { awarding_agency_name: t.awarding_agency_name } : {}),
-    }));
+    const results = (data.results ?? []).map((t) => {
+      const isLoan = AWARD_TYPE_CODES.loans.some((code) => code === t.type);
+      return {
+        ...(typeof t.id === 'string' && t.id ? { id: t.id } : {}),
+        ...(t.type ? { type: t.type } : {}),
+        ...(t.type_description ? { type_description: t.type_description } : {}),
+        ...(t.action_date ? { action_date: t.action_date } : {}),
+        ...(t.action_type ? { action_type: t.action_type } : {}),
+        ...(t.action_type_description
+          ? { action_type_description: t.action_type_description }
+          : {}),
+        ...(typeof t.federal_action_obligation === 'number'
+          ? { federal_action_obligation: t.federal_action_obligation }
+          : {}),
+        ...(t.modification_number ? { modification_number: t.modification_number } : {}),
+        ...(t.description ? { description: t.description } : {}),
+        ...(isLoan && typeof t.face_value_loan_guarantee === 'number'
+          ? { face_value_loan_guarantee: t.face_value_loan_guarantee }
+          : {}),
+        ...(isLoan && typeof t.original_loan_subsidy_cost === 'number'
+          ? { original_loan_subsidy_cost: t.original_loan_subsidy_cost }
+          : {}),
+        ...(t.cfda_number ? { cfda_number: t.cfda_number } : {}),
+      };
+    });
 
     const pageMeta = data.page_metadata ?? {};
     /**
@@ -182,24 +208,33 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
 
   format: (result) => {
     const lines: string[] = [
-      `## Transactions for Award: ${result.award_id}`,
+      `## Transactions for Award: ${escapeMarkdownInline(result.award_id)}`,
       formatPaginationLine(result.page_metadata),
     ];
     for (const t of result.results) {
       lines.push('');
-      lines.push(`### Mod ${t.modification_number ?? t.id ?? 'N/A'} — ${t.action_date ?? 'N/A'}`);
-      if (t.id !== undefined) lines.push(`**ID:** ${t.id}`);
-      if (t.type) lines.push(`**Type Code:** ${t.type}`);
-      if (t.type_description) lines.push(`**Type:** ${t.type_description}`);
-      if (t.action_type) lines.push(`**Action Code:** ${t.action_type}`);
-      if (t.action_type_description) lines.push(`**Action:** ${t.action_type_description}`);
+      lines.push(
+        `### Mod ${escapeMarkdownInline(t.modification_number ?? t.id ?? 'N/A')} — ${escapeMarkdownInline(t.action_date ?? 'N/A')}`,
+      );
+      if (t.id !== undefined) lines.push(`**ID:** ${escapeMarkdownInline(t.id)}`);
+      if (t.type) lines.push(`**Type Code:** ${escapeMarkdownInline(t.type)}`);
+      if (t.type_description) lines.push(`**Type:** ${escapeMarkdownInline(t.type_description)}`);
+      if (t.action_type) lines.push(`**Action Code:** ${escapeMarkdownInline(t.action_type)}`);
+      if (t.action_type_description)
+        lines.push(`**Action:** ${escapeMarkdownInline(t.action_type_description)}`);
       if (typeof t.federal_action_obligation === 'number')
         lines.push(
           `**Obligation Change:** ${t.federal_action_obligation >= 0 ? '+' : ''}${formatCurrency(t.federal_action_obligation)}`,
         );
-      if (t.description) lines.push(`**Description:** ${t.description}`);
-      if (t.recipient_name) lines.push(`**Recipient:** ${t.recipient_name}`);
-      if (t.awarding_agency_name) lines.push(`**Agency:** ${t.awarding_agency_name}`);
+      if (t.description) lines.push(`**Description:** ${escapeMarkdownInline(t.description)}`);
+      if (typeof t.face_value_loan_guarantee === 'number')
+        lines.push(`**Face Value Loan Guarantee:** ${formatCurrency(t.face_value_loan_guarantee)}`);
+      if (typeof t.original_loan_subsidy_cost === 'number')
+        lines.push(
+          `**Original Loan Subsidy Cost:** ${formatCurrency(t.original_loan_subsidy_cost)}`,
+        );
+      if (t.cfda_number)
+        lines.push(`**Assistance Listing:** ${escapeMarkdownInline(t.cfda_number)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

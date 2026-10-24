@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import {
   ANALYTICS_DATE_FIELDS,
@@ -39,7 +40,7 @@ const SpendingFiltersSchema = z
       .string()
       .optional()
       .describe(
-        'Awarding agency name filter, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches nothing',
+        'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
       ),
     recipient_id: z.string().optional().describe('Exact recipient hash ID to filter awards'),
     naics_codes: z.array(z.string()).optional().describe('NAICS industry codes to include'),
@@ -259,6 +260,10 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       ),
   },
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -449,7 +454,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
   format: (result) => {
     const lines: string[] = [
       `## Federal Spending by Geography`,
-      `**Scope:** ${result.scope} | **Layer:** ${result.geo_layer} | **Areas:** ${result.total} of ${result.total_areas_available} matched`,
+      `**Scope:** ${escapeMarkdownInline(result.scope)} | **Layer:** ${escapeMarkdownInline(result.geo_layer)} | **Areas:** ${result.total} of ${escapeMarkdownInline(String(result.total_areas_available))} matched`,
       '',
       '| Area | Code | Obligation | Population | Per Capita |',
       '|:-----|:-----|:-----------|:-----------|:-----------|',
@@ -459,7 +464,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       const pop = r.population !== undefined ? r.population.toLocaleString() : 'N/A';
       const perCap = r.per_capita !== undefined ? formatCurrency(r.per_capita) : 'N/A';
       lines.push(
-        `| ${r.display_name ?? 'N/A'} | ${r.shape_code ?? 'N/A'} | ${amt} | ${pop} | ${perCap} |`,
+        `| ${escapeMarkdownInline(r.display_name ?? 'N/A')} | ${escapeMarkdownInline(r.shape_code ?? 'N/A')} | ${amt} | ${pop} | ${perCap} |`,
       );
     }
     return [{ type: 'text', text: lines.join('\n') }];

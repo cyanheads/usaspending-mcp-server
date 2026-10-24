@@ -27,6 +27,7 @@ import { listAgenciesTool } from '@/mcp-server/tools/definitions/list-agencies.t
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 import { USASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 /**
  * The disaster tool runs on a real `USASpendingService` beneath a strict fetch
@@ -76,6 +77,8 @@ vi.mock('@/services/usaspending/usaspending-service.js', async (importOriginal) 
           abbreviation: 'DOD',
           toptier_code: '097',
           agency_slug: 'department-of-defense',
+          active_fy: '2025',
+          active_fq: '4',
           budget_authority_amount: 1_000_000_000,
           obligated_amount: 900_000_000,
           outlay_amount: 800_000_000,
@@ -186,6 +189,23 @@ toolContractSuite(listAgenciesTool, {
       name: 'returns the agency roster with its enrichment trailer',
       input: { sort: 'agency_name', order: 'asc' },
       expected: { total: 1 },
+      assert: (result) => {
+        expect(result.structuredContent).toMatchObject({
+          results: [{ fiscal_year: 2025, fiscal_quarter: 4 }],
+        });
+        expect(result.structuredContent).not.toHaveProperty('has_next');
+        const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+        expect(text).toContain('| 2025 | 4 |');
+      },
+    },
+    {
+      name: 'preserves full directory count and exposes the end of a paginated directory',
+      input: { limit: 1, page: 2 },
+      expected: { total: 1, results: [], has_next: false },
+      assert: (result) => {
+        const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+        expect(text).toContain('**Has next:** false');
+      },
     },
   ],
 });
@@ -260,7 +280,7 @@ describe('disasterSpendingTool through the real service', () => {
     });
     const text = textOf(result);
     expect(text).toContain('within the 100ms request budget');
-    expect(text).toContain(`Recovery: ${recoveryOf('api_timeout')}`);
+    expect(markdownText(text)).toContain(`Recovery: ${recoveryOf('api_timeout')}`);
     expect(text).toContain('(reason api_timeout · retryable)');
   });
 

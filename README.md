@@ -35,7 +35,7 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 
 | Tool | Description |
 |:---|:---|
-| `usaspending_list_agencies` | List every top-tier federal agency with its toptier code, slug, and current-year budget totals |
+| `usaspending_list_agencies` | List top-tier federal agencies with codes, slugs, and budget totals labelled by reporting year and quarter |
 | `usaspending_autocomplete_filters` | Look up NAICS, PSC, CFDA, agency, or recipient codes from a free-text description |
 | `usaspending_search_awards` | Search awards by keyword, recipient, agency, award type, NAICS code, assistance listing, PSC, DEF code, location, or date range |
 | `usaspending_get_award` | Fetch one award's full record: amounts, recipient, agencies, codes, parent IDV, DEF-code funding |
@@ -58,8 +58,8 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 
 ### `usaspending_list_agencies` <sub>tool</sub>
 
-- Takes only `sort` (`agency_name`, `budget_authority_amount`, `obligated_amount`, `outlay_amount`) and `order`; returns every agency in one unpaginated response
-- Rows carry `toptier_code` and `agency_slug`, both accepted by `usaspending_get_agency`, plus current-year `budget_authority_amount`, `obligated_amount`, and `outlay_amount`
+- Takes `sort` (`agency_name`, `budget_authority_amount`, `obligated_amount`, `outlay_amount`) and `order`; returns every agency unless an optional positive `limit` is supplied. With `limit`, `page` defaults to 1; without it, `page` is ignored. `total` always counts the full directory and `has_next` appears only when paginating
+- Rows carry `toptier_code` and `agency_slug`, both accepted by `usaspending_get_agency`, plus `budget_authority_amount`, `obligated_amount`, and `outlay_amount` for the latest reported period. `fiscal_year` and `fiscal_quarter` preserve the provider's reporting labels when present
 
 ---
 
@@ -67,7 +67,7 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 
 - `type` (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) plus `search_text`; `limit` 1–500, default 10
 - Rows carry `code` and `name`, and `uei` / `duns` for recipients; no match fails as `no_match`. A `cfda` code goes in `assistance_listings` and a `psc` code in `psc_codes` on `usaspending_search_awards` and the three spending analytics tools
-- Agency rows carry the matched agency's own `name`, `abbreviation`, and `tier` (`toptier` or `subtier`), plus its parent's `toptier_name` and `toptier_code`. The `agency_name` filters are top-tier only and take `toptier_name`, so a sub-agency such as the U.S. Geological Survey filters at its whole department
+- Agency rows carry the matched agency's own `name`, `abbreviation`, and `tier` (`toptier` or `subtier`), its parent's `toptier_name` and `toptier_code`, and `subtier_code` when supplied. Pass `name` to `agency_name` on award search or spending analytics to match that agency; pass `toptier_name` for the whole department. Agency results combine top-tier then sub-tier matches under one `limit`; office matches are excluded
 - `naics` matches official NAICS title text: "software" resolves, "cybersecurity" does not, so search with the industry term a title would use
 
 ---
@@ -83,9 +83,9 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 ### `usaspending_get_award` <sub>tool</sub>
 
 - `award_id` is a `generated_unique_award_id`, the `generated_internal_id` from search; an unknown ID fails as `award_not_found`
-- Returns `category`, `total_obligation`, `total_outlays`, `subaward_count`, NAICS / PSC codes, `account_obligations_by_defc`, and, on loans, `total_loan_value` and `total_subsidy_cost`
+- Returns `category`, `total_obligation`, `total_outlays`, `total_account_obligation`, `total_account_outlay`, `base_exercised_options`, `subaward_count`, NAICS / PSC codes, `account_obligations_by_defc`, `account_outlays_by_defc`, and, on loans, `total_loan_value` and `total_subsidy_cost`, where supplied
 - `assistance_listings` lists every Assistance Listing on an assistance award, in upstream order, as `number`, `title`, and `obligation`; a `number` goes in `usaspending_search_awards` `assistance_listings`
-- `recipient` carries `uei`, `parent_uei`, `business_categories` (category names, not the `business_types` codes of `usaspending_get_recipient`), and a three-letter `country_code` on its `location`, as does `place_of_performance`; a location with no fields upstream is omitted
+- `recipient` carries `uei`, `parent_uei`, `business_categories` (category names, not the `business_types` codes of `usaspending_get_recipient`), and a three-letter `country_code`, `county_name`, `congressional_code`, and `zip5` on its `location`. `place_of_performance` also carries a country code, county name, and congressional code; a location with no fields upstream is omitted
 - `recipient.recipient_id` and `recipient.parent_recipient_id` chain to `usaspending_get_recipient` and `parent_award.generated_unique_award_id` to the parent IDV; `category: "idv"` awards list their children via `usaspending_get_idv_awards`
 
 ---
@@ -93,14 +93,14 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 ### `usaspending_get_award_transactions` <sub>tool</sub>
 
 - `award_id` plus `sort` (`action_date`, `federal_action_obligation`, `modification_number`); `limit` up to 100
-- Rows carry `action_date`, `modification_number`, `action_type`, and a signed `federal_action_obligation` (negative is a deobligation)
+- Rows carry a string `id` (`ASST_TX` or `CONT_TX`), `action_date`, `modification_number`, `action_type`, and a signed `federal_action_obligation` (negative is a deobligation). Loan transactions also carry `face_value_loan_guarantee` and `original_loan_subsidy_cost`; assistance transactions carry `cfda_number` when supplied
 
 ---
 
 ### `usaspending_get_award_subawards` <sub>tool</sub>
 
 - `award_id` plus `sort` (`subaward_number`, `description`, `action_date`, `amount`, `recipient_name`); `limit` up to 100
-- Rows carry `subaward_number`, `amount`, `action_date`, `recipient_name`, `recipient_uei`, and place of performance; `subaward_count` on `usaspending_get_award` says whether any exist
+- Rows carry `id`, `subaward_number`, `description`, `amount`, `action_date`, and `recipient_name`; the upstream listing supplies no recipient UEI or location. `subaward_count` on `usaspending_get_award` says whether any exist
 
 ---
 
@@ -176,14 +176,14 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 ### `usaspending_search_federal_accounts` <sub>tool</sub>
 
 - Optional `keyword` and 3-digit `agency_identifier`; `sort_field` is `account_name`, `account_number`, `budgetary_resources` (default), or `managing_agency`; `limit` up to 100
-- Rows carry `account_number` (e.g. `097-8097`) for the federal-account tools, `managing_agency`, and `budgetary_resources`; `page_metadata.count` is the total
+- Rows carry `account_number` (e.g. `097-8097`) for the federal-account tools, `managing_agency`, and `budgetary_resources`; `page_metadata.count` is the total. Optional `fiscal_year` selects the reporting year; otherwise the provider uses its latest submission year. The returned `fiscal_year` identifies that period
 
 ---
 
 ### `usaspending_get_federal_account` <sub>tool</sub>
 
 - `account_code` in AGENCY-MAIN format, from `account_number` in search results or `federal_account` on an award; an unknown code fails as `account_not_found`
-- Returns `total_obligated_amount`, `total_gross_outlay_amount`, and `total_budgetary_resources` for `fiscal_year`, plus `children`: one entry per Treasury Account Symbol with its own amounts
+- Optional `fiscal_year` selects the reporting year; otherwise the provider uses the current federal fiscal year. Returns `total_obligated_amount`, `total_gross_outlay_amount`, and `total_budgetary_resources` for the returned `fiscal_year`, plus `children`: one entry per Treasury Account Symbol with its own amounts. A year without financial data retains account metadata and a notice, without substituting another year
 
 ---
 
@@ -191,6 +191,9 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 
 - `account_code` plus `dimension` (`program_activity` or `object_class`); `limit` up to 100, with `page_metadata.total` as the row count
 - Rows carry `code`, `name`, and `obligations`; `program_activity` rows add `type`, either `PAC/PAN` or `PARK`
+- Optional `fiscal_year` scopes financial reporting periods to October 1 through September 30, echoed in `time_period` and `period`. Omission covers `all available periods`
+
+All three federal-account tools accept an integer `fiscal_year` from 2001 through the current federal fiscal year (which rolls over October 1); blank form values mean omitted. Search and detail budget totals use different upstream calculations and need not match even for the same year.
 
 ## Features
 
@@ -214,18 +217,40 @@ Agent-friendly output:
 
 ### Public Hosted Instance
 
-A public instance is available at `https://usaspending.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+A public instance is available at `https://usaspending.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own config shape.
+
+For Claude Code:
+
+```sh
+claude mcp add --transport http usaspending-mcp-server https://usaspending.caseyjhand.com/mcp
+```
+
+For Cline (`cline_mcp_settings.json`):
 
 ```json
 {
   "mcpServers": {
     "usaspending-mcp-server": {
-      "type": "streamable-http",
+      "type": "streamableHttp",
       "url": "https://usaspending.caseyjhand.com/mcp"
     }
   }
 }
 ```
+
+For Cursor (`mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "usaspending-mcp-server": {
+      "url": "https://usaspending.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+Claude Desktop adds remote servers under Settings → Connectors.
 
 ### Self-Hosted / Local
 

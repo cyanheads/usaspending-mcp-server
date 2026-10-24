@@ -3,7 +3,7 @@
  * @module tests/tools/spending-over-time.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 
@@ -14,6 +14,30 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('spendingOverTimeTool', () => {
+  it('wires both agency tiers and retains a provider zero row for an unknown name', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [{ time_period: { fiscal_year: '2025' }, aggregated_amount: 0 }],
+    });
+    const response = await runToolContract(spendingOverTimeTool, {
+      group: 'fiscal_year',
+      filters: { agency_name: 'ZZZ invented agency' },
+    });
+    expect(response.isError).toBeFalsy();
+    expect(mockSpendingOverTime.mock.lastCall?.[0].filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name: 'ZZZ invented agency' },
+      { type: 'awarding', tier: 'subtier', name: 'ZZZ invented agency' },
+    ]);
+    expect(response.structuredContent).toMatchObject({
+      results: [{ aggregated_amount: 0 }],
+      applied_agency_name: 'ZZZ invented agency',
+    });
+    expect(
+      response.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n'),
+    ).toContain('ZZZ invented agency');
+  });
   it('returns fiscal year spending time series', async () => {
     mockSpendingOverTime.mockResolvedValueOnce({
       results: [

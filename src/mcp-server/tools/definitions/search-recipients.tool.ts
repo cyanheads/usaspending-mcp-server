@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
@@ -96,6 +97,10 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       .describe(
         'Blank-keyword disclosure and pagination recovery. An empty page is distinguished from a known zero total; absent when no notice applies.',
       ),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
   errors: [
@@ -198,11 +203,11 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     );
     for (const r of result.results) {
       lines.push('');
-      lines.push(`### ${r.name ?? r.id ?? 'Unknown'}`);
-      if (r.id) lines.push(`**Recipient ID (for get_recipient):** ${r.id}`);
-      if (r.uei) lines.push(`**UEI:** ${r.uei}`);
-      if (r.duns) lines.push(`**DUNS:** ${r.duns}`);
-      if (r.recipient_level) lines.push(`**Level:** ${r.recipient_level}`);
+      lines.push(`### ${escapeMarkdownInline(r.name ?? r.id ?? 'Unknown')}`);
+      if (r.id) lines.push(`**Recipient ID (for get_recipient):** ${escapeMarkdownInline(r.id)}`);
+      if (r.uei) lines.push(`**UEI:** ${escapeMarkdownInline(r.uei)}`);
+      if (r.duns) lines.push(`**DUNS:** ${escapeMarkdownInline(r.duns)}`);
+      if (r.recipient_level) lines.push(`**Level:** ${escapeMarkdownInline(r.recipient_level)}`);
       if (typeof r.amount === 'number') lines.push(`**Award Amount:** ${formatCurrency(r.amount)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];

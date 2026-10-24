@@ -10,11 +10,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAwardTool } from '@/mcp-server/tools/definitions/get-award.tool.js';
+import { getAwardSubawardsTool } from '@/mcp-server/tools/definitions/get-award-subawards.tool.js';
+import { getAwardTransactionsTool } from '@/mcp-server/tools/definitions/get-award-transactions.tool.js';
 import { initUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const BASE = 'https://api.usaspending.gov/api/v2/';
 
@@ -63,7 +67,356 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('award child records through the real service', () => {
+  const runChild = (
+    endpoint: 'transactions' | 'subawards',
+    input: { award_id: string; page?: number; limit?: number },
+  ) =>
+    endpoint === 'transactions'
+      ? runToolContract(getAwardTransactionsTool, input)
+      : runToolContract(getAwardSubawardsTool, input);
+  const servePage = (endpoint: string, payload: unknown) => {
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe(`${BASE}${endpoint}/`);
+      expect(init?.method).toBe('POST');
+      return Response.json(payload);
+    });
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  };
+
+  it.each(['transactions-contract', 'transactions-loan'])(
+    'preserves captured string IDs and supported transaction values: %s (#90)',
+    async (name) => {
+      const payload = fixture(name);
+      const fetch = servePage('transactions', payload);
+      const result = await runToolContract(getAwardTransactionsTool, {
+        award_id: LOAN,
+        order: 'asc',
+        limit: 2,
+      });
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+        award_id: LOAN,
+        order: 'asc',
+        sort: 'action_date',
+        limit: 2,
+        page: 1,
+      });
+      const structured = result.structuredContent as { results: Record<string, unknown>[] };
+      const text = markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+      if (name === 'transactions-loan') {
+        expect(structured.results[0]).toMatchObject({
+          id: 'ASST_TX_9100_P268K155150_-NONE-_84.268_0001',
+          federal_action_obligation: 0,
+          face_value_loan_guarantee: 10770988,
+          original_loan_subsidy_cost: 0,
+          cfda_number: '84.268',
+        });
+        for (const value of ['ASST_TX_9100_P268K155150_', '10,770,988', '84.268'])
+          expect(text).toContain(value);
+        expect(text).toMatch(/Original Loan Subsidy Cost:\s+\$0/);
+      } else {
+        expect(structured.results[0]).toMatchObject({
+          id: 'CONT_TX_9700_-NONE-_N0001917C0015_0_-NONE-_0',
+        });
+        expect(text).toContain('CONT_TX_9700_');
+        for (const row of structured.results) {
+          for (const key of [
+            'face_value_loan_guarantee',
+            'original_loan_subsidy_cost',
+            'cfda_number',
+            'recipient_name',
+            'awarding_agency_name',
+          ])
+            expect(row).not.toHaveProperty(key);
+        }
+      }
+    },
+  );
+
+  it.each(['07', '08', 'F003', 'F004', '02'])(
+    'gates loan values by shared type membership and retains assistance CFDA: %s (#90)',
+    async (type) => {
+      servePage('transactions', {
+        results: [
+          {
+            id: 'ASST_TX_TEST',
+            type,
+            face_value_loan_guarantee: 0,
+            original_loan_subsidy_cost: null,
+            cfda_number: '01.001',
+          },
+        ],
+        page_metadata: { page: 1, hasNext: false },
+      });
+      const result = await runToolContract(getAwardTransactionsTool, { award_id: LOAN });
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as { results: Record<string, unknown>[] };
+      expect(structured.results[0]).toEqual({
+        id: 'ASST_TX_TEST',
+        type,
+        cfda_number: '01.001',
+        ...(type === '02' ? {} : { face_value_loan_guarantee: 0 }),
+      });
+      const text = markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+      expect(text).toContain('01.001');
+      expect(/Face Value Loan Guarantee:\s+\$0/.test(text)).toBe(type !== '02');
+      expect(text).not.toContain('Original Loan Subsidy Cost');
+    },
+  );
+
+  it('advertises only the six source-supported subaward keys (#96)', () => {
+    const row = getAwardSubawardsTool.output.shape.results.element;
+    expect(Object.keys(row.shape).sort()).toEqual([
+      'action_date',
+      'amount',
+      'description',
+      'id',
+      'recipient_name',
+      'subaward_number',
+    ]);
+  });
+
+  it('preserves captured subawards, including zero amounts, on both surfaces (#96)', async () => {
+    const payload = fixture('subawards');
+    servePage('subawards', payload);
+    const result = await runToolContract(getAwardSubawardsTool, { award_id: CONTRACT, limit: 2 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        {
+          id: 2106468,
+          subaward_number: '1423526',
+          description: 'PURCHASED OUTSIDE PRODUCTION',
+          action_date: '2017-06-20',
+          amount: 76419.2,
+          recipient_name: 'A & G MACHINE, INC.',
+        },
+        { id: 2108182 },
+      ],
+    });
+    const text = markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+    for (const value of [
+      '2106468',
+      '1423526',
+      'PURCHASED OUTSIDE PRODUCTION',
+      '2017-06-20',
+      '76,419.2',
+      'A & G MACHINE, INC.',
+    ])
+      expect(text).toContain(value);
+    servePage('subawards', {
+      results: [{ id: 1, amount: 0 }],
+      page_metadata: { page: 1, hasNext: false },
+    });
+    const zero = await runToolContract(getAwardSubawardsTool, { award_id: CONTRACT });
+    expect(zero.structuredContent).toMatchObject({ results: [{ id: 1, amount: 0 }] });
+    expect(zero.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining('**Amount:** $0') }),
+      ]),
+    );
+  });
+
+  for (const endpoint of ['transactions', 'subawards'] as const) {
+    it(`preserves a full 100-row ${endpoint} page and its continuation signal`, async () => {
+      const rows = Array.from({ length: 100 }, (_, index) =>
+        endpoint === 'transactions'
+          ? { id: `ASST_TX_${index}`, federal_action_obligation: 0 }
+          : { id: index, amount: 0 },
+      );
+      servePage(endpoint, { results: rows, page_metadata: { page: 2, hasNext: true } });
+      const result = await runChild(endpoint, { award_id: CONTRACT, page: 2, limit: 100 });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        results: rows,
+        page_metadata: { page: 2, has_next: true, limit: 100 },
+        has_next_page: true,
+      });
+      const text = markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+      expect(text).toContain(endpoint === 'transactions' ? 'ASST_TX_99' : '99');
+    });
+
+    it(`omits absent, null and blank optional ${endpoint} values without inventing zeros`, async () => {
+      servePage(endpoint, {
+        results: [{}, { id: null, description: null, action_date: '' }],
+        page_metadata: { page: 1, hasNext: false },
+      });
+      const result = await runChild(endpoint, { award_id: CONTRACT });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ results: [{}, {}] });
+      const text = markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+      expect(text).not.toContain('$0');
+    });
+
+    it.each([1, 2, 5])(
+      `retains empty and past-end notices for ${endpoint}, page %i`,
+      async (page) => {
+        const fetch = servePage(endpoint, { results: [], page_metadata: { page, hasNext: false } });
+        const result = await runChild(endpoint, { award_id: CONTRACT, page, limit: 100 });
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({
+          results: [],
+          page_metadata: { page, has_next: false, limit: 100 },
+          current_page: page,
+          has_next_page: false,
+          notice: expect.stringContaining(
+            endpoint === 'transactions' ? 'generated_internal_id' : 'subaward_count',
+          ),
+        });
+        const text = markdownText(
+          result.content.map((b) => ('text' in b ? b.text : '')).join('\n'),
+        );
+        expect(text).toContain(
+          endpoint === 'transactions' ? 'generated_internal_id' : 'subaward_count',
+        );
+        expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+          page,
+          limit: 100,
+        });
+      },
+    );
+
+    it.each([
+      { award_id: '' },
+      { award_id: CONTRACT, page: 0 },
+      { award_id: CONTRACT, limit: 101 },
+    ])(`rejects invalid ${endpoint} inputs before upstream I/O`, async (input) => {
+      const fetch = servePage(endpoint, {});
+      const result = await runChild(endpoint, input);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams },
+      });
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining('Invalid arguments') }),
+        ]),
+      );
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it.each(['api_timeout', 'api_unavailable'] as const)(
+      `keeps the ${endpoint} service error and recovery on both surfaces: %s`,
+      async (reason) => {
+        const fetch = vi.fn(async () => {
+          if (reason === 'api_timeout')
+            throw new McpError(JsonRpcErrorCode.Timeout, 'Attempt timed out', {
+              errorSource: 'FetchTimeout',
+            });
+          return new Response('Unavailable', { status: 501 });
+        });
+        vi.stubGlobal('fetch', fetch);
+        const result = await runChild(endpoint, { award_id: CONTRACT });
+        expect(result.isError).toBe(true);
+        const definition =
+          endpoint === 'transactions' ? getAwardTransactionsTool : getAwardSubawardsTool;
+        const recovery = definition.errors?.find((entry) => entry.reason === reason)?.recovery;
+        expect(recovery).toBeDefined();
+        expect(result.structuredContent).toMatchObject({
+          error: { data: { reason, recovery: { hint: recovery } } },
+        });
+        const text = markdownText(
+          result.content.map((b) => ('text' in b ? b.text : '')).join('\n'),
+        );
+        expect(text).toContain(reason);
+        expect(text).toContain(recovery!);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      },
+    );
+  }
+});
+
 describe('usaspending_get_award — fields read from current paths', () => {
+  it('preserves populated geography, account totals, outlays and exercised options (#87)', async () => {
+    const { structured, text } = await run(fixture(CONTRACT));
+    expect(structured).toMatchObject({
+      place_of_performance: { congressional_code: '17', county_name: 'WILLIAMSON' },
+      recipient: {
+        location: { congressional_code: '17', county_name: 'WILLIAMSON', zip5: '78682' },
+      },
+      total_account_obligation: 648463028.11,
+      total_account_outlay: 727245982.37,
+      base_exercised_options: 1590242856.86,
+      account_outlays_by_defc: [
+        { code: 'Q', amount: 711500406.36 },
+        { code: 'V', amount: 15745576.01 },
+      ],
+    });
+    for (const value of [
+      '17',
+      'WILLIAMSON',
+      '78682',
+      '648,463,028.11',
+      '727,245,982.37',
+      '1,590,242,856.86',
+      '711,500,406.36',
+      '15,745,576.01',
+    ])
+      expect(text).toContain(value);
+    const idv = await run(fixture(IDV));
+    expect(idv.structured).toMatchObject({
+      total_account_obligation: 198497.56,
+      total_account_outlay: 678240.02,
+    });
+    expect(idv.structured).not.toHaveProperty('base_exercised_options');
+    expect(idv.text).toContain('198,497.56');
+    expect(idv.text).toContain('678,240.02');
+  });
+
+  it('keeps new-only locations, leading zeros and ordered sparse outlay rows (#87)', async () => {
+    const { structured, text } = await run({
+      generated_unique_award_id: CONTRACT,
+      place_of_performance: { congressional_code: '01' },
+      recipient: { location: { county_name: 'COUNTY', zip5: '00123' } },
+      total_account_obligation: 0,
+      total_account_outlay: 0,
+      base_exercised_options: 0,
+      account_outlays_by_defc: [
+        { code: 'Q', amount: null },
+        { code: null, amount: 0 },
+        { code: '', amount: null },
+        { code: 'V', amount: 2 },
+      ],
+    });
+    expect(structured).toMatchObject({
+      place_of_performance: { congressional_code: '01' },
+      recipient: { location: { county_name: 'COUNTY', zip5: '00123' } },
+      total_account_obligation: 0,
+      total_account_outlay: 0,
+      base_exercised_options: 0,
+      account_outlays_by_defc: [{ code: 'Q' }, { amount: 0 }, { code: 'V', amount: 2 }],
+    });
+    for (const value of ['01', 'COUNTY', '00123', '$0', '**Q:** N/A', '**N/A:** $0', '**V:** $2'])
+      expect(text).toContain(value);
+  });
+
+  it.each([undefined, null, [], [{ code: null, amount: null }]])(
+    'omits an unpopulated outlay array %j (#87)',
+    async (rows) => {
+      const { structured, text } = await run({
+        generated_unique_award_id: CONTRACT,
+        account_outlays_by_defc: rows,
+      });
+      expect(structured).not.toHaveProperty('account_outlays_by_defc');
+      expect(text).not.toContain('Account Outlays by DEF Code');
+    },
+  );
+
+  it.each([
+    ['congressional_code', '01'],
+    ['county_name', 'COUNTY'],
+    ['zip5', '00123'],
+  ])('keeps a recipient location populated only by %s (#87)', async (field, value) => {
+    const { structured, text } = await run({
+      generated_unique_award_id: CONTRACT,
+      recipient: { location: { [field]: value } },
+    });
+    expect(structured.recipient).toEqual({ location: { [field]: value } });
+    expect(markdownText(text)).toContain(value);
+    expect(text).not.toContain('**Location:** \n');
+  });
   it('maps the contract record onto the existing output fields', async () => {
     const { structured, text } = await run(fixture(CONTRACT));
 
@@ -211,14 +564,19 @@ describe('usaspending_get_award — recipient identity and location (#68)', () =
       business_categories: ['Government', 'U.S. Local Government'],
       location: { city_name: 'TURLOCK', state_code: 'CA', country_code: 'USA' },
     });
-    expect(structured.place_of_performance).toEqual({ state_code: 'CA', country_code: 'USA' });
+    expect(structured.place_of_performance).toEqual({
+      state_code: 'CA',
+      country_code: 'USA',
+      congressional_code: '90',
+      county_name: 'STANISLAUS',
+    });
     expect(structured.recipient).not.toHaveProperty('business_types');
     // Upstream nulls the parent identifiers on a standalone recipient.
     expect(structured.recipient).not.toHaveProperty('parent_uei');
     expect(structured.recipient).not.toHaveProperty('parent_recipient_id');
     expect(text).toContain('**UEI:** LK3EXNEPLMD9');
     expect(text).toContain('**Business Categories:** Government, U.S. Local Government');
-    expect(text).toContain('**Location:** TURLOCK, CA, USA');
+    expect(text).toContain('**Location:** TURLOCK, CA, 95380, USA');
     expect(text).toContain('**Place of Performance:** CA, USA');
   });
 

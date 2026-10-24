@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-10-24 11:43:25
+Generated on: 2026-10-24 18:52:24
 
 ```text
 usaspending-mcp-server/
@@ -148,6 +148,7 @@ usaspending-mcp-server/
 │   │           ├── dates.ts
 │   │           ├── disaster-spending.tool.ts
 │   │           ├── filters.ts
+│   │           ├── fiscal-year.ts
 │   │           ├── formatting.ts
 │   │           ├── get-agency.tool.ts
 │   │           ├── get-award-federal-accounts.tool.ts
@@ -182,7 +183,12 @@ usaspending-mcp-server/
 │   │       ├── ASST_NON_R24AP00702_014.json
 │   │       ├── ASST_NON_UM1AI068636_075.json
 │   │       ├── CONT_AWD_36C10B22F0089_3600_47QTCA22D003G_4732.json
-│   │       └── CONT_IDV_47QTCA22D003G_4732.json
+│   │       ├── CONT_IDV_47QTCA22D003G_4732.json
+│   │       ├── subawards.json
+│   │       ├── transactions-contract.json
+│   │       └── transactions-loan.json
+│   ├── helpers/
+│   │   └── markdown-text.ts
 │   ├── scripts/
 │   │   └── build-changelog.test.ts
 │   ├── security/
@@ -194,6 +200,8 @@ usaspending-mcp-server/
 │   │   ├── date-filters.test.ts
 │   │   ├── disaster-contract.test.ts
 │   │   ├── disaster-spending.tool.test.ts
+│   │   ├── federal-account-periods.tool.test.ts
+│   │   ├── fiscal-year.test.ts
 │   │   ├── formatting.test.ts
 │   │   ├── get-agency-upstream.test.ts
 │   │   ├── get-agency.tool.test.ts
@@ -207,6 +215,7 @@ usaspending-mcp-server/
 │   │   ├── get-idv-awards.tool.test.ts
 │   │   ├── get-recipient.tool.test.ts
 │   │   ├── list-agencies.tool.test.ts
+│   │   ├── markdown-output.test.ts
 │   │   ├── nested-input-strict.test.ts
 │   │   ├── pagination.test.ts
 │   │   ├── search-account-contract.test.ts

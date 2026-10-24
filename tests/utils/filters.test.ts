@@ -7,6 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { analyticsTypeMismatch, buildFilters } from '@/mcp-server/tools/definitions/filters.js';
 
 describe('buildFilters', () => {
+  it.each([
+    'Department of the Interior',
+    'U.S. Geological Survey',
+    'Office of the Secretary',
+    'ZZZ invented agency',
+  ])('matches both tiers for %s without a parent restriction', (name) => {
+    expect(buildFilters({ agency_name: name }).filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name },
+      { type: 'awarding', tier: 'subtier', name },
+    ]);
+  });
   it('returns empty filters and no time period for null input', () => {
     expect(buildFilters(null)).toEqual({ filters: {}, timePeriod: undefined, codes: {} });
   });
@@ -39,10 +50,11 @@ describe('buildFilters', () => {
     expect(filters.award_type_codes).toBeUndefined();
   });
 
-  it('maps agency_name to agencies filter with awarding toptier structure', () => {
+  it('maps agency_name to both awarding tiers', () => {
     const { filters } = buildFilters({ agency_name: 'Department of Defense' });
     expect(filters.agencies).toEqual([
       { type: 'awarding', tier: 'toptier', name: 'Department of Defense' },
+      { type: 'awarding', tier: 'subtier', name: 'Department of Defense' },
     ]);
   });
 
@@ -123,7 +135,10 @@ describe('buildFilters', () => {
     });
     expect(filters.keywords).toEqual(['AI']);
     expect(filters.award_type_codes).toEqual(['A']);
-    expect(filters.agencies).toEqual([{ type: 'awarding', tier: 'toptier', name: 'DoD' }]);
+    expect(filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name: 'DoD' },
+      { type: 'awarding', tier: 'subtier', name: 'DoD' },
+    ]);
     expect(filters.naics_codes).toEqual({ require: ['541512'] });
     expect(filters.time_period).toEqual([{ start_date: '2022-01-01', end_date: '2022-12-31' }]);
   });

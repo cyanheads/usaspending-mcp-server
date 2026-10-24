@@ -5,17 +5,20 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { accountFiscalYearSchema, normalizeAccountFiscalYear } from './fiscal-year.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
 export const searchFederalAccountsTool = tool('usaspending_search_federal_accounts', {
   title: 'Search Federal Accounts',
   description:
-    'List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers, names, managing agencies, and budgetary resources. Use account_number from results as input to usaspending_get_federal_account for full budget detail. Use usaspending_list_agencies to look up agency_identifier codes (3-digit strings, e.g. "097" for DoD).',
+    'List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers, names, managing agencies, and budgetary resources. fiscal_year selects the resource amounts, not account membership; omit it for the latest available submission year. Search and detail totals use different calculations and can differ for the same year. Use account_number from results as input to usaspending_get_federal_account for full budget detail. Use usaspending_list_agencies to look up agency_identifier codes (3-digit strings, e.g. "097" for DoD).',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
+    fiscal_year: accountFiscalYearSchema,
     keyword: z
       .string()
       .optional()
@@ -42,6 +45,13 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
   }),
 
   output: z.object({
+    fiscal_year: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        'Effective fiscal year of the budgetary resources, as reported by USAspending; account membership spans all submitted years',
+      ),
     results: z
       .array(
         z
@@ -97,6 +107,10 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       ),
   },
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -130,11 +144,15 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       limit: input.limit,
     };
     if (input.keyword) body.keyword = input.keyword;
-    if (input.agency_identifier) {
-      body.filters = { agency_identifier: input.agency_identifier };
+    if (input.agency_identifier || typeof input.fiscal_year === 'number') {
+      body.filters = {
+        ...(input.agency_identifier ? { agency_identifier: input.agency_identifier } : {}),
+        ...(typeof input.fiscal_year === 'number' ? { fy: String(input.fiscal_year) } : {}),
+      };
     }
 
     const data = await svc.searchFederalAccounts(body, ctx);
+    const fiscalYear = normalizeAccountFiscalYear(data.fy);
 
     const results = ((data.results as unknown[]) ?? []).map((r) => {
       const raw = r as Record<string, unknown>;
@@ -180,6 +198,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
     }
 
     return {
+      ...(fiscalYear !== undefined ? { fiscal_year: fiscalYear } : {}),
       results,
       page_metadata: {
         ...(total !== undefined ? { count: total } : {}),
@@ -192,6 +211,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
 
   format: (result) => {
     const lines: string[] = ['## Federal Account Search Results'];
+    if (result.fiscal_year !== undefined) lines.push(`**Fiscal Year:** ${result.fiscal_year}`);
     const paginationLine = formatPaginationLine({
       page: result.page_metadata.page,
       limit: result.page_metadata.limit,
@@ -201,12 +221,14 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
     lines.push(`\n**Results:** ${result.results.length} | ${paginationLine}`);
     for (const a of result.results) {
       lines.push('');
-      lines.push(`### ${a.account_name ?? a.account_number ?? 'Unknown'}`);
-      if (a.account_number) lines.push(`**Account Number:** ${a.account_number}`);
-      if (a.agency_identifier) lines.push(`**Agency ID:** ${a.agency_identifier}`);
+      lines.push(`### ${escapeMarkdownInline(a.account_name ?? a.account_number ?? 'Unknown')}`);
+      if (a.account_number)
+        lines.push(`**Account Number:** ${escapeMarkdownInline(a.account_number)}`);
+      if (a.agency_identifier)
+        lines.push(`**Agency ID:** ${escapeMarkdownInline(a.agency_identifier)}`);
       if (a.managing_agency)
         lines.push(
-          `**Managing Agency:** ${a.managing_agency}${a.managing_agency_acronym ? ` (${a.managing_agency_acronym})` : ''}`,
+          `**Managing Agency:** ${escapeMarkdownInline(a.managing_agency)}${a.managing_agency_acronym ? ` (${escapeMarkdownInline(a.managing_agency_acronym)})` : ''}`,
         );
       if (typeof a.budgetary_resources === 'number')
         lines.push(`**Budgetary Resources:** ${formatCurrency(a.budgetary_resources)}`);

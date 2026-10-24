@@ -8,11 +8,18 @@
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
-import { USASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
+import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
+import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
+import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
+import {
+  initUSASpendingService,
+  USASpendingService,
+} from '@/services/usaspending/usaspending-service.js';
 
 /**
  * Every test starts with a fetch that rejects, so a test that forgets to stub
@@ -91,6 +98,79 @@ const stubHangingFetch = () => {
 };
 
 describe('USASpendingService entity lookups', () => {
+  it('carries each agency-name consumer through the real service to its HTTP request', async () => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+    const agency_name = 'U.S. Geological Survey';
+    const cases = [
+      ['search/spending_by_award/', () => runToolContract(searchAwardsTool, { agency_name })],
+      [
+        'search/spending_by_award/',
+        () => runToolContract(searchAwardsTool, { filters: { agency_name } }),
+      ],
+      [
+        'search/spending_by_category/awarding_agency/',
+        () =>
+          runToolContract(spendingByCategoryTool, {
+            category: 'awarding_agency',
+            filters: { agency_name },
+          }),
+      ],
+      [
+        'search/spending_by_geography/',
+        () =>
+          runToolContract(spendingByGeographyTool, {
+            scope: 'place_of_performance',
+            geo_layer: 'state',
+            filters: { agency_name },
+          }),
+      ],
+      [
+        'search/spending_over_time/',
+        () =>
+          runToolContract(spendingOverTimeTool, { group: 'fiscal_year', filters: { agency_name } }),
+      ],
+    ] as const;
+    for (const [endpoint, run] of cases) {
+      const fetchMock = stubFetch(
+        200,
+        JSON.stringify({ results: [], page_metadata: { hasNext: false } }),
+      );
+      const response = await run();
+      expect(response.isError).toBeFalsy();
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(`https://api.usaspending.gov/api/v2/${endpoint}`);
+      expect(JSON.parse(init.body as string).filters.agencies).toEqual([
+        { type: 'awarding', tier: 'toptier', name: agency_name },
+        { type: 'awarding', tier: 'subtier', name: agency_name },
+      ]);
+      expect(response.structuredContent).toMatchObject({ applied_agency_name: agency_name });
+    }
+  });
+  it('requests the replacement agency autocomplete and retains its bucket response', async () => {
+    const payload = {
+      results: {
+        toptier_agency: [],
+        subtier_agency: [
+          {
+            name: 'U.S. Geological Survey',
+            code: '1434',
+            toptier_agency: { code: '014', name: 'Department of the Interior' },
+          },
+        ],
+        office: [{ name: 'Office' }],
+      },
+    };
+    const fetchMock = stubFetch(200, JSON.stringify(payload));
+    const result = await newService().autocompleteAwardingAgency(
+      'Geological',
+      11,
+      createMockContext(),
+    );
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.usaspending.gov/api/v2/autocomplete/awarding_agency_office/');
+    expect(JSON.parse(init.body as string)).toEqual({ search_text: 'Geological', limit: 11 });
+    expect(result).toEqual(payload);
+  });
   let ctx: ReturnType<typeof createMockContext>;
 
   beforeEach(() => {
@@ -148,6 +228,31 @@ describe('USASpendingService entity lookups', () => {
       'https://api.usaspending.gov/api/v2/recipient/3885d3e7-520b-bb82-7faa-5bb319ec94e2-P/',
     );
   });
+
+  it.each([undefined, 2024, 2025])(
+    'forwards federal-account detail year %s without changing omitted defaults',
+    async (fiscalYear) => {
+      const payload = {
+        account_title: 'Water and Related Resources',
+        fiscal_year: fiscalYear === undefined ? 2027 : String(fiscalYear),
+      };
+      const fetchMock = stubFetch(200, JSON.stringify(payload));
+      const result = await newService().getFederalAccount(
+        '014-0680',
+        createMockContext(),
+        fiscalYear,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(
+        fiscalYear === undefined
+          ? 'https://api.usaspending.gov/api/v2/federal_accounts/014-0680/'
+          : `https://api.usaspending.gov/api/v2/federal_accounts/014-0680/?fiscal_year=${fiscalYear}`,
+      );
+      expect(new Request(url, init).method).toBe('GET');
+      expect(result?.fiscal_year).toBe(fiscalYear === undefined ? 2027 : String(fiscalYear));
+    },
+  );
 
   it('getFederalAccount resolves undefined on the upstream 400 miss', async () => {
     stubFetch(

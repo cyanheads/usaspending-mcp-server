@@ -20,6 +20,7 @@ import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 import { initUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const BASE = 'https://api.usaspending.gov/api/v2/';
 
@@ -146,7 +147,7 @@ describe('Behavior the code filters leave unchanged', () => {
 
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({ error: { code: -32602 } });
-      expect(textOf(result)).toContain(detail);
+      expect(markdownText(textOf(result))).toContain(detail);
       expect(http.calls).toHaveLength(1);
     },
   );
@@ -269,7 +270,7 @@ describe('Analytics tools send, echo, and name the code filters (#77)', () => {
       expect(result.structuredContent).toMatchObject({
         error: { code: -32602, message: expect.stringContaining(detail) },
       });
-      expect(textOf(result)).toContain(detail);
+      expect(markdownText(textOf(result))).toContain(detail);
     },
   );
 });

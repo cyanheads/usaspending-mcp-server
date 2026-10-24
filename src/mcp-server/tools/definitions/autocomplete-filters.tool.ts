@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import type { RawAgencyAutocomplete } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 
@@ -15,7 +16,7 @@ const UPSTREAM_LIMIT_MAX = 500;
 export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', {
   title: 'Autocomplete Codes and Names',
   description:
-    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency and sub-agency names, each with its tier and top-tier parent — the agency_name filters take the top-tier name), or recipient (recipient names with UEI/DUNS). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
+    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency and sub-agency names, each with its tier and top-tier parent — agency_name filters take the matched name; a sub-tier name shared by several parents matches under all parents), or recipient (recipient names with UEI/DUNS). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -37,7 +38,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       .max(UPSTREAM_LIMIT_MAX)
       .default(10)
       .describe(
-        'Maximum number of results to return (1–500), enforced client-side. The recipient lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x this value, so its results are capped to this limit before returning — the cap keeps them in bucket order, so name matches fill the page first and identifier matches appear only in whatever room is left. To resolve a specific UEI or DUNS, pass the identifier itself as search_text. naics/psc/cfda/awarding_agency honor this limit exactly.',
+        'Maximum number of results to return (1–500), enforced client-side. Agency matches combine independently capped top-tier then sub-tier buckets, preserving their order without deduplicating names; offices are excluded. The recipient lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x this value, so its results are capped to this limit before returning — the cap keeps them in bucket order, so name matches fill the page first and identifier matches appear only in whatever room is left. To resolve a specific UEI or DUNS, pass the identifier itself as search_text. Every lookup returns at most limit rows.',
       ),
   }),
 
@@ -76,7 +77,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                'awarding_agency only: the top-tier agency name — the value the agency_name filters on usaspending_search_awards, usaspending_spending_by_category, usaspending_spending_by_geography, and usaspending_spending_over_time take. Those filters are top-tier only, so a sub-agency filters at its parent and the results cover the whole department.',
+                'awarding_agency only: the top-tier parent name. Use the matched name in agency_name on usaspending_search_awards and spending analytics to select the sub-agency; use toptier_name intentionally to select its whole parent department.',
               ),
             toptier_code: z
               .string()
@@ -84,6 +85,10 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .describe(
                 'awarding_agency only: the 3-digit top-tier agency code, accepted by usaspending_get_agency',
               ),
+            subtier_code: z
+              .string()
+              .optional()
+              .describe('awarding_agency only: the matched sub-tier agency code, when supplied'),
             uei: z
               .string()
               .optional()
@@ -128,6 +133,10 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       ),
   },
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'no_match',
@@ -167,6 +176,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       tier?: 'toptier' | 'subtier';
       toptier_name?: string;
       toptier_code?: string;
+      subtier_code?: string;
       uei?: string;
       duns?: string;
     };
@@ -202,24 +212,21 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       }));
     } else if (input.type === 'awarding_agency') {
       const resp = await svc.autocompleteAwardingAgency(input.search_text, requested, ctx);
-      rawResults = (resp.results ?? []).map((r: RawAgencyAutocomplete) => {
-        /**
-         * A top-tier row repeats the department under subtier_agency; a sub-agency row
-         * names itself there, with its parent under toptier_agency.
-         */
-        const own = r.toptier_flag ? r.toptier_agency : r.subtier_agency;
+      const mapAgency = (r: RawAgencyAutocomplete, tier: 'toptier' | 'subtier'): ResultItem => {
+        const parent = tier === 'toptier' ? r : r.toptier_agency;
         return {
-          ...(own?.name ? { name: own.name } : {}),
-          ...(own?.abbreviation ? { abbreviation: own.abbreviation } : {}),
-          ...(typeof r.toptier_flag === 'boolean'
-            ? { tier: r.toptier_flag ? ('toptier' as const) : ('subtier' as const) }
-            : {}),
-          ...(r.toptier_agency?.name ? { toptier_name: r.toptier_agency.name } : {}),
-          ...(r.toptier_agency?.toptier_code
-            ? { toptier_code: r.toptier_agency.toptier_code }
-            : {}),
+          ...(r.name ? { name: r.name } : {}),
+          ...(r.abbreviation ? { abbreviation: r.abbreviation } : {}),
+          tier,
+          ...(parent?.name ? { toptier_name: parent.name } : {}),
+          ...(parent?.code ? { toptier_code: parent.code } : {}),
+          ...(tier === 'subtier' && r.code ? { subtier_code: r.code } : {}),
         };
-      });
+      };
+      rawResults = [
+        ...(resp.results?.toptier_agency ?? []).map((r) => mapAgency(r, 'toptier')),
+        ...(resp.results?.subtier_agency ?? []).map((r) => mapAgency(r, 'subtier')),
+      ];
     } else {
       // recipient
       const resp = await svc.autocompleteRecipient(input.search_text, requested, ctx);
@@ -232,9 +239,9 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
 
     /**
      * `autocomplete/recipient/` applies `limit` per match bucket (name, UEI, DUNS) and
-     * unions them, so it can hand back up to 3x what was asked for; the other four
-     * lookups return at most `requested`. Truncation is judged on everything received —
-     * for recipients, the bucket union — before the slice to `limit`.
+     * unions them. Agency autocomplete caps each tier independently; omit offices and
+     * union top-tier then sub-tier rows. Judge truncation on the relevant bucket union
+     * before the combined caller slice to `limit`.
      */
     const received = rawResults.length;
     rawResults = rawResults.slice(0, input.limit);
@@ -286,18 +293,25 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
   },
 
   format: (result) => {
-    const lines = [`## Autocomplete: ${result.type} — "${result.search_text}"`, ''];
+    const lines = [
+      `## Autocomplete: ${escapeMarkdownInline(result.type)} — "${escapeMarkdownInline(result.search_text)}"`,
+      '',
+    ];
     for (const r of result.results) {
       const parts: string[] = [];
-      if (r.code) parts.push(`**Code:** ${r.code}`);
-      if (r.name) parts.push(`**Name:** ${r.name}${r.abbreviation ? ` (${r.abbreviation})` : ''}`);
-      if (r.tier) parts.push(`**Tier:** ${r.tier}`);
+      if (r.code) parts.push(`**Code:** ${escapeMarkdownInline(r.code)}`);
+      if (r.name)
+        parts.push(
+          `**Name:** ${escapeMarkdownInline(r.name)}${r.abbreviation ? ` (${escapeMarkdownInline(r.abbreviation)})` : ''}`,
+        );
+      if (r.tier) parts.push(`**Tier:** ${escapeMarkdownInline(r.tier)}`);
       if (r.toptier_name)
         parts.push(
-          `**Top-tier agency:** ${r.toptier_name}${r.toptier_code ? ` (toptier_code ${r.toptier_code})` : ''}`,
+          `**Top-tier agency:** ${escapeMarkdownInline(r.toptier_name)}${r.toptier_code ? ` (toptier_code ${escapeMarkdownInline(r.toptier_code)})` : ''}`,
         );
-      if (r.uei) parts.push(`**UEI:** ${r.uei}`);
-      if (r.duns) parts.push(`**DUNS:** ${r.duns}`);
+      if (r.uei) parts.push(`**UEI:** ${escapeMarkdownInline(r.uei)}`);
+      if (r.subtier_code) parts.push(`**Sub-tier code:** ${escapeMarkdownInline(r.subtier_code)}`);
+      if (r.duns) parts.push(`**DUNS:** ${escapeMarkdownInline(r.duns)}`);
       lines.push(`- ${parts.join(' | ')}`);
     }
     lines.push(`\n**Total:** ${result.total}`);

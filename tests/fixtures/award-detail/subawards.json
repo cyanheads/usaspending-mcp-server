@@ -1,0 +1,27 @@
+{
+  "page_metadata": {
+    "page": 1,
+    "next": 2,
+    "previous": null,
+    "hasNext": true,
+    "hasPrevious": false
+  },
+  "results": [
+    {
+      "id": 2106468,
+      "subaward_number": "1423526",
+      "description": "PURCHASED OUTSIDE PRODUCTION",
+      "action_date": "2017-06-20",
+      "amount": 76419.2,
+      "recipient_name": "A & G MACHINE, INC."
+    },
+    {
+      "id": 2108182,
+      "subaward_number": "1423526",
+      "description": "PURCHASED OUTSIDE PRODUCTION",
+      "action_date": "2017-06-20",
+      "amount": 76419.2,
+      "recipient_name": "A & G MACHINE, INC."
+    }
+  ]
+}

@@ -3,9 +3,11 @@
  * @module tests/tools/get-federal-account-breakdown.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getFederalAccountBreakdownTool } from '@/mcp-server/tools/definitions/get-federal-account-breakdown.tool.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockProgramActivities = vi.fn();
 const mockObjectClasses = vi.fn();
@@ -19,7 +21,123 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 
 describe('getFederalAccountBreakdownTool', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockProgramActivities.mockReset();
+    mockObjectClasses.mockReset();
+  });
+
+  it.each(['program_activity', 'object_class'] as const)(
+    'applies the full FY2025 range to %s while preserving page and row type',
+    async (dimension) => {
+      const mock = dimension === 'program_activity' ? mockProgramActivities : mockObjectClasses;
+      mock.mockResolvedValueOnce({
+        results: [
+          {
+            code: '001',
+            obligations: 0,
+            ...(dimension === 'program_activity' ? { type: 'PARK' } : {}),
+          },
+        ],
+        page_metadata: { total: 2, page: 2, hasNext: false, hasPrevious: true },
+      });
+      const result = await runToolContract(getFederalAccountBreakdownTool, {
+        account_code: '014-0680',
+        dimension,
+        fiscal_year: 2025,
+        page: 2,
+        limit: 1,
+      });
+      expect(mock).toHaveBeenLastCalledWith(
+        '014-0680',
+        {
+          limit: 1,
+          page: 2,
+          filters: { time_period: [{ start_date: '2024-10-01', end_date: '2025-09-30' }] },
+        },
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({
+        fiscal_year: 2025,
+        period: 'FY2025',
+        time_period: { start_date: '2024-10-01', end_date: '2025-09-30' },
+        page_metadata: { total: 2, page: 2, has_next: false, has_previous: true },
+        results: [{ obligations: 0 }],
+      });
+      const text = JSON.stringify(result.content);
+      expect(text).toContain('FY2025');
+      expect(text).toContain('2024-10-01');
+      expect(text).toContain('2025-09-30');
+      const rendered = markdownText(
+        result.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      );
+      expect(rendered).toContain('Period:');
+      expect(rendered).toContain('FY2025');
+      expect(rendered).toContain('2024-10-01 through 2025-09-30');
+      if (dimension === 'program_activity') expect(text).toContain('PARK');
+      else expect(text).not.toContain('PARK');
+    },
+  );
+
+  it('rejects an unsupported year before either service call', async () => {
+    const result = await runToolContract(getFederalAccountBreakdownTool, {
+      account_code: '014-0680',
+      dimension: 'program_activity',
+      fiscal_year: 2000,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(mockProgramActivities).not.toHaveBeenCalled();
+    expect(mockObjectClasses).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '', '  '])(
+    'labels an unfiltered breakdown as all available periods (%s)',
+    async (fiscal_year) => {
+      mockProgramActivities.mockResolvedValueOnce({ results: [], page_metadata: { total: 0 } });
+      const result = await runToolContract(getFederalAccountBreakdownTool, {
+        account_code: '014-0680',
+        dimension: 'program_activity',
+        fiscal_year,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(mockProgramActivities).toHaveBeenLastCalledWith(
+        '014-0680',
+        { limit: 10, page: 1 },
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({
+        period: 'all available periods',
+        notice: expect.any(String),
+      });
+      expect(result.structuredContent).not.toHaveProperty('time_period');
+      expect(JSON.stringify(result.content)).toContain('all available periods');
+    },
+  );
+
+  it('keeps a selected year on an empty past-end page', async () => {
+    mockObjectClasses.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { total: 2, page: 3, hasNext: false, hasPrevious: true },
+    });
+    const result = await runToolContract(getFederalAccountBreakdownTool, {
+      account_code: '014-0680',
+      dimension: 'object_class',
+      fiscal_year: 2024,
+      page: 3,
+      limit: 1,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      fiscal_year: 2024,
+      period: 'FY2024',
+      results: [],
+      notice: expect.stringContaining('page'),
+    });
+    expect(JSON.stringify(result.content)).toContain('FY2024');
   });
 
   it('returns program activity rows carrying the type field', async () => {
@@ -260,6 +378,7 @@ describe('getFederalAccountBreakdownTool', () => {
     const output = {
       account_code: '097-0100',
       dimension: 'program_activity',
+      period: 'all available periods',
       results: [
         {
           code: '0004',
@@ -286,6 +405,7 @@ describe('getFederalAccountBreakdownTool', () => {
     const output = {
       account_code: '097-0100',
       dimension: 'object_class',
+      period: 'all available periods',
       results: [
         {
           code: '25.2',
@@ -312,6 +432,7 @@ describe('getFederalAccountBreakdownTool', () => {
     const output = {
       account_code: '097-0100',
       dimension: 'program_activity',
+      period: 'all available periods',
       results: [
         {
           code: '0004',

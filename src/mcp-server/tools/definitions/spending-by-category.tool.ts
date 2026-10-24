@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import {
   ANALYTICS_DATE_FIELDS,
@@ -55,7 +56,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
           .string()
           .optional()
           .describe(
-            'Awarding agency name filter, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches nothing',
+            'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
           ),
         recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
         naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
@@ -153,6 +154,10 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       .describe(
         'Names a date bound that was filled in because only the other was supplied, and — when results are empty — names any Assistance Listing, PSC, or DEF codes sent and suggests how to broaden filters. Absent when neither applies.',
       ),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
   errors: [
@@ -302,7 +307,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
 
   format: (result) => {
     const lines: string[] = [
-      `## Spending by Category: ${result.category}`,
+      `## Spending by Category: ${escapeMarkdownInline(result.category)}`,
       formatPaginationLine(result.page_metadata),
     ];
     if (result.results.length > 0) {
@@ -321,9 +326,11 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       }
       result.results.forEach((r, i) => {
         const amt = r.amount !== undefined ? formatCurrency(r.amount) : 'N/A';
-        const recipient = recipientCols ? ` ${r.uei ?? ''} | ${r.recipient_id ?? ''} |` : '';
+        const recipient = recipientCols
+          ? ` ${escapeMarkdownInline(r.uei ?? '')} | ${escapeMarkdownInline(r.recipient_id ?? '')} |`
+          : '';
         lines.push(
-          `| ${i + 1} | ${r.id ?? 'N/A'} | ${r.name ?? 'N/A'} | ${r.code ?? 'N/A'} |${recipient} ${amt} |`,
+          `| ${i + 1} | ${escapeMarkdownInline(r.id ?? 'N/A')} | ${escapeMarkdownInline(r.name ?? 'N/A')} | ${escapeMarkdownInline(r.code ?? 'N/A')} |${recipient} ${amt} |`,
         );
       });
     }

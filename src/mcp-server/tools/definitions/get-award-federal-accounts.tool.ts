@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
@@ -106,6 +107,10 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       ),
   },
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -199,7 +204,9 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
   },
 
   format: (result) => {
-    const lines: string[] = [`## Federal Accounts Funding Award: ${result.award_id}`];
+    const lines: string[] = [
+      `## Federal Accounts Funding Award: ${escapeMarkdownInline(result.award_id)}`,
+    ];
     const paginationLine = formatPaginationLine({
       page: result.page_metadata.page,
       limit: result.page_metadata.limit,
@@ -211,18 +218,21 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
     );
     for (const a of result.results) {
       lines.push('');
-      lines.push(`### ${a.account_title ?? a.federal_account ?? 'Unknown'}`);
+      lines.push(`### ${escapeMarkdownInline(a.account_title ?? a.federal_account ?? 'Unknown')}`);
       if (a.federal_account)
-        lines.push(`**Account Code (for get_federal_account):** ${a.federal_account}`);
+        lines.push(
+          `**Account Code (for get_federal_account):** ${escapeMarkdownInline(a.federal_account)}`,
+        );
       if (typeof a.total_transaction_obligated_amount === 'number')
         lines.push(
           `**Obligated from this account:** ${formatCurrency(a.total_transaction_obligated_amount)}`,
         );
       if (a.funding_agency_name)
         lines.push(
-          `**Funding Agency:** ${a.funding_agency_name}${a.funding_agency_abbreviation ? ` (${a.funding_agency_abbreviation})` : ''}`,
+          `**Funding Agency:** ${escapeMarkdownInline(a.funding_agency_name)}${a.funding_agency_abbreviation ? ` (${escapeMarkdownInline(a.funding_agency_abbreviation)})` : ''}`,
         );
-      if (a.funding_agency_slug) lines.push(`**Funding Agency Slug:** ${a.funding_agency_slug}`);
+      if (a.funding_agency_slug)
+        lines.push(`**Funding Agency Slug:** ${escapeMarkdownInline(a.funding_agency_slug)}`);
       if (typeof a.funding_agency_id === 'number')
         lines.push(`**Funding Agency ID:** ${a.funding_agency_id}`);
       if (typeof a.funding_toptier_agency_id === 'number')

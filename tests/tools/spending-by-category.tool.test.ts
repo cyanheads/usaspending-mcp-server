@@ -23,6 +23,23 @@ const FY2025_CONTRACTS = {
 };
 
 describe('spendingByCategoryTool category enum (#80)', () => {
+  it('wires both agency tiers and echoes the matched name even for an empty result', async () => {
+    mockSpendingByCategory.mockResolvedValueOnce({ results: [], page_metadata: {} });
+    const response = await runToolContract(spendingByCategoryTool, {
+      category: 'awarding_agency',
+      filters: { agency_name: 'U.S. Geological Survey' },
+    });
+    expect(response.isError).toBeFalsy();
+    expect(mockSpendingByCategory.mock.lastCall?.[1].filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name: 'U.S. Geological Survey' },
+      { type: 'awarding', tier: 'subtier', name: 'U.S. Geological Survey' },
+    ]);
+    expect(response.structuredContent).toMatchObject({
+      results: [],
+      applied_agency_name: 'U.S. Geological Survey',
+    });
+    expect(textOf(response)).toContain('U.S. Geological Survey');
+  });
   it('offers exactly the categories USAspending serves', () => {
     expect(spendingByCategoryTool.input.shape.category.options).toEqual([
       'naics',

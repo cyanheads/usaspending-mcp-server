@@ -1,0 +1,37 @@
+{
+  "page_metadata": {
+    "page": 1,
+    "next": 2,
+    "previous": null,
+    "hasNext": true,
+    "hasPrevious": false
+  },
+  "results": [
+    {
+      "id": "CONT_TX_9700_-NONE-_N0001917C0015_0_-NONE-_0",
+      "type": "D",
+      "type_description": "DEFINITIVE CONTRACT",
+      "action_date": "2016-12-28",
+      "action_type": null,
+      "action_type_description": null,
+      "modification_number": "0",
+      "description": "CMV-22 PRODUCTION LOT 22 LONG LEAD-TIME ITEMS",
+      "federal_action_obligation": 15674000,
+      "face_value_loan_guarantee": 0,
+      "original_loan_subsidy_cost": 0
+    },
+    {
+      "id": "CONT_TX_9700_-NONE-_N0001917C0015_P00001_-NONE-_0",
+      "type": "D",
+      "type_description": "DEFINITIVE CONTRACT",
+      "action_date": "2017-08-03",
+      "action_type": "A",
+      "action_type_description": "ADDITIONAL WORK (NEW AGREEMENT,FAR PART 6 APPLIES)",
+      "modification_number": "P00001",
+      "description": "THE PURPOSE OF THIS UNDEFINITIZED CONTRACT ACTION (UCA) MODIFICATION IS TO INCORPORATE THE V-22 COMMON CONFIGURATION-READINESS AND MODERNIZATION (CC-RAM) EFFORT INTO THIS CONTRACT.",
+      "federal_action_obligation": 15705749,
+      "face_value_loan_guarantee": 0,
+      "original_loan_subsidy_cost": 0
+    }
+  ]
+}

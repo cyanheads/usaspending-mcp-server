@@ -126,6 +126,11 @@ describe('Nested objects made only of declared keys keep working', () => {
           tier: 'toptier',
           name: 'National Aeronautics and Space Administration',
         },
+        {
+          type: 'awarding',
+          tier: 'subtier',
+          name: 'National Aeronautics and Space Administration',
+        },
       ],
       recipient_search_text: ['Boeing'],
       naics_codes: { require: ['541512'] },

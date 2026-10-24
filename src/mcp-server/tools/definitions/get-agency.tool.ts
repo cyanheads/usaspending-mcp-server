@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import type { RawBudgetaryResources } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
@@ -186,12 +187,14 @@ export const getAgencyTool = tool('usaspending_get_agency', {
   },
 
   enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
     unavailable_sections: {
       render: (sections) =>
         [
           '**Unavailable sections:**',
           ...(sections ?? []).map(
-            (s) => `- ${s.section}: ${s.reason}${s.retryable ? ' (retryable)' : ''} — ${s.message}`,
+            (s) =>
+              `- ${escapeMarkdownInline(s.section)}: ${escapeMarkdownInline(s.reason)}${s.retryable ? ' (retryable)' : ''} — ${escapeMarkdownInline(s.message)}`,
           ),
         ].join('\n'),
     },
@@ -455,11 +458,12 @@ export const getAgencyTool = tool('usaspending_get_agency', {
 
   format: (result) => {
     const lines: string[] = [
-      `## Agency: ${result.name ?? 'Unknown'}${result.abbreviation ? ` (${result.abbreviation})` : ''}`,
+      `## Agency: ${escapeMarkdownInline(result.name ?? 'Unknown')}${result.abbreviation ? ` (${escapeMarkdownInline(result.abbreviation)})` : ''}`,
     ];
-    if (result.toptier_code) lines.push(`**Toptier Code:** ${result.toptier_code}`);
+    if (result.toptier_code)
+      lines.push(`**Toptier Code:** ${escapeMarkdownInline(result.toptier_code)}`);
     if (typeof result.agency_id === 'number') lines.push(`**Agency ID:** ${result.agency_id}`);
-    if (result.mission) lines.push(`**Mission:** ${result.mission}`);
+    if (result.mission) lines.push(`**Mission:** ${escapeMarkdownInline(result.mission)}`);
     if (typeof result.fiscal_year === 'number')
       lines.push(`**Fiscal Year:** ${result.fiscal_year}`);
     if (typeof result.budgetary_resources_amount === 'number')
@@ -472,7 +476,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       lines.push(`**Sub-agencies:** ${result.subtier_agency_count}`);
     if (typeof result.sub_agency_fiscal_year === 'number')
       lines.push(`**Sub-Agency Fiscal Year:** ${result.sub_agency_fiscal_year}`);
-    if (result.website) lines.push(`**Website:** ${result.website}`);
+    if (result.website) lines.push(`**Website:** ${markdownLink(result.website, result.website)}`);
 
     if (result.sub_agencies?.length || result.sub_agency_page_metadata) {
       lines.push('\n### Sub-Agency Breakdown');
@@ -490,7 +494,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
         const newAwards =
           typeof s.new_award_count === 'number' ? s.new_award_count.toLocaleString() : 'N/A';
         lines.push(
-          `| ${s.name ?? 'N/A'}${s.abbreviation ? ` (${s.abbreviation})` : ''} | ${oblig} | ${txns} | ${newAwards} |`,
+          `| ${escapeMarkdownInline(s.name ?? 'N/A')}${s.abbreviation ? ` (${escapeMarkdownInline(s.abbreviation)})` : ''} | ${oblig} | ${txns} | ${newAwards} |`,
         );
       }
     }
@@ -499,7 +503,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       lines.push('\n### Disaster/Emergency Funding Codes');
       for (const d of result.def_codes) {
         lines.push(
-          `- **${d.code ?? 'N/A'}** — ${d.title ?? 'N/A'}${d.public_law ? ` (${d.public_law})` : ''}`,
+          `- **${escapeMarkdownInline(d.code ?? 'N/A')}** — ${escapeMarkdownInline(d.title ?? 'N/A')}${d.public_law ? ` (${escapeMarkdownInline(d.public_law)})` : ''}`,
         );
       }
     }

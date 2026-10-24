@@ -8,6 +8,14 @@
 import { z } from '@cyanheads/mcp-ts-core';
 import { type DateRange, resolveDateRange } from './dates.js';
 
+/** Matches an awarding name at either tier; shared sub-tier names match every parent. */
+export function awardingAgencyFilters(name: string) {
+  return [
+    { type: 'awarding', tier: 'toptier', name },
+    { type: 'awarding', tier: 'subtier', name },
+  ];
+}
+
 /** Assistance Listing (CFDA) number: two digits, a dot, three digits or capitals (`11.67A`). */
 const ASSISTANCE_LISTING_PATTERN = /^\d{2}\.[0-9A-Z]{3}$/;
 
@@ -209,7 +217,7 @@ export function buildFilters(
   if (f.keywords?.length) filters.keywords = f.keywords;
   if (f.award_type_codes?.length) filters.award_type_codes = f.award_type_codes;
   if (f.agency_name) {
-    filters.agencies = [{ type: 'awarding', tier: 'toptier', name: f.agency_name }];
+    filters.agencies = awardingAgencyFilters(f.agency_name);
   }
   if (f.recipient_id) filters.recipient_id = f.recipient_id;
   if (f.naics_codes?.length) filters.naics_codes = { require: f.naics_codes };

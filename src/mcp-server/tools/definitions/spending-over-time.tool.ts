@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import {
   ANALYTICS_DATE_FIELDS,
@@ -51,7 +52,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
           .string()
           .optional()
           .describe(
-            'Awarding agency name filter, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches nothing',
+            'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
           ),
         recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
         naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
@@ -164,6 +165,10 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       .describe(
         'Names a time-window bound that was filled in because only the other was supplied, and — when no periods are returned — names any Assistance Listing, PSC, or DEF codes sent and suggests broadening filters. Absent when neither applies.',
       ),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
   errors: [
@@ -314,8 +319,8 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
 
   format: (result) => {
     const lines: string[] = [
-      `## Spending Over Time (${result.group})`,
-      `**Periods:** ${result.total_periods}`,
+      `## Spending Over Time (${escapeMarkdownInline(result.group)})`,
+      `**Periods:** ${escapeMarkdownInline(String(result.total_periods))}`,
     ];
 
     // Explain the FM token only when rows actually carry one, so the legend and
@@ -346,7 +351,9 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       const idv = r.idvs !== undefined ? formatCurrency(r.idvs) : 'N/A';
       const l = r.loans !== undefined ? formatCurrency(r.loans) : 'N/A';
       const o = r.other !== undefined ? formatCurrency(r.other) : 'N/A';
-      lines.push(`| ${period} | ${fy} | ${amt} | ${c} | ${g} | ${dp} | ${idv} | ${l} | ${o} |`);
+      lines.push(
+        `| ${escapeMarkdownInline(period)} | ${escapeMarkdownInline(fy)} | ${amt} | ${c} | ${g} | ${dp} | ${idv} | ${l} | ${o} |`,
+      );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

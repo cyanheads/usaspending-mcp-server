@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 
@@ -52,6 +53,15 @@ export const getAwardTool = tool('usaspending_get_award', {
     description: z.string().optional().describe('Award description'),
     total_obligation: z.number().optional().describe('Total obligation amount in USD'),
     total_outlays: z.number().optional().describe('Total outlay amount in USD'),
+    total_account_obligation: z
+      .number()
+      .optional()
+      .describe('Total federal-account obligation in USD'),
+    total_account_outlay: z.number().optional().describe('Total federal-account outlay in USD'),
+    base_exercised_options: z
+      .number()
+      .optional()
+      .describe('Base and exercised options value in USD when reported for contracts or IDVs'),
     base_and_all_options_value: z
       .number()
       .optional()
@@ -93,6 +103,11 @@ export const getAwardTool = tool('usaspending_get_award', {
           .optional()
           .describe('Three-letter country code of performance (e.g. USA)'),
         zip5: z.string().optional().describe('ZIP code of performance'),
+        congressional_code: z
+          .string()
+          .optional()
+          .describe('Congressional district of performance, preserving leading zeros'),
+        county_name: z.string().optional().describe('County of performance'),
       })
       .optional()
       .describe('Place of performance; absent when upstream reports no location fields'),
@@ -122,6 +137,12 @@ export const getAwardTool = tool('usaspending_get_award', {
           .object({
             city_name: z.string().optional().describe('Recipient city'),
             state_code: z.string().optional().describe('Recipient state code'),
+            zip5: z.string().optional().describe('Recipient ZIP code, preserving leading zeros'),
+            congressional_code: z
+              .string()
+              .optional()
+              .describe('Recipient congressional district, preserving leading zeros'),
+            county_name: z.string().optional().describe('Recipient county'),
             country_code: z
               .string()
               .optional()
@@ -199,6 +220,17 @@ export const getAwardTool = tool('usaspending_get_award', {
       .describe(
         'Every Assistance Listing (CFDA program) funding the award, in upstream order; absent for contracts and IDVs',
       ),
+    account_outlays_by_defc: z
+      .array(
+        z
+          .object({
+            code: z.string().optional().describe('DEF code identifying the emergency supplemental'),
+            amount: z.number().optional().describe('Outlay amount in USD for this DEF code'),
+          })
+          .describe('DEF code entry with code and outlay amount'),
+      )
+      .optional()
+      .describe('Federal-account outlays by Disaster/Emergency Funding code in upstream order'),
     account_obligations_by_defc: z
       .array(
         z
@@ -268,11 +300,16 @@ export const getAwardTool = tool('usaspending_get_award', {
       state_code: pop?.state_code,
       country_code: pop?.location_country_code,
       zip5: pop?.zip5,
+      congressional_code: pop?.congressional_code,
+      county_name: pop?.county_name,
     });
     const recipientLocation = compact({
       city_name: rcp?.location?.city_name,
       state_code: rcp?.location?.state_code,
       country_code: rcp?.location?.location_country_code,
+      zip5: rcp?.location?.zip5,
+      congressional_code: rcp?.location?.congressional_code,
+      county_name: rcp?.location?.county_name,
     });
     const businessCategories = rcp?.business_categories?.length
       ? rcp.business_categories
@@ -320,6 +357,10 @@ export const getAwardTool = tool('usaspending_get_award', {
     });
     // Non-loan awards carry placeholder zeros in these fields.
     const isLoan = r.category === 'loans';
+    const accountOutlays = (r.account_outlays_by_defc ?? []).flatMap((row) => {
+      const entry = compact({ code: row.code, amount: row.amount });
+      return entry ? [entry] : [];
+    });
 
     return {
       ...(r.generated_unique_award_id
@@ -333,6 +374,16 @@ export const getAwardTool = tool('usaspending_get_award', {
       ...(r.description ? { description: r.description } : {}),
       ...(typeof r.total_obligation === 'number' ? { total_obligation: r.total_obligation } : {}),
       ...(typeof r.total_outlay === 'number' ? { total_outlays: r.total_outlay } : {}),
+      ...(typeof r.total_account_obligation === 'number'
+        ? { total_account_obligation: r.total_account_obligation }
+        : {}),
+      ...(typeof r.total_account_outlay === 'number'
+        ? { total_account_outlay: r.total_account_outlay }
+        : {}),
+      ...(typeof r.base_exercised_options === 'number'
+        ? { base_exercised_options: r.base_exercised_options }
+        : {}),
+      ...(accountOutlays.length ? { account_outlays_by_defc: accountOutlays } : {}),
       ...(typeof r.base_and_all_options === 'number'
         ? { base_and_all_options_value: r.base_and_all_options }
         : {}),
@@ -387,29 +438,40 @@ export const getAwardTool = tool('usaspending_get_award', {
   format: (result) => {
     const lines: string[] = ['## Award Details'];
     if (result.generated_unique_award_id)
-      lines.push(`**Award ID:** ${result.generated_unique_award_id}`);
-    if (result.piid) lines.push(`**PIID:** ${result.piid}`);
-    if (result.fain) lines.push(`**FAIN:** ${result.fain}`);
-    if (result.type) lines.push(`**Type Code:** ${result.type}`);
-    if (result.type_description) lines.push(`**Type:** ${result.type_description}`);
-    if (result.category) lines.push(`**Category:** ${result.category}`);
-    if (result.description) lines.push(`**Description:** ${result.description}`);
+      lines.push(`**Award ID:** ${escapeMarkdownInline(result.generated_unique_award_id)}`);
+    if (result.piid) lines.push(`**PIID:** ${escapeMarkdownInline(result.piid)}`);
+    if (result.fain) lines.push(`**FAIN:** ${escapeMarkdownInline(result.fain)}`);
+    if (result.type) lines.push(`**Type Code:** ${escapeMarkdownInline(result.type)}`);
+    if (result.type_description)
+      lines.push(`**Type:** ${escapeMarkdownInline(result.type_description)}`);
+    if (result.category) lines.push(`**Category:** ${escapeMarkdownInline(result.category)}`);
+    if (result.description)
+      lines.push(`**Description:** ${escapeMarkdownInline(result.description)}`);
     if (typeof result.total_obligation === 'number')
       lines.push(`**Total Obligation:** ${formatCurrency(result.total_obligation)}`);
     if (typeof result.total_outlays === 'number')
       lines.push(`**Total Outlays:** ${formatCurrency(result.total_outlays)}`);
+    if (typeof result.total_account_obligation === 'number')
+      lines.push(
+        `**Total Account Obligation:** ${formatCurrency(result.total_account_obligation)}`,
+      );
+    if (typeof result.total_account_outlay === 'number')
+      lines.push(`**Total Account Outlay:** ${formatCurrency(result.total_account_outlay)}`);
+    if (typeof result.base_exercised_options === 'number')
+      lines.push(`**Base + Exercised Options:** ${formatCurrency(result.base_exercised_options)}`);
     if (typeof result.base_and_all_options_value === 'number')
       lines.push(`**Base + All Options:** ${formatCurrency(result.base_and_all_options_value)}`);
     if (typeof result.total_loan_value === 'number')
       lines.push(`**Total Loan Value:** ${formatCurrency(result.total_loan_value)}`);
     if (typeof result.total_subsidy_cost === 'number')
       lines.push(`**Total Subsidy Cost:** ${formatCurrency(result.total_subsidy_cost)}`);
-    if (result.date_signed) lines.push(`**Date Signed:** ${result.date_signed}`);
+    if (result.date_signed)
+      lines.push(`**Date Signed:** ${escapeMarkdownInline(result.date_signed)}`);
 
     if (result.period_of_performance) {
       const p = result.period_of_performance;
       lines.push(
-        `**Period:** ${p.start_date ?? 'N/A'} → ${p.end_date ?? 'N/A'}${p.potential_end_date ? ` (potential: ${p.potential_end_date})` : ''}`,
+        `**Period:** ${escapeMarkdownInline(p.start_date ?? 'N/A')} → ${escapeMarkdownInline(p.end_date ?? 'N/A')}${p.potential_end_date ? ` (potential: ${escapeMarkdownInline(p.potential_end_date)})` : ''}`,
       );
     }
 
@@ -418,89 +480,116 @@ export const getAwardTool = tool('usaspending_get_award', {
       const loc = [pop.city_name, pop.state_code, pop.zip5, pop.country_code]
         .filter(Boolean)
         .join(', ');
-      if (loc) lines.push(`**Place of Performance:** ${loc}`);
+      if (loc) lines.push(`**Place of Performance:** ${escapeMarkdownInline(loc)}`);
+      if (pop.congressional_code)
+        lines.push(
+          `**Performance Congressional District:** ${escapeMarkdownInline(pop.congressional_code)}`,
+        );
+      if (pop.county_name)
+        lines.push(`**Performance County:** ${escapeMarkdownInline(pop.county_name)}`);
     }
 
     if (result.recipient) {
       lines.push('\n### Recipient');
       if (result.recipient.recipient_name)
-        lines.push(`**Name:** ${result.recipient.recipient_name}`);
-      if (result.recipient.uei) lines.push(`**UEI:** ${result.recipient.uei}`);
+        lines.push(`**Name:** ${escapeMarkdownInline(result.recipient.recipient_name)}`);
+      if (result.recipient.uei)
+        lines.push(`**UEI:** ${escapeMarkdownInline(result.recipient.uei)}`);
       if (result.recipient.recipient_id)
-        lines.push(`**Recipient ID (for get_recipient):** ${result.recipient.recipient_id}`);
+        lines.push(
+          `**Recipient ID (for get_recipient):** ${escapeMarkdownInline(result.recipient.recipient_id)}`,
+        );
       if (result.recipient.parent_recipient_name)
-        lines.push(`**Parent:** ${result.recipient.parent_recipient_name}`);
-      if (result.recipient.parent_uei) lines.push(`**Parent UEI:** ${result.recipient.parent_uei}`);
+        lines.push(`**Parent:** ${escapeMarkdownInline(result.recipient.parent_recipient_name)}`);
+      if (result.recipient.parent_uei)
+        lines.push(`**Parent UEI:** ${escapeMarkdownInline(result.recipient.parent_uei)}`);
       if (result.recipient.parent_recipient_id)
         lines.push(
-          `**Parent Recipient ID (for get_recipient):** ${result.recipient.parent_recipient_id}`,
+          `**Parent Recipient ID (for get_recipient):** ${escapeMarkdownInline(result.recipient.parent_recipient_id)}`,
         );
       if (result.recipient.business_categories?.length)
-        lines.push(`**Business Categories:** ${result.recipient.business_categories.join(', ')}`);
+        lines.push(
+          `**Business Categories:** ${escapeMarkdownInline(result.recipient.business_categories.join(', '))}`,
+        );
       if (result.recipient.location) {
         const loc = result.recipient.location;
-        lines.push(
-          `**Location:** ${[loc.city_name, loc.state_code, loc.country_code].filter(Boolean).join(', ')}`,
-        );
+        const address = [loc.city_name, loc.state_code, loc.zip5, loc.country_code]
+          .filter(Boolean)
+          .join(', ');
+        if (address) lines.push(`**Location:** ${escapeMarkdownInline(address)}`);
+        if (loc.congressional_code)
+          lines.push(
+            `**Recipient Congressional District:** ${escapeMarkdownInline(loc.congressional_code)}`,
+          );
+        if (loc.county_name)
+          lines.push(`**Recipient County:** ${escapeMarkdownInline(loc.county_name)}`);
       }
     }
 
     if (result.awarding_agency) {
       const a = result.awarding_agency;
       lines.push(
-        `\n**Awarding Agency:** ${a.toptier_name ?? 'N/A'}${a.subtier_name ? ` / ${a.subtier_name}` : ''}${a.toptier_code ? ` (code: ${a.toptier_code})` : ''}${a.toptier_slug ? ` (slug: ${a.toptier_slug})` : ''}`,
+        `\n**Awarding Agency:** ${escapeMarkdownInline(a.toptier_name ?? 'N/A')}${a.subtier_name ? ` / ${escapeMarkdownInline(a.subtier_name)}` : ''}${a.toptier_code ? ` (code: ${escapeMarkdownInline(a.toptier_code)})` : ''}${a.toptier_slug ? ` (slug: ${escapeMarkdownInline(a.toptier_slug)})` : ''}`,
       );
     }
     if (result.funding_agency) {
       const f = result.funding_agency;
       lines.push(
-        `**Funding Agency:** ${f.toptier_name ?? 'N/A'}${f.subtier_name ? ` / ${f.subtier_name}` : ''}${f.toptier_code ? ` (code: ${f.toptier_code})` : ''}`,
+        `**Funding Agency:** ${escapeMarkdownInline(f.toptier_name ?? 'N/A')}${f.subtier_name ? ` / ${escapeMarkdownInline(f.subtier_name)}` : ''}${f.toptier_code ? ` (code: ${escapeMarkdownInline(f.toptier_code)})` : ''}`,
       );
     }
 
     if (result.naics)
       lines.push(
-        `**NAICS:** ${result.naics.code}${result.naics.description ? ` — ${result.naics.description}` : ''}`,
+        `**NAICS:** ${escapeMarkdownInline(String(result.naics.code))}${result.naics.description ? ` — ${escapeMarkdownInline(result.naics.description)}` : ''}`,
       );
     if (result.product_or_service_code)
       lines.push(
-        `**PSC:** ${result.product_or_service_code.code}${result.product_or_service_code.description ? ` — ${result.product_or_service_code.description}` : ''}`,
+        `**PSC:** ${escapeMarkdownInline(String(result.product_or_service_code.code))}${result.product_or_service_code.description ? ` — ${escapeMarkdownInline(result.product_or_service_code.description)}` : ''}`,
       );
 
     if (typeof result.subaward_count === 'number')
-      lines.push(`**Subaward Count:** ${result.subaward_count}`);
+      lines.push(`**Subaward Count:** ${escapeMarkdownInline(String(result.subaward_count))}`);
 
     if (result.assistance_listings?.length) {
       lines.push('\n### Assistance Listings');
       for (const l of result.assistance_listings) {
         lines.push(
-          `- **${l.number ?? 'N/A'}**${l.title ? ` — ${l.title}` : ''}${typeof l.obligation === 'number' ? `: ${formatCurrency(l.obligation)}` : ''}`,
+          `- **${escapeMarkdownInline(l.number ?? 'N/A')}**${l.title ? ` — ${escapeMarkdownInline(l.title)}` : ''}${typeof l.obligation === 'number' ? `: ${formatCurrency(l.obligation)}` : ''}`,
         );
       }
     }
 
     if (result.parent_award) {
       lines.push('\n### Parent Award (IDV)');
-      if (result.parent_award.award_id) lines.push(`**PIID:** ${result.parent_award.award_id}`);
+      if (result.parent_award.award_id)
+        lines.push(`**PIID:** ${escapeMarkdownInline(result.parent_award.award_id)}`);
       if (result.parent_award.generated_unique_award_id)
         lines.push(
-          `**Chain ID (for get_award):** ${result.parent_award.generated_unique_award_id}`,
+          `**Chain ID (for get_award):** ${escapeMarkdownInline(result.parent_award.generated_unique_award_id)}`,
         );
       if (result.parent_award.agency_name)
-        lines.push(`**Agency:** ${result.parent_award.agency_name}`);
+        lines.push(`**Agency:** ${escapeMarkdownInline(result.parent_award.agency_name)}`);
       if (result.parent_award.type_description)
-        lines.push(`**Type:** ${result.parent_award.type_description}`);
+        lines.push(`**Type:** ${escapeMarkdownInline(result.parent_award.type_description)}`);
     }
 
     if (result.account_obligations_by_defc?.length) {
       lines.push('\n### Disaster/Emergency Funding (DEF Codes)');
       for (const d of result.account_obligations_by_defc) {
         lines.push(
-          `- **${d.code ?? 'N/A'}:** ${typeof d.amount === 'number' ? formatCurrency(d.amount) : 'N/A'}`,
+          `- **${escapeMarkdownInline(d.code ?? 'N/A')}:** ${typeof d.amount === 'number' ? formatCurrency(d.amount) : 'N/A'}`,
         );
       }
     }
 
+    if (result.account_outlays_by_defc?.length) {
+      lines.push('\n### Account Outlays by DEF Code');
+      for (const row of result.account_outlays_by_defc)
+        lines.push(
+          `- **${escapeMarkdownInline(row.code ?? 'N/A')}:** ${typeof row.amount === 'number' ? formatCurrency(row.amount) : 'N/A'}`,
+        );
+    }
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

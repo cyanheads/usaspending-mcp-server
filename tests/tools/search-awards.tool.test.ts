@@ -16,6 +16,28 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('searchAwardsTool', () => {
+  it.each([
+    { agency_name: 'U.S. Geological Survey' },
+    { filters: { agency_name: 'U.S. Geological Survey' } },
+  ])('wires dual-tier matching and preserves the agency echo for %j', async (args) => {
+    mockSearchAwards.mockResolvedValueOnce({ results: [], page_metadata: { hasNext: false } });
+    const response = await runToolContract(searchAwardsTool, args);
+    expect(response.isError).toBeFalsy();
+    expect(mockSearchAwards.mock.lastCall?.[0].filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name: 'U.S. Geological Survey' },
+      { type: 'awarding', tier: 'subtier', name: 'U.S. Geological Survey' },
+    ]);
+    expect(response.structuredContent).toMatchObject({
+      results: [],
+      applied_agency_name: 'U.S. Geological Survey',
+    });
+    expect(
+      response.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n'),
+    ).toContain('U.S. Geological Survey');
+  });
   beforeEach(() => {
     mockSearchAwards.mockClear();
   });
@@ -352,6 +374,7 @@ describe('searchAwardsTool', () => {
     expect(sent.keywords).toEqual(['nestedword']);
     expect(sent.agencies).toEqual([
       { type: 'awarding', tier: 'toptier', name: 'Department of Nested' },
+      { type: 'awarding', tier: 'subtier', name: 'Department of Nested' },
     ]);
     // flat award_type_codes preserved where nested doesn't specify
     expect(sent.award_type_codes).toEqual(['02', '03']);

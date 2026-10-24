@@ -18,7 +18,7 @@ describe('getAwardTransactionsTool', () => {
     mockGetAwardTransactions.mockResolvedValueOnce({
       results: [
         {
-          id: 1,
+          id: 'CONT_TX_9700_TEST_0',
           type: 'D',
           type_description: 'Definitive Contract',
           action_date: '2023-01-15',
@@ -27,8 +27,6 @@ describe('getAwardTransactionsTool', () => {
           federal_action_obligation: 250_000,
           modification_number: 'M0001',
           description: 'Scope increase',
-          recipient_name: 'Acme Corp',
-          awarding_agency_name: 'Department of Defense',
         },
       ],
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
@@ -40,7 +38,7 @@ describe('getAwardTransactionsTool', () => {
 
     expect(result.award_id).toBe('CONT_AWD_TEST');
     expect(result.results).toHaveLength(1);
-    expect(result.results[0]!.id).toBe(1);
+    expect(result.results[0]!.id).toBe('CONT_TX_9700_TEST_0');
     expect(result.results[0]!.modification_number).toBe('M0001');
     expect(result.results[0]!.federal_action_obligation).toBe(250_000);
     expect(result.page_metadata.has_next).toBe(false);
@@ -119,7 +117,7 @@ describe('getAwardTransactionsTool', () => {
       award_id: 'CONT_AWD_TEST',
       results: [
         {
-          id: 42,
+          id: 'CONT_TX_9700_TEST_M0002',
           type: 'D',
           type_description: 'Definitive Contract',
           action_date: '2023-06-01',
@@ -128,8 +126,6 @@ describe('getAwardTransactionsTool', () => {
           federal_action_obligation: 100_000,
           modification_number: 'M0002',
           description: 'Scope change',
-          recipient_name: 'Test Corp',
-          awarding_agency_name: 'DoD',
         },
       ],
       page_metadata: { has_next: false, page: 1, total: 1, limit: 10 },
@@ -147,7 +143,9 @@ describe('getAwardTransactionsTool', () => {
     // total=48 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
     const output = {
       award_id: 'CONT_AWD_TEST',
-      results: [{ id: 42, modification_number: 'M0002', action_date: '2023-06-01' }],
+      results: [
+        { id: 'CONT_TX_9700_TEST_M0002', modification_number: 'M0002', action_date: '2023-06-01' },
+      ],
       page_metadata: { has_next: true, page: 1, total: 48, limit: 8 },
     };
 

@@ -1,0 +1,39 @@
+{
+  "page_metadata": {
+    "page": 1,
+    "next": 2,
+    "previous": null,
+    "hasNext": true,
+    "hasPrevious": false
+  },
+  "results": [
+    {
+      "id": "ASST_TX_9100_P268K155150_-NONE-_84.268_0001",
+      "type": "07",
+      "type_description": null,
+      "action_date": "2014-04-16",
+      "action_type": "A1",
+      "action_type_description": "New Award",
+      "modification_number": "0001",
+      "description": "2014-2015 DL BASE RECORD",
+      "federal_action_obligation": 0,
+      "face_value_loan_guarantee": 10770988,
+      "original_loan_subsidy_cost": 0,
+      "cfda_number": "84.268"
+    },
+    {
+      "id": "ASST_TX_9100_P268K155150_-NONE-_84.268_0002",
+      "type": "07",
+      "type_description": null,
+      "action_date": "2014-06-13",
+      "action_type": "EX",
+      "action_type_description": "Other Action, Non-Financial",
+      "modification_number": "0002",
+      "description": "2014-2015 DL BASE RECORD",
+      "federal_action_obligation": 0,
+      "face_value_loan_guarantee": 340474916,
+      "original_loan_subsidy_cost": 0,
+      "cfda_number": "84.268"
+    }
+  ]
+}

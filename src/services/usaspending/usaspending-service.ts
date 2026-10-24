@@ -653,10 +653,12 @@ export class USASpendingService {
   async getFederalAccount(
     accountCode: string,
     ctx: Context,
+    fiscalYear?: number,
   ): Promise<RawFederalAccount | undefined> {
-    ctx.log.debug('getFederalAccount', { accountCode });
+    ctx.log.debug('getFederalAccount', { accountCode, fiscalYear });
+    const query = fiscalYear !== undefined ? `?fiscal_year=${fiscalYear}` : '';
     return await this.getEntity<RawFederalAccount>(
-      `federal_accounts/${encodeURIComponent(accountCode)}/`,
+      `federal_accounts/${encodeURIComponent(accountCode)}/${query}`,
       ctx,
     );
   }
@@ -683,7 +685,11 @@ export class USASpendingService {
    */
   getFederalAccountProgramActivities(
     accountCode: string,
-    body: { limit: number; page: number },
+    body: {
+      limit: number;
+      page: number;
+      filters?: { time_period: { start_date: string; end_date: string }[] };
+    },
     ctx: Context,
   ): Promise<RawFederalAccountBreakdownResponse> {
     ctx.log.debug('getFederalAccountProgramActivities', { accountCode, page: body.page });
@@ -697,7 +703,11 @@ export class USASpendingService {
   /** Obligations for an account broken down by object class. */
   getFederalAccountObjectClasses(
     accountCode: string,
-    body: { limit: number; page: number },
+    body: {
+      limit: number;
+      page: number;
+      filters?: { time_period: { start_date: string; end_date: string }[] };
+    },
     ctx: Context,
   ): Promise<RawFederalAccountBreakdownResponse> {
     ctx.log.debug('getFederalAccountObjectClasses', { accountCode, page: body.page });
@@ -758,9 +768,19 @@ export class USASpendingService {
     searchText: string,
     limit: number,
     ctx: Context,
-  ): Promise<{ results: RawAgencyAutocomplete[] }> {
+  ): Promise<{
+    results: {
+      toptier_agency?: RawAgencyAutocomplete[];
+      subtier_agency?: RawAgencyAutocomplete[];
+      office?: unknown[];
+    };
+  }> {
     ctx.log.debug('autocompleteAwardingAgency', { searchText });
-    return this.post('autocomplete/awarding_agency/', { search_text: searchText, limit }, ctx);
+    return this.post(
+      'autocomplete/awarding_agency_office/',
+      { search_text: searchText, limit },
+      ctx,
+    );
   }
 
   autocompleteRecipient(

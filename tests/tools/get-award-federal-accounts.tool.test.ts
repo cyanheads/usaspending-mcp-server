@@ -6,6 +6,7 @@
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { getAwardFederalAccountsTool } from '@/mcp-server/tools/definitions/get-award-federal-accounts.tool.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockGetAwardFederalAccounts = vi.fn();
 
@@ -254,7 +255,7 @@ describe('getAwardFederalAccountsTool', () => {
     };
 
     const blocks = getAwardFederalAccountsTool.format!(output);
-    const text = (blocks[0] as { text: string }).text;
+    const text = markdownText((blocks[0] as { text: string }).text);
     expect(text).toContain('CONT_AWD_GSFC0198106DNAS526555_8000_-NONE-_-NONE-');
     expect(text).toContain('080-0120');
     expect(text).toContain('Science, National Aeronautics and Space Administration');

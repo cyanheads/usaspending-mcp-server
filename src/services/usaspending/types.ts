@@ -149,6 +149,7 @@ export interface RawAwardDetail {
   piid?: string | null;
   place_of_performance?: {
     city_name?: string | null;
+    county_name?: string | null;
     state_code?: string | null;
     state_name?: string | null;
     country_name?: string | null;
@@ -169,6 +170,8 @@ export interface RawAwardDetail {
       address_line1?: string | null;
       address_line2?: string | null;
       city_name?: string | null;
+      county_name?: string | null;
+      congressional_code?: string | null;
       state_code?: string | null;
       zip5?: string | null;
       zip4?: string | null;
@@ -196,16 +199,15 @@ export interface RawTransaction {
   action_date?: string | null;
   action_type?: string | null;
   action_type_description?: string | null;
-  awarding_agency_name?: string | null;
+  cfda_number?: string | null;
   description?: string | null;
   face_value_loan_guarantee?: number | null;
   federal_action_obligation?: number | null;
   funding_agency_name?: string | null;
-  id?: number | null;
+  id?: string | null;
   is_fpds?: boolean | null;
   modification_number?: string | null;
   original_loan_subsidy_cost?: number | null;
-  recipient_name?: string | null;
   type?: string | null;
   type_description?: string | null;
 }
@@ -217,12 +219,6 @@ export interface RawSubaward {
   business_type_description?: string | null;
   description?: string | null;
   id?: number | null;
-  place_of_performance?: {
-    city_name?: string | null;
-    state_code?: string | null;
-    country_code?: string | null;
-    zip5?: string | null;
-  } | null;
   prime_award_id?: string | null;
   prime_award_internal_id?: string | null;
   recipient_duns?: string | null;
@@ -233,7 +229,6 @@ export interface RawSubaward {
     zip5?: string | null;
   } | null;
   recipient_name?: string | null;
-  recipient_uei?: string | null;
   subaward_number?: string | null;
 }
 
@@ -571,7 +566,7 @@ export interface RawFederalAccount {
   bureau_slug?: string | null;
   children?: RawFederalAccountChild[] | null;
   federal_account_code?: string | null;
-  fiscal_year?: number | null;
+  fiscal_year?: number | string | null;
   id?: number | null;
   main_account_code?: string | null;
   parent_agency_name?: string | null;
@@ -620,7 +615,7 @@ export interface RawFederalAccountSearchRow {
 /** Raw paginated response from POST /federal_accounts/ */
 export interface RawFederalAccountSearchResponse {
   count?: number | null;
-  fy?: string | null;
+  fy?: string | number | null;
   hasNext?: boolean | null;
   hasPrevious?: boolean | null;
   keyword?: string | null;
@@ -688,19 +683,16 @@ export interface RawCfdaAutocomplete {
   program_title?: string | null;
 }
 
-/** Raw agency autocomplete result */
+/** Raw agency autocomplete bucket row; nested arrays are unused by agency-only callers. */
 export interface RawAgencyAutocomplete {
-  id?: number | string | null;
-  subtier_agency?: {
-    abbreviation?: string | null;
-    name?: string | null;
-  } | null;
+  abbreviation?: string | null;
+  code?: string | null;
+  name?: string | null;
   toptier_agency?: {
-    toptier_code?: string | null;
+    code?: string | null;
     abbreviation?: string | null;
     name?: string | null;
   } | null;
-  toptier_flag?: boolean | null;
 }
 
 /**

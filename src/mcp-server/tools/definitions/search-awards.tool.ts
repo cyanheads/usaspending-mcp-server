@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import {
   ANALYTICS_DATE_FIELDS,
@@ -21,6 +22,7 @@ import {
   ASSISTANCE_AWARD_TYPE_CODES,
   AWARD_TYPE_CODES,
   applyCodeFilters,
+  awardingAgencyFilters,
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
@@ -166,7 +168,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe(
-        'Filter to one awarding agency by its top-tier name (e.g., "Department of Defense"). Top-tier only: a sub-agency name matches no awards. Take the value from toptier_name in usaspending_autocomplete_filters type=awarding_agency — for a sub-agency that is its parent, so results cover the whole department.',
+        'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
       ),
     recipient_name: z
       .string()
@@ -259,7 +261,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           .string()
           .optional()
           .describe(
-            'Awarding agency name, top-tier only (e.g., "Department of Defense") — the toptier_name from usaspending_autocomplete_filters type=awarding_agency; a sub-agency name matches no awards',
+            'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
           ),
         recipient_name: z
           .string()
@@ -448,6 +450,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   // full escape hatch and never consults a sibling `label`, so an unheaded bullet list
   // would otherwise sit unattributed between the surrounding `**key:** value` lines.
   enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
     upstream_messages: {
       /**
        * The trailing empty element closes the bullet list with a blank line. The
@@ -457,7 +460,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
        * bullet, where a strict markdown renderer reads it as a lazy continuation
        * of that bullet instead of its own line.
        */
-      render: (msgs) => ['**API notices:**', ...(msgs ?? []).map((m) => `- ${m}`), ''].join('\n'),
+      render: (msgs) =>
+        ['**API notices:**', ...(msgs ?? []).map((m) => `- ${escapeMarkdownInline(m)}`), ''].join(
+          '\n',
+        ),
     },
   },
 
@@ -683,7 +689,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     if (keywords?.length) filters.keywords = keywords;
     filters.award_type_codes = awardTypeCodes;
     if (agencyName) {
-      filters.agencies = [{ type: 'awarding', tier: 'toptier', name: agencyName }];
+      filters.agencies = awardingAgencyFilters(agencyName);
     }
     if (recipientName) filters.recipient_search_text = [recipientName];
     if (naicsCodes?.length) {
@@ -845,11 +851,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     );
     for (const r of result.results) {
       lines.push('');
-      lines.push(`### ${r.recipient_name ?? r.award_id ?? r.generated_internal_id ?? 'Unknown'}`);
-      if (r.award_id) lines.push(`**Award ID:** ${r.award_id}`);
+      lines.push(
+        `### ${escapeMarkdownInline(r.recipient_name ?? r.award_id ?? r.generated_internal_id ?? 'Unknown')}`,
+      );
+      if (r.award_id) lines.push(`**Award ID:** ${escapeMarkdownInline(r.award_id)}`);
       if (r.generated_internal_id)
-        lines.push(`**Chain ID (for get_award):** ${r.generated_internal_id}`);
-      if (r.agency_slug) lines.push(`**Agency Slug (for get_agency):** ${r.agency_slug}`);
+        lines.push(
+          `**Chain ID (for get_award):** ${escapeMarkdownInline(r.generated_internal_id)}`,
+        );
+      if (r.agency_slug)
+        lines.push(`**Agency Slug (for get_agency):** ${escapeMarkdownInline(r.agency_slug)}`);
       if (typeof r.award_amount === 'number')
         lines.push(`**Amount:** ${formatCurrency(r.award_amount)}`);
       if (typeof r.total_outlays === 'number')
@@ -858,20 +869,23 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         lines.push(`**Loan Value:** ${formatCurrency(r.loan_value)}`);
       if (typeof r.subsidy_cost === 'number')
         lines.push(`**Subsidy Cost:** ${formatCurrency(r.subsidy_cost)}`);
-      if (r.issued_date) lines.push(`**Issued:** ${r.issued_date}`);
-      if (r.award_type) lines.push(`**Type:** ${r.award_type}`);
+      if (r.issued_date) lines.push(`**Issued:** ${escapeMarkdownInline(r.issued_date)}`);
+      if (r.award_type) lines.push(`**Type:** ${escapeMarkdownInline(r.award_type)}`);
       if (r.awarding_agency)
         lines.push(
-          `**Awarding Agency:** ${r.awarding_agency}${r.awarding_sub_agency ? ` / ${r.awarding_sub_agency}` : ''}`,
+          `**Awarding Agency:** ${escapeMarkdownInline(r.awarding_agency)}${r.awarding_sub_agency ? ` / ${escapeMarkdownInline(r.awarding_sub_agency)}` : ''}`,
         );
-      if (r.funding_agency) lines.push(`**Funding Agency:** ${r.funding_agency}`);
+      if (r.funding_agency)
+        lines.push(`**Funding Agency:** ${escapeMarkdownInline(r.funding_agency)}`);
       if (r.start_date || r.end_date)
-        lines.push(`**Period:** ${r.start_date ?? 'N/A'} → ${r.end_date ?? 'N/A'}`);
-      if (r.description) lines.push(`**Description:** ${r.description}`);
+        lines.push(
+          `**Period:** ${escapeMarkdownInline(r.start_date ?? 'N/A')} → ${escapeMarkdownInline(r.end_date ?? 'N/A')}`,
+        );
+      if (r.description) lines.push(`**Description:** ${escapeMarkdownInline(r.description)}`);
       if (r.place_of_performance) {
         const pop = r.place_of_performance;
         lines.push(
-          `**Place of Performance:** ${[pop.city, pop.state, pop.country].filter(Boolean).join(', ')}`,
+          `**Place of Performance:** ${escapeMarkdownInline([pop.city, pop.state, pop.country].filter(Boolean).join(', '))}`,
         );
       }
     }
@@ -882,7 +896,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         result.page_metadata.last_record_unique_id !== undefined
       ) {
         lines.push(
-          `**Next-page cursor:** last_record_sort_value=\`${result.page_metadata.last_record_sort_value}\`, last_record_unique_id=\`${result.page_metadata.last_record_unique_id}\` — pass both to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result limit.`,
+          `**Next-page cursor:** last_record_sort_value=${escapeMarkdownInline(result.page_metadata.last_record_sort_value)}, last_record_unique_id=${escapeMarkdownInline(String(result.page_metadata.last_record_unique_id))} — pass both to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result limit.`,
         );
       } else {
         // The cursor is withheld both past the CURSOR_WINDOW_OFFSET boundary and on a

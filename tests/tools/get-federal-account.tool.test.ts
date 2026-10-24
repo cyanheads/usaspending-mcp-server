@@ -4,9 +4,10 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getFederalAccountTool } from '@/mcp-server/tools/definitions/get-federal-account.tool.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockGetFederalAccount = vi.fn();
 
@@ -17,6 +18,136 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('getFederalAccountTool', () => {
+  beforeEach(() => {
+    mockGetFederalAccount.mockReset();
+  });
+  // Selected fields from the captured FY2024/FY2025 detail responses for 014-0680.
+  it.each([
+    [2024, 4_007_029_840.24, 10_735_587_629.51],
+    [2025, 4_117_711_187.29, 10_130_607_579.09],
+  ])(
+    'preserves captured FY%i totals independently of search totals',
+    async (year, obligations, resources) => {
+      mockGetFederalAccount.mockResolvedValueOnce({
+        account_title: 'Water and Related Resources, Bureau of Reclamation, Interior',
+        federal_account_code: '014-0680',
+        fiscal_year: String(year),
+        total_obligated_amount: obligations,
+        total_budgetary_resources: resources,
+      });
+      const result = await runToolContract(getFederalAccountTool, {
+        account_code: '014-0680',
+        fiscal_year: year,
+      });
+      expect(result.structuredContent).toMatchObject({
+        fiscal_year: year,
+        total_obligated_amount: obligations,
+        total_budgetary_resources: resources,
+      });
+      const rendered = markdownText(
+        result.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      );
+      expect(rendered).toContain(String(year));
+      expect(rendered).toContain(year === 2024 ? '4,007,029,840.24' : '4,117,711,187.29');
+      expect(rendered).toContain(year === 2024 ? '10,735,587,629.51' : '10,130,607,579.09');
+    },
+  );
+  it('selects a historical year and normalizes its string year without losing real zeros', async () => {
+    mockGetFederalAccount.mockResolvedValueOnce({
+      account_title: 'Water and Related Resources',
+      fiscal_year: '2025',
+      total_obligated_amount: 0,
+      children: [{ code: '014-0680', obligated_amount: 0 }],
+    });
+    const result = await runToolContract(getFederalAccountTool, {
+      account_code: '014-0680',
+      fiscal_year: 2025,
+    });
+    expect(mockGetFederalAccount).toHaveBeenLastCalledWith('014-0680', expect.anything(), 2025);
+    expect(result.structuredContent).toMatchObject({
+      fiscal_year: 2025,
+      total_obligated_amount: 0,
+      children: [{ obligated_amount: 0 }],
+    });
+    expect(result.structuredContent).not.toHaveProperty('notice');
+    expect(JSON.stringify(result.content)).toContain('**Fiscal Year:** 2025');
+    const rendered = markdownText(
+      result.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n'),
+    );
+    expect(rendered).toContain('Fiscal Year:');
+    expect(rendered).toContain('2025');
+    expect(JSON.stringify(result.content)).toContain('$0');
+  });
+
+  it('rejects a malformed year before calling the service', async () => {
+    const result = await runToolContract(getFederalAccountTool, {
+      account_code: '014-0680',
+      fiscal_year: 'FY2025',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(mockGetFederalAccount).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicitly empty year with metadata and a notice on both surfaces', async () => {
+    mockGetFederalAccount.mockResolvedValueOnce({
+      account_title: 'Water and Related Resources',
+      fiscal_year: '2027',
+      total_obligated_amount: null,
+      total_gross_outlay_amount: null,
+      total_budgetary_resources: null,
+      children: [],
+    });
+    const result = await runToolContract(getFederalAccountTool, {
+      account_code: '014-0680',
+      fiscal_year: 2027,
+    });
+    expect(result.structuredContent).toMatchObject({
+      account_title: 'Water and Related Resources',
+      fiscal_year: 2027,
+      notice: expect.stringContaining('2027'),
+    });
+    expect(result.structuredContent).not.toHaveProperty('total_obligated_amount');
+    expect(result.structuredContent).not.toHaveProperty('children');
+    expect(JSON.stringify(result.content)).toContain('2027');
+    expect(JSON.stringify(result.content)).toContain('No financial');
+    expect(mockGetFederalAccount).toHaveBeenLastCalledWith('014-0680', expect.anything(), 2027);
+  });
+
+  it('treats a blank detail year as omitted', async () => {
+    mockGetFederalAccount.mockResolvedValueOnce({ account_title: 'Water and Related Resources' });
+    const result = await runToolContract(getFederalAccountTool, {
+      account_code: '014-0680',
+      fiscal_year: '',
+    });
+    expect(result.isError).not.toBe(true);
+    expect(mockGetFederalAccount).toHaveBeenLastCalledWith('014-0680', expect.anything());
+  });
+  it('preserves the default detail request without a year', async () => {
+    mockGetFederalAccount.mockResolvedValueOnce({ account_title: 'Test Account' });
+    const result = await runToolContract(getFederalAccountTool, { account_code: '014-0680' });
+    expect(mockGetFederalAccount).toHaveBeenLastCalledWith('014-0680', expect.anything());
+    expect(result.isError).not.toBe(true);
+    expect(getFederalAccountTool.output.parse(result.structuredContent)).toEqual({
+      account_title: 'Test Account',
+    });
+    expect(
+      markdownText(
+        result.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      ),
+    ).toContain('Test Account');
+  });
   it('returns federal account details with financial totals', async () => {
     mockGetFederalAccount.mockResolvedValueOnce({
       account_title: 'Operation and Maintenance, Defense-Wide, Defense',

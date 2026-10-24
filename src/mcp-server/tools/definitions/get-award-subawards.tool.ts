@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
@@ -47,17 +48,8 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
             action_date: z.string().optional().describe('Subaward action date (YYYY-MM-DD)'),
             amount: z.number().optional().describe('Subaward amount in USD'),
             recipient_name: z.string().optional().describe('Subcontractor or sub-grantee name'),
-            recipient_uei: z.string().optional().describe('Sub-recipient Unique Entity Identifier'),
-            place_of_performance: z
-              .object({
-                city: z.string().optional().describe('City of performance'),
-                state: z.string().optional().describe('State code'),
-                country: z.string().optional().describe('Country code'),
-              })
-              .optional()
-              .describe('Subaward place of performance'),
           })
-          .describe('Subaward record with amount, recipient, and location'),
+          .describe('Subaward record with identifier, amount, recipient, date, and description'),
       )
       .describe('List of subawards under this prime award'),
     page_metadata: z
@@ -92,6 +84,10 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
    * HTTP 200 and zero rows, and an award with no subawards is a legitimate empty
    * result. Both are disclosed as an enrichment notice rather than a failure.
    */
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -132,24 +128,6 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       ...(s.action_date ? { action_date: s.action_date } : {}),
       ...(typeof s.amount === 'number' ? { amount: s.amount } : {}),
       ...(s.recipient_name ? { recipient_name: s.recipient_name } : {}),
-      ...(s.recipient_uei ? { recipient_uei: s.recipient_uei } : {}),
-      ...(s.place_of_performance?.city_name ||
-      s.place_of_performance?.state_code ||
-      s.place_of_performance?.country_code
-        ? {
-            place_of_performance: {
-              ...(s.place_of_performance?.city_name
-                ? { city: s.place_of_performance.city_name }
-                : {}),
-              ...(s.place_of_performance?.state_code
-                ? { state: s.place_of_performance.state_code }
-                : {}),
-              ...(s.place_of_performance?.country_code
-                ? { country: s.place_of_performance.country_code }
-                : {}),
-            },
-          }
-        : {}),
     }));
 
     const pageMeta = data.page_metadata ?? {};
@@ -188,22 +166,18 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
 
   format: (result) => {
     const lines: string[] = [
-      `## Subawards for Award: ${result.award_id}`,
+      `## Subawards for Award: ${escapeMarkdownInline(result.award_id)}`,
       formatPaginationLine(result.page_metadata),
     ];
     for (const s of result.results) {
       lines.push('');
-      lines.push(`### ${s.recipient_name ?? s.subaward_number ?? 'Unknown'}`);
-      if (s.id !== undefined) lines.push(`**ID:** ${s.id}`);
-      if (s.subaward_number) lines.push(`**Subaward #:** ${s.subaward_number}`);
+      lines.push(`### ${escapeMarkdownInline(s.recipient_name ?? s.subaward_number ?? 'Unknown')}`);
+      if (s.id !== undefined) lines.push(`**ID:** ${escapeMarkdownInline(String(s.id))}`);
+      if (s.subaward_number)
+        lines.push(`**Subaward #:** ${escapeMarkdownInline(s.subaward_number)}`);
       if (typeof s.amount === 'number') lines.push(`**Amount:** ${formatCurrency(s.amount)}`);
-      if (s.action_date) lines.push(`**Date:** ${s.action_date}`);
-      if (s.recipient_uei) lines.push(`**UEI:** ${s.recipient_uei}`);
-      if (s.description) lines.push(`**Description:** ${s.description}`);
-      if (s.place_of_performance) {
-        const p = s.place_of_performance;
-        lines.push(`**Place:** ${[p.city, p.state, p.country].filter(Boolean).join(', ')}`);
-      }
+      if (s.action_date) lines.push(`**Date:** ${escapeMarkdownInline(s.action_date)}`);
+      if (s.description) lines.push(`**Description:** ${escapeMarkdownInline(s.description)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

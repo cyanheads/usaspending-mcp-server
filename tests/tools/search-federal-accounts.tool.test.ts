@@ -3,9 +3,11 @@
  * @module tests/tools/search-federal-accounts.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchFederalAccountsTool } from '@/mcp-server/tools/definitions/search-federal-accounts.tool.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockSearchFederalAccounts = vi.fn();
 
@@ -14,6 +16,109 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('searchFederalAccountsTool', () => {
+  beforeEach(() => {
+    mockSearchFederalAccounts.mockReset();
+  });
+  // Budgetary-resource values captured from the FY2024/FY2025 upstream controls.
+  it.each([
+    [2024, 10_735_613_505.05],
+    [2025, 11_130_641_014.63],
+  ])(
+    'forwards FY%i alongside agency filters and preserves the returned year on both surfaces',
+    async (year, resources) => {
+      mockSearchFederalAccounts.mockResolvedValueOnce({
+        fy: String(year),
+        count: 2,
+        results: [
+          { account_number: '014-0680', budgetary_resources: resources },
+          { account_number: '014-5430', budgetary_resources: 0 },
+        ],
+      });
+      const result = await runToolContract(searchFederalAccountsTool, {
+        agency_identifier: '014',
+        fiscal_year: year,
+      });
+      expect(mockSearchFederalAccounts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ filters: { agency_identifier: '014', fy: String(year) } }),
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({
+        fiscal_year: year,
+        results: [{ budgetary_resources: resources }, { budgetary_resources: 0 }],
+      });
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'text',
+            text: expect.stringContaining(`**Fiscal Year:** ${year}`),
+          }),
+        ]),
+      );
+      const rendered = markdownText(
+        result.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      );
+      expect(rendered).toContain('Fiscal Year:');
+      expect(rendered).toContain(String(year));
+    },
+  );
+
+  it('rejects a nonblank string year before calling the service', async () => {
+    const result = await runToolContract(searchFederalAccountsTool, { fiscal_year: '2025' });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams },
+    });
+    expect(mockSearchFederalAccounts).not.toHaveBeenCalled();
+  });
+
+  it('preserves the effective year on an empty search', async () => {
+    mockSearchFederalAccounts.mockResolvedValueOnce({ fy: 2025, count: 0, results: [] });
+    const result = await runToolContract(searchFederalAccountsTool, { fiscal_year: 2025 });
+    expect(result.structuredContent).toMatchObject({
+      fiscal_year: 2025,
+      results: [],
+      notice: expect.any(String),
+    });
+    expect(JSON.stringify(result.content)).toContain('2025');
+  });
+
+  it('treats a blank year as omitted', async () => {
+    mockSearchFederalAccounts.mockResolvedValueOnce({ results: [] });
+    const result = await runToolContract(searchFederalAccountsTool, { fiscal_year: '  ' });
+    expect(result.isError).not.toBe(true);
+    expect(mockSearchFederalAccounts).toHaveBeenLastCalledWith(
+      { sort: { field: 'budgetary_resources', direction: 'desc' }, page: 1, limit: 10 },
+      expect.anything(),
+    );
+  });
+  it('preserves the unfiltered default request', async () => {
+    mockSearchFederalAccounts.mockResolvedValueOnce({
+      fy: '2025',
+      results: [{ account_number: '014-0680', account_name: 'Water Resources' }],
+    });
+    const result = await runToolContract(searchFederalAccountsTool, {});
+    expect(mockSearchFederalAccounts).toHaveBeenLastCalledWith(
+      { sort: { field: 'budgetary_resources', direction: 'desc' }, page: 1, limit: 10 },
+      expect.anything(),
+    );
+    expect(result.isError).not.toBe(true);
+    expect(searchFederalAccountsTool.output.parse(result.structuredContent)).toEqual({
+      fiscal_year: 2025,
+      results: [{ account_number: '014-0680', account_name: 'Water Resources' }],
+      page_metadata: { page: 1, has_next: false, limit: 10 },
+    });
+    expect(
+      markdownText(
+        result.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      ),
+    ).toContain('Water Resources');
+  });
   it('returns accounts for a keyword search', async () => {
     mockSearchFederalAccounts.mockResolvedValueOnce({
       count: 42,

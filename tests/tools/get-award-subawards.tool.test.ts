@@ -24,12 +24,6 @@ describe('getAwardSubawardsTool', () => {
           action_date: '2023-03-01',
           amount: 150_000,
           recipient_name: 'SubCo LLC',
-          recipient_uei: 'SUBUEIAAAAA',
-          place_of_performance: {
-            city_name: 'Portland',
-            state_code: 'OR',
-            country_code: 'USA',
-          },
         },
       ],
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
@@ -44,7 +38,6 @@ describe('getAwardSubawardsTool', () => {
     expect(result.results[0]!.subaward_number).toBe('SUB-001');
     expect(result.results[0]!.amount).toBe(150_000);
     expect(result.results[0]!.recipient_name).toBe('SubCo LLC');
-    expect(result.results[0]!.place_of_performance?.city).toBe('Portland');
     expect(result.page_metadata.has_next).toBe(false);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.prime_award_id).toBe('CONT_AWD_PRIME_001');
@@ -84,7 +77,7 @@ describe('getAwardSubawardsTool', () => {
     await expect(getAwardSubawardsTool.handler(input, ctx)).rejects.toThrow();
   });
 
-  it('handles sparse subaward — place_of_performance omitted', async () => {
+  it('handles a sparse subaward with no description or action date', async () => {
     mockGetAwardSubawards.mockResolvedValueOnce({
       results: [
         {
@@ -92,7 +85,6 @@ describe('getAwardSubawardsTool', () => {
           subaward_number: 'SUB-002',
           amount: 75_000,
           recipient_name: 'AnotherCo',
-          // place_of_performance omitted
         },
       ],
       page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },
@@ -102,7 +94,8 @@ describe('getAwardSubawardsTool', () => {
     const input = getAwardSubawardsTool.input.parse({ award_id: 'CONT_AWD_SPARSE' });
     const result = await getAwardSubawardsTool.handler(input, ctx);
 
-    expect(result.results[0]!.place_of_performance).toBeUndefined();
+    expect(result.results[0]).not.toHaveProperty('description');
+    expect(result.results[0]).not.toHaveProperty('action_date');
     expect(result.results[0]!.amount).toBe(75_000);
   });
 
@@ -117,8 +110,6 @@ describe('getAwardSubawardsTool', () => {
           action_date: '2023-03-01',
           amount: 50_000,
           recipient_name: 'SubCo LLC',
-          recipient_uei: 'SUBUEI12345',
-          place_of_performance: { city: 'Portland', state: 'OR', country: 'USA' },
         },
       ],
       page_metadata: { has_next: false, page: 1, total: 1, limit: 10 },

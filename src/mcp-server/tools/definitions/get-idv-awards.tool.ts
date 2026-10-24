@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 import { resolveHasNext } from './pagination.js';
@@ -122,6 +123,10 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       .describe(
         'How to continue when truncated, or a recovery hint when results are empty — the award may have no children of the requested type. Absent otherwise.',
       ),
+  },
+
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
   errors: [
@@ -251,26 +256,31 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
 
   format: (result) => {
     const lines: string[] = [
-      `## Child Awards for IDV: ${result.award_id}`,
+      `## Child Awards for IDV: ${escapeMarkdownInline(result.award_id)}`,
       `**Page:** ${result.page_metadata.page} | **Per page:** ${result.page_metadata.limit} | **Has previous:** ${result.page_metadata.has_previous ? 'Yes' : 'No'} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
     ];
     for (const a of result.results) {
       lines.push('');
-      lines.push(`### ${a.piid ?? a.generated_unique_award_id ?? 'Unknown'}`);
+      lines.push(`### ${escapeMarkdownInline(a.piid ?? a.generated_unique_award_id ?? 'Unknown')}`);
       if (a.generated_unique_award_id)
-        lines.push(`**Chain ID (for get_award):** ${a.generated_unique_award_id}`);
-      if (a.piid) lines.push(`**PIID:** ${a.piid}`);
-      if (a.award_type) lines.push(`**Type:** ${a.award_type}`);
+        lines.push(
+          `**Chain ID (for get_award):** ${escapeMarkdownInline(a.generated_unique_award_id)}`,
+        );
+      if (a.piid) lines.push(`**PIID:** ${escapeMarkdownInline(a.piid)}`);
+      if (a.award_type) lines.push(`**Type:** ${escapeMarkdownInline(a.award_type)}`);
       if (typeof a.obligated_amount === 'number')
         lines.push(`**Obligated:** ${formatCurrency(a.obligated_amount)}`);
-      if (a.awarding_agency) lines.push(`**Awarding Agency:** ${a.awarding_agency}`);
-      if (a.funding_agency) lines.push(`**Funding Agency:** ${a.funding_agency}`);
+      if (a.awarding_agency)
+        lines.push(`**Awarding Agency:** ${escapeMarkdownInline(a.awarding_agency)}`);
+      if (a.funding_agency)
+        lines.push(`**Funding Agency:** ${escapeMarkdownInline(a.funding_agency)}`);
       if (a.period_of_performance_start_date || a.period_of_performance_current_end_date)
         lines.push(
-          `**Period:** ${a.period_of_performance_start_date ?? 'N/A'} → ${a.period_of_performance_current_end_date ?? 'N/A'}`,
+          `**Period:** ${escapeMarkdownInline(a.period_of_performance_start_date ?? 'N/A')} → ${escapeMarkdownInline(a.period_of_performance_current_end_date ?? 'N/A')}`,
         );
-      if (a.last_date_to_order) lines.push(`**Last Date to Order:** ${a.last_date_to_order}`);
-      if (a.description) lines.push(`**Description:** ${a.description}`);
+      if (a.last_date_to_order)
+        lines.push(`**Last Date to Order:** ${escapeMarkdownInline(a.last_date_to_order)}`);
+      if (a.description) lines.push(`**Description:** ${escapeMarkdownInline(a.description)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

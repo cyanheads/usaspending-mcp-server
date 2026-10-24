@@ -12,6 +12,7 @@ import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.t
 import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockAutocompleteNaics = vi.fn();
 const mockAutocompletePsc = vi.fn();
@@ -95,18 +96,11 @@ describe('autocompleteFiltersTool', () => {
 
   it('maps a top-tier awarding_agency match with name equal to toptier_name and no id (#71)', async () => {
     mockAutocompleteAwardingAgency.mockResolvedValueOnce({
-      results: [
-        {
-          id: 1173,
-          toptier_flag: true,
-          toptier_agency: {
-            toptier_code: '097',
-            abbreviation: 'DOD',
-            name: 'Department of Defense',
-          },
-          subtier_agency: { abbreviation: 'DOD', name: 'Department of Defense' },
-        },
-      ],
+      results: {
+        toptier_agency: [{ code: '097', abbreviation: 'DOD', name: 'Department of Defense' }],
+        subtier_agency: [],
+        office: [],
+      },
     });
 
     const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
@@ -126,39 +120,40 @@ describe('autocompleteFiltersTool', () => {
   });
 
   describe('agency rows carry their own name and tier (#71)', () => {
-    // Live autocomplete/awarding_agency/ rows for "Geological" and "Interior".
+    // Replacement endpoint agency buckets retain matched identities.
     const USGS = {
-      id: 233,
-      toptier_flag: false,
+      code: '1434',
+      abbreviation: 'USGS',
+      name: 'U.S. Geological Survey',
       toptier_agency: {
-        toptier_code: '014',
+        code: '014',
         abbreviation: 'DOI',
         name: 'Department of the Interior',
       },
-      subtier_agency: { abbreviation: 'USGS', name: 'U.S. Geological Survey' },
     };
     const INTERIOR = {
-      id: 209,
-      toptier_flag: true,
-      toptier_agency: {
-        toptier_code: '014',
-        abbreviation: 'DOI',
-        name: 'Department of the Interior',
-      },
-      subtier_agency: { abbreviation: 'DOI', name: 'Department of the Interior' },
+      code: '014',
+      abbreviation: 'DOI',
+      name: 'Department of the Interior',
     };
     const UNDER_SECRETARY = {
-      id: 211,
-      toptier_flag: false,
+      code: null,
+      abbreviation: null,
+      name: 'Office of the Under Secretary of the Interior',
       toptier_agency: {
-        toptier_code: '014',
+        code: '014',
         abbreviation: 'DOI',
         name: 'Department of the Interior',
       },
-      subtier_agency: { abbreviation: null, name: 'Office of the Under Secretary of the Interior' },
     };
     const run = (search_text: string, rows: unknown[]) => {
-      mockAutocompleteAwardingAgency.mockResolvedValueOnce({ results: rows });
+      mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+        results: {
+          toptier_agency: rows.filter((r) => !(r as Record<string, unknown>).toptier_agency),
+          subtier_agency: rows.filter((r) => (r as Record<string, unknown>).toptier_agency),
+          office: [{ name: 'Must not return office' }],
+        },
+      });
       return runToolContract(autocompleteFiltersTool, {
         type: 'awarding_agency',
         search_text,
@@ -180,14 +175,17 @@ describe('autocompleteFiltersTool', () => {
           tier: 'subtier',
           toptier_name: 'Department of the Interior',
           toptier_code: '014',
+          subtier_code: '1434',
         },
       ]);
-      const text = textOf(result);
+      const text = markdownText(textOf(result));
       expect(text).toContain('U.S. Geological Survey');
       expect(text).toContain('USGS');
       expect(text).toContain('subtier');
       expect(text).toContain('Department of the Interior');
       expect(text).toContain('014');
+      expect(text).toContain('1434');
+      expect(text).not.toContain('Must not return office');
       expect(text).not.toContain('233');
     });
 
@@ -220,7 +218,7 @@ describe('autocompleteFiltersTool', () => {
       spendingByCategoryTool,
       spendingByGeographyTool,
       spendingOverTimeTool,
-    ])('$name: every agency_name says top-tier only and points at toptier_name', (def) => {
+    ])('$name: every agency_name accepts matched names and discloses shared parents', (def) => {
       const descriptions: string[] = [];
       const walk = (node: unknown): void => {
         if (!node || typeof node !== 'object') return;
@@ -236,9 +234,115 @@ describe('autocompleteFiltersTool', () => {
       expect(descriptions.length).toBeGreaterThan(0);
       for (const description of descriptions) {
         expect(description).toMatch(/top-tier/i);
-        expect(description).toContain('toptier_name');
+        expect(description).toContain('matched name');
+        expect(description).toContain('all parents');
       }
     });
+  });
+
+  it('caps the ordered agency union without deduplicating tiers or shared names and never expands nested arrays', async () => {
+    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+      results: {
+        toptier_agency: [
+          {
+            name: 'Shared',
+            code: '001',
+            subtier_agencies: [{ name: 'Nested must stay absent' }],
+            offices: [{ name: 'Nested office' }],
+          },
+        ],
+        subtier_agency: [
+          {
+            name: 'Shared',
+            code: '1001',
+            toptier_agency: { name: 'Parent A', code: '001' },
+            offices: [{ name: 'Sub office' }],
+          },
+          { name: 'Shared', code: null, toptier_agency: { name: 'Parent B', code: '002' } },
+          { name: 'Omitted', toptier_agency: { name: 'Parent C' } },
+        ],
+        office: [{ name: 'Office must stay absent' }],
+      },
+    });
+    const response = await runToolContract(autocompleteFiltersTool, {
+      type: 'awarding_agency',
+      search_text: 'Shared',
+      limit: 3,
+    });
+    expect(response.isError).toBeFalsy();
+    expect(response.structuredContent).toMatchObject({
+      total: 3,
+      truncated: true,
+      cap: 3,
+      results: [
+        { name: 'Shared', tier: 'toptier', toptier_code: '001' },
+        { name: 'Shared', tier: 'subtier', toptier_name: 'Parent A', subtier_code: '1001' },
+        { name: 'Shared', tier: 'subtier', toptier_name: 'Parent B' },
+      ],
+    });
+    const data = response.structuredContent as { results: Record<string, unknown>[] };
+    expect(data.results[2]).not.toHaveProperty('subtier_code');
+    const text = markdownText(
+      response.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n'),
+    );
+    expect(text).toContain('1001');
+    expect(text).toContain('Parent B');
+    expect(text).not.toMatch(/Nested|Sub office|Office must|Omitted/);
+  });
+
+  it.each([499, 500, 501])(
+    'judges agency maximum saturation using %i agency rows and no offices',
+    async (count) => {
+      mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+        results: {
+          toptier_agency: Array.from({ length: Math.min(count, 500) }, (_, i) => ({
+            name: `Top ${i}`,
+          })),
+          subtier_agency: count > 500 ? [{ name: 'Sub' }] : [],
+          office: Array.from({ length: 500 }, () => ({ name: 'Office' })),
+        },
+      });
+      const ctx = createMockContext({ errors: autocompleteFiltersTool.errors });
+      const result = await autocompleteFiltersTool.handler(
+        autocompleteFiltersTool.input.parse({
+          type: 'awarding_agency',
+          search_text: 'a',
+          limit: 500,
+        }),
+        ctx,
+      );
+      expect(result.results).toHaveLength(Math.min(count, 500));
+      expect(getEnrichment(ctx).truncated).toBe(count > 500 ? true : undefined);
+      if (count === 500) expect(getEnrichment(ctx).notice).toContain('upstream maximum of 500');
+      if (count === 499) expect(getEnrichment(ctx).notice).toBeUndefined();
+    },
+  );
+
+  it('returns no_match for office-only matches with a recovery hint on both surfaces', async () => {
+    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+      results: { toptier_agency: [], subtier_agency: [], office: [{ name: 'Office' }] },
+    });
+    const response = await runToolContract(autocompleteFiltersTool, {
+      type: 'awarding_agency',
+      search_text: 'Office',
+    });
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      error: {
+        data: { reason: 'no_match', recovery: { hint: expect.stringContaining('broader') } },
+      },
+    });
+    expect(
+      markdownText(
+        response.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      ),
+    ).toContain('broader');
   });
 
   it('maps recipient_name to name for recipient type', async () => {

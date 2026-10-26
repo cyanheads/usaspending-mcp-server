@@ -16,6 +16,7 @@ await createApp({
   tools: [...allToolDefinitions],
   resources: [],
   prompts: [],
+  skills: 'skills',
   landing: { requireAuth: false },
   /**
    * The tool surface is compiled in — 18 static definitions, no dynamic

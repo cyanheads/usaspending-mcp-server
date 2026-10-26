@@ -27,7 +27,7 @@
 
 ### Resources
 
-None planned. All data is dynamic and filter-driven; no stable URI pattern adds value beyond the tool surface.
+No authored domain-data resources. The SDK serves the published research guide at `skill://usaspending-guide/SKILL.md` through the Skills extension and the `skill://{+path}` resource template. Domain data remains available through tools.
 
 ### Prompts
 

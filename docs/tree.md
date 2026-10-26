@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-10-24 19:02:15
+Generated on: 2026-10-26 06:15:51
 
 ```text
 usaspending-mcp-server/
@@ -42,6 +42,8 @@ usaspending-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -139,6 +141,9 @@ usaspending-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── usaspending-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -248,7 +253,9 @@ usaspending-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

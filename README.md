@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.6.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.6.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/usaspending-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/usaspending-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/usaspending-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -53,6 +53,10 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 | `usaspending_search_federal_accounts` | Search federal accounts by title keyword or agency identifier |
 | `usaspending_get_federal_account` | Fetch a federal account's budget totals and its Treasury Account Symbol components |
 | `usaspending_get_federal_account_breakdown` | Break a federal account's obligations down by program activity or object class |
+
+### Research guide
+
+The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient research, award-to-account funding traces, and spending comparisons across periods and emergency appropriations. Plugin installs discover it in `skills/`; MCP clients can read `skill://usaspending-guide/SKILL.md` through the Skills extension. There are no domain-data resources.
 
 ## Capability reference
 
@@ -215,137 +219,32 @@ Agent-friendly output:
 
 ## Getting started
 
-### Public Hosted Instance
-
-A public instance is available at `https://usaspending.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own config shape.
-
-For Claude Code:
+Connect to the hosted instance, no install:
 
 ```sh
 claude mcp add --transport http usaspending-mcp-server https://usaspending.caseyjhand.com/mcp
 ```
 
-For Cline (`cline_mcp_settings.json`):
+Or run it locally:
 
-```json
-{
-  "mcpServers": {
-    "usaspending-mcp-server": {
-      "type": "streamableHttp",
-      "url": "https://usaspending.caseyjhand.com/mcp"
-    }
-  }
-}
+```sh
+claude mcp add usaspending-mcp-server -- npx -y @cyanheads/usaspending-mcp-server
 ```
 
-For Cursor (`mcp.json`):
+For other clients, add this to the MCP config file:
 
 ```json
 {
   "mcpServers": {
     "usaspending-mcp-server": {
-      "url": "https://usaspending.caseyjhand.com/mcp"
-    }
-  }
-}
-```
-
-Claude Desktop adds remote servers under Settings → Connectors.
-
-### Self-Hosted / Local
-
-Add the following to your MCP client configuration file. No API key is required.
-
-```json
-{
-  "mcpServers": {
-    "usaspending-mcp-server": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": ["@cyanheads/usaspending-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info"
-      }
-    }
-  }
-}
-```
-
-Or with npx (no Bun required):
-
-```json
-{
-  "mcpServers": {
-    "usaspending-mcp-server": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cyanheads/usaspending-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info"
-      }
+      "args": ["-y", "@cyanheads/usaspending-mcp-server"]
     }
   }
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "usaspending-mcp-server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "MCP_TRANSPORT_TYPE=stdio",
-        "ghcr.io/cyanheads/usaspending-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
-# Server listens at http://localhost:3010/mcp
-```
-
-### Prerequisites
-
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- No API key or account: USAspending.gov is open to anonymous requests.
-
-### Installation
-
-1. **Clone the repository:**
-
-```sh
-git clone https://github.com/cyanheads/usaspending-mcp-server.git
-```
-
-2. **Navigate into the directory:**
-
-```sh
-cd usaspending-mcp-server
-```
-
-3. **Install dependencies:**
-
-```sh
-bun install
-```
-
-4. **Configure environment (optional):**
-
-```sh
-cp .env.example .env
-# edit .env if you need to override defaults
-```
+No API key or account is required. For Docker or a source build, see [Running the server](#running-the-server).
 
 ## Configuration
 
@@ -373,6 +272,14 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ### Local development
 
+Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+). No API key or account is required.
+
+```sh
+git clone https://github.com/cyanheads/usaspending-mcp-server.git
+cd usaspending-mcp-server && bun install
+cp .env.example .env # optional overrides
+```
+
 - **Build and run:**
 
   ```sh
@@ -396,11 +303,10 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 ### Docker
 
 ```sh
-docker build -t usaspending-mcp-server .
-docker run --rm -p 3010:3010 usaspending-mcp-server
+docker run --rm -p 3010:3010 ghcr.io/cyanheads/usaspending-mcp-server:latest
 ```
 
-The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/usaspending-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
+The image defaults to HTTP transport, stateless session mode, and logs to `/var/log/usaspending-mcp-server`. For stdio, use `"command": "docker"` with `"args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/usaspending-mcp-server:latest"]`. Build locally with `docker build -t usaspending-mcp-server .`; OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
 
 ## Project structure
 

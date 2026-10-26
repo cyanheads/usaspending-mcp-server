@@ -4,9 +4,9 @@
   "version": "0.6.0",
   "description": "Access US federal award, recipient, agency, and spending analytics data from USAspending.gov via MCP.",
   "author": {
-    "name": "cyanheads",
+    "name": "Casey Hand",
     "email": "casey@caseyjhand.com",
-    "url": "https://github.com/cyanheads"
+    "url": "https://caseyjhand.com"
   },
   "homepage": "https://github.com/cyanheads/usaspending-mcp-server#readme",
   "repository": "https://github.com/cyanheads/usaspending-mcp-server",

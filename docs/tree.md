@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-10-26 06:15:51
+Generated on: 2026-10-26 06:46:48
 
 ```text
 usaspending-mcp-server/
@@ -30,6 +30,7 @@ usaspending-mcp-server/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
 │   ├── 0.6.x/
+│   ├── 0.7.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -196,7 +197,8 @@ usaspending-mcp-server/
 │   ├── helpers/
 │   │   └── markdown-text.ts
 │   ├── scripts/
-│   │   └── build-changelog.test.ts
+│   │   ├── build-changelog.test.ts
+│   │   └── clean-mcpb.test.ts
 │   ├── security/
 │   │   └── input-validation.test.ts
 │   ├── services/

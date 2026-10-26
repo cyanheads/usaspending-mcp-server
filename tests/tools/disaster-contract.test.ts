@@ -7,6 +7,7 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import MarkdownIt from 'markdown-it';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
 import { USASpendingService } from '@/services/usaspending/usaspending-service.js';
@@ -23,6 +24,13 @@ vi.mock('@/services/usaspending/usaspending-service.js', async (importOriginal) 
 const BASE = 'https://api.usaspending.gov/api/v2/';
 const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
   result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+const markdown = new MarkdownIt();
+const codeValues = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+  markdown
+    .parse(textOf(result), {})
+    .flatMap((token) => token.children ?? [])
+    .filter((token) => token.type === 'code_inline')
+    .map((token) => token.content);
 const fetchMock = vi.fn<typeof fetch>();
 const reply = (body: unknown) => fetchMock.mockResolvedValueOnce(Response.json(body));
 
@@ -95,7 +103,7 @@ describe('disaster filters and notices', () => {
       expect(textOf(result)).toContain('$80');
       if (codes.length) {
         expect(result.structuredContent).toHaveProperty('applied_def_codes', codes.join(', '));
-        expect(textOf(result)).toContain(`**applied_def_codes:** ${codes.join(', ')}`);
+        expect(codeValues(result)).toContain(codes.join(', '));
       } else {
         expect(result.structuredContent).not.toHaveProperty('applied_def_codes');
       }
@@ -136,7 +144,7 @@ describe('disaster filters and notices', () => {
       expect(result.structuredContent).toMatchObject({ results: [{ id: 'recipient-R' }] });
       if (query?.trim()) {
         expect(result.structuredContent).toHaveProperty('applied_query', 'UW');
-        expect(textOf(result)).toContain('**applied_query:** UW');
+        expect(codeValues(result)).toContain('UW');
       } else expect(result.structuredContent).not.toHaveProperty('applied_query');
     },
   );

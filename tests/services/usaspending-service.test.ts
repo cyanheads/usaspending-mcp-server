@@ -16,6 +16,7 @@ import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.t
 import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
+import type { DisasterBreakdownRequest } from '@/services/usaspending/types.js';
 import {
   initUSASpendingService,
   USASpendingService,
@@ -53,7 +54,7 @@ const newServiceWith = (overrides: Partial<ServerConfig>) =>
 
 /** Stubs the next fetch with a verbatim upstream response body and status. */
 const stubFetch = (status: number, body: string) => {
-  const fetchMock = vi.fn(async () => new Response(body, { status }));
+  const fetchMock = vi.fn<typeof fetch>(async () => new Response(body, { status }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 };
@@ -690,6 +691,154 @@ const hang = (init: RequestInit) =>
   new Promise<Response>((_resolve, reject) => {
     init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
   });
+
+describe('disaster agency ranking and shared deadline', () => {
+  afterEach(() => vi.useRealTimers());
+  const body = (page: number, limit: number, awardTypes?: string[]): DisasterBreakdownRequest => ({
+    filter: { def_codes: ['L'], ...(awardTypes ? { award_type_codes: awardTypes } : {}) },
+    pagination: { page, limit, sort: 'obligation', order: 'desc' },
+  });
+
+  it.each([1, 2, 3, 4])(
+    're-slices the complete ranking at page %i with stable code/ID ties and original totals',
+    async (page) => {
+      const pages = [
+        {
+          results: [
+            { id: 'z', code: '002', obligation: 5 },
+            { id: 'missing', code: '000', obligation: null },
+          ],
+          messages: ['first'],
+          totals: { obligation: 300, outlay: null },
+          page_metadata: { total: 6, hasNext: true },
+        },
+        {
+          results: [
+            { id: 'b', code: '001', obligation: 5 },
+            { id: 'negative', code: '003', obligation: -2 },
+          ],
+          messages: ['second'],
+          page_metadata: { total: 6, hasNext: true },
+        },
+        {
+          results: [
+            { id: 'a', code: '001', obligation: 5 },
+            { id: 'top', code: '004', obligation: 9 },
+          ],
+          messages: ['first', 'third'],
+          page_metadata: { total: 6, hasNext: false },
+        },
+      ];
+      const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+        const sent = JSON.parse(String(init.body));
+        expect(sent.pagination).toMatchObject({ limit: 100, sort: 'obligation', order: 'desc' });
+        return Response.json(pages[sent.pagination.page - 1]);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const result = await newService().getDisasterByAgency(
+        'award',
+        body(page, 2),
+        createMockContext(),
+      );
+      expect(result.results?.map((row) => row.id)).toEqual(
+        [['top', 'a'], ['b', 'z'], ['negative', 'missing'], []][page - 1],
+      );
+      expect(result.totals).toEqual({ obligation: 300, outlay: null });
+      expect(result.messages).toEqual(['first', 'second', 'third']);
+      expect(result.page_metadata).toEqual({ total: 6, page, limit: 2, hasNext: page < 3 });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each([
+    { mode: 'total' as const, types: undefined },
+    { mode: 'award' as const, types: ['A'] },
+  ])('preserves direct pagination for $mode with types $types', async ({ mode, types }) => {
+    const fetchMock = stubFetch(
+      200,
+      JSON.stringify({
+        results: [{ id: 'direct' }],
+        page_metadata: { total: 500, hasNext: true, page: 4 },
+      }),
+    );
+    const request = body(4, 2, types);
+    const result = await newService().getDisasterByAgency(mode, request, createMockContext());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      ...request,
+      spending_type: mode,
+    });
+    expect(result.page_metadata).toEqual({ total: 500, hasNext: true, page: 4 });
+  });
+
+  it('collects an empty effective award-type filter and stops on an empty final page', async () => {
+    const fetchMock = stubFetch(
+      200,
+      JSON.stringify({
+        results: [],
+        totals: { obligation: 0 },
+        page_metadata: { total: 0, hasNext: false },
+      }),
+    );
+    const result = await newService().getDisasterByAgency(
+      'award',
+      body(2, 2, []),
+      createMockContext(),
+    );
+    expect(result.results).toEqual([]);
+    expect(result.page_metadata).toMatchObject({ page: 2, hasNext: false, total: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).pagination.page).toBe(1);
+  });
+
+  it('bounds the complete page walk including the last body read by one deadline', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      if (JSON.parse(String(init.body)).pagination.page === 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 30_000));
+        return Response.json({ results: [{ id: 'partial' }], page_metadata: { hasNext: true } });
+      }
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            init.signal?.addEventListener('abort', () => controller.error(init.signal?.reason));
+          },
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 })
+      .getDisasterByAgency('award', body(1, 2), createMockContext())
+      .then(failIfResolved, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(45_001);
+    expect(await pending).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', budgetMs: 15_000 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares the remaining page-walk budget with retries instead of restarting it', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      if (JSON.parse(String(init.body)).pagination.page === 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 44_900));
+        return Response.json({ results: [{ id: 'partial' }], page_metadata: { hasNext: true } });
+      }
+      return Response.json({ detail: 'Busy' }, { status: 503 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 })
+      .getDisasterByAgency('award', body(1, 2), createMockContext())
+      .then(failIfResolved, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(45_001);
+    expect(await pending).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', budgetMs: 100 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
 
 /**
  * Every tool declares `api_timeout` and `api_unavailable` as service-thrown

@@ -27,6 +27,8 @@ import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-ov
 // Mock service for all tests — individual tests set per-mock as needed
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
+    disasterDeadline: () => Date.now() + 45_000,
+    getDisasterAmountCodes: async () => ['L', 'M', 'N', 'O', 'P', 'U', 'V'],
     searchAwards: vi.fn().mockResolvedValue({
       results: [],
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },

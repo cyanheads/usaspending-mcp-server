@@ -390,7 +390,7 @@ describe('searchAwardsTool', () => {
     });
 
     const ctx = createMockContext({ errors: searchAwardsTool.errors });
-    const input = searchAwardsTool.input.parse({ keyword: 'x' });
+    const input = searchAwardsTool.input.parse({ keyword: 'xxx' });
     await searchAwardsTool.handler(input, ctx);
 
     const enrichment = getEnrichment(ctx);
@@ -437,7 +437,7 @@ describe('searchAwardsTool', () => {
 
     const ctx = createMockContext({ errors: searchAwardsTool.errors });
     const result = await searchAwardsTool.handler(
-      searchAwardsTool.input.parse({ keyword: 'y' }),
+      searchAwardsTool.input.parse({ keyword: 'yyy' }),
       ctx,
     );
 

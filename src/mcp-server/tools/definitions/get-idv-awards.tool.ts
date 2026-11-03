@@ -31,7 +31,17 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         'Type of child awards to list: child_awards = task/delivery orders, child_idvs = sub-IDVs, grandchild_awards = orders under sub-IDVs',
       ),
     sort: z
-      .string()
+      .enum([
+        'award_type',
+        'description',
+        'funding_agency',
+        'awarding_agency',
+        'last_date_to_order',
+        'obligated_amount',
+        'period_of_performance_current_end_date',
+        'period_of_performance_start_date',
+        'piid',
+      ])
       .default('obligated_amount')
       .describe(
         'Field to sort child awards by (e.g., obligated_amount, period_of_performance_start_date)',

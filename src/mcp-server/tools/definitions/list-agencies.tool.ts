@@ -47,7 +47,7 @@ export const listAgenciesTool = tool('usaspending_list_agencies', {
             toptier_code: z
               .string()
               .describe(
-                'Three-digit toptier agency code (e.g., 097 for DoD) — required by usaspending_get_agency',
+                'Directory toptier agency code (e.g., 097 for DoD, 1601 for Labor); three or four digits — accepted by usaspending_get_agency and search_federal_accounts agency_identifier',
               ),
             agency_slug: z
               .string()

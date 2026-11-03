@@ -20,6 +20,7 @@ import {
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
+  normalizeEffectiveFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
@@ -47,7 +48,12 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       ),
     filters: z
       .object({
-        keywords: z.array(z.string()).optional().describe('Full-text keyword filters'),
+        keywords: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Full-text keyword filters; each effective term needs at least three characters, including significant whitespace',
+          ),
         award_type_codes: z
           .array(z.string())
           .optional()
@@ -58,8 +64,18 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
           .describe(
             'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
           ),
-        recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
-        naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
+        recipient_id: z
+          .string()
+          .optional()
+          .describe(
+            'recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash plus uppercase -P, -C, or -R; hash letters normalize to lowercase; empty is unset',
+          ),
+        naics_codes: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'NAICS codes: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize whitespace, plus, leading zeros and digit underscores; unclassified spellings remain provider-validated',
+          ),
         ...CODE_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start date (YYYY-MM-DD), 2007-10-01 or later. Given alone, the window runs through today (UTC).',
@@ -116,6 +132,10 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
 
   // Agent-facing context: pagination totals and a recovery notice for empty pages.
   enrichment: {
+    applied_recipient_id: z
+      .string()
+      .optional()
+      .describe('Normalized recipient hash and level sent'),
     totalCount: z
       .number()
       .optional()
@@ -161,6 +181,29 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
   },
 
   errors: [
+    {
+      reason: 'invalid_keyword',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An effective keyword has fewer than three characters.',
+      retryable: false,
+      recovery: 'Supply keywords of at least three characters; whitespace is significant.',
+    },
+    {
+      reason: 'invalid_naics_code',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An effective NAICS code is known to be invalid.',
+      retryable: false,
+      recovery:
+        'Use a 2, 4, or 6 digit NAICS code from usaspending_autocomplete_filters type=naics.',
+    },
+    {
+      reason: 'invalid_recipient_id',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An active analytics recipient_id is malformed.',
+      retryable: false,
+      recovery:
+        'Use recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash followed by uppercase -P, -C, or -R.',
+    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -219,7 +262,9 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     });
     const svc = getUSASpendingService();
 
-    const { filters, timePeriod, codes } = buildFilters(input.filters);
+    const effective = normalizeEffectiveFilters(input.filters ?? {});
+    if ('reason' in effective) throw ctx.fail(effective.reason, effective.message);
+    const { filters, timePeriod, codes } = buildFilters({ ...input.filters, ...effective });
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
     if (inverted) {
       throw ctx.fail('date_range_inverted', inverted);
@@ -279,8 +324,9 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
         ? { applied_keywords: input.filters.keywords.join(', ') }
         : {}),
       ...(input.filters?.agency_name ? { applied_agency_name: input.filters.agency_name } : {}),
-      ...(input.filters?.naics_codes?.length
-        ? { applied_naics_codes: input.filters.naics_codes.join(', ') }
+      ...(effective.recipient_id ? { applied_recipient_id: effective.recipient_id } : {}),
+      ...(effective.naics_codes?.length
+        ? { applied_naics_codes: effective.naics_codes.join(', ') }
         : {}),
       ...codeFilterEcho(codes),
       ...(timePeriod
@@ -295,6 +341,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     const notices = [filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS)];
     if (results.length === 0) {
       const codeParts = describeCodeFilters(codes);
+      if (effective.recipient_id) codeParts.push(`recipient_id=${effective.recipient_id}`);
       notices.push(
         `No ${input.category} data matched the filters${codeParts.length ? ` (${codeParts.join(', ')})` : ''}. Try broadening filters or selecting a different category.`,
       );

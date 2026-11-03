@@ -75,6 +75,20 @@ const budgetFixture = {
 mockGetAgencyBudgetaryResources.mockResolvedValue(budgetFixture);
 
 describe('getAgencyTool', () => {
+  it.each([
+    ['80', '080'],
+    ['1', '001'],
+    ['097', '097'],
+    ['1601', '1601'],
+  ])('normalizes directory code %s to %s', async (code, expected) => {
+    mockGetAgency.mockResolvedValueOnce(agencyFixture);
+    mockGetAgencySubAgencies.mockResolvedValueOnce(subAgenciesFixture);
+    const result = await runToolContract(getAgencyTool, { toptier_code: code });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ toptier_code: expected });
+    expect(JSON.stringify(result.content)).toContain(expected);
+    expect(mockGetAgency.mock.lastCall?.[0]).toBe(expected);
+  });
   it('returns agency details by toptier_code', async () => {
     mockGetAgency.mockResolvedValueOnce(agencyFixture);
     mockGetAgencySubAgencies.mockResolvedValueOnce(subAgenciesFixture);

@@ -4,7 +4,114 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { analyticsTypeMismatch, buildFilters } from '@/mcp-server/tools/definitions/filters.js';
+import {
+  analyticsTypeMismatch,
+  buildFilters,
+  CODE_FILTER_FIELDS,
+  normalizeCodeFilters,
+  normalizeEffectiveFilters,
+} from '@/mcp-server/tools/definitions/filters.js';
+
+describe('effective filter validation', () => {
+  it.each(['P', 'C', 'R'])('preserves recipient level %s', (level) => {
+    expect(
+      normalizeEffectiveFilters({ recipient_id: `00000000-0000-0000-0000-000000000000-${level}` }),
+    ).toEqual({ recipient_id: `00000000-0000-0000-0000-000000000000-${level}` });
+  });
+  it.each([
+    'ABCDEFGHIJKL',
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000000-p',
+    '00000000-0000-0000-0000-000000000000-X',
+    '00000000-0000-0000-0000-00000000000Z-P',
+  ])('rejects malformed recipient %s', (recipient_id) => {
+    expect(normalizeEffectiveFilters({ recipient_id })).toMatchObject({
+      reason: 'invalid_recipient_id',
+    });
+  });
+  it('keeps scanner and reused code-filter paths within linear thread CPU bounds', () => {
+    const guard = (small: number, large: number) => {
+      if (large >= 1_000_000 || large / Math.max(small, 1) >= 256)
+        throw new Error('CPU guard exceeded');
+    };
+    expect(() => guard(1, 257)).toThrow('CPU guard exceeded');
+    expect(() => guard(100_000, 1_000_000)).toThrow('CPU guard exceeded');
+    const shapes = [
+      (n: number) => `${'0'.repeat(n)}54`,
+      (n: number) => `${'5_'.repeat(n)}4`,
+      (n: number) => `${'+('.repeat(n)}54`,
+      (n: number) => `${'0'.repeat(n)}54\n`,
+      (n: number) => `${'0\n'.repeat(n)}54`,
+    ];
+    for (const shape of shapes) {
+      const readings: number[] = [];
+      for (const size of [1250, 5000, 20000, 80000]) {
+        const value = shape(size);
+        const run = () => {
+          normalizeEffectiveFilters({ naics_codes: [value], recipient_id: value });
+          CODE_FILTER_FIELDS.def_codes.safeParse([value]);
+          normalizeCodeFilters({ def_codes: [value] });
+        };
+        // Warm each size before samples so tier transitions cannot masquerade as growth.
+        for (let i = 0; i < 30; i++) run();
+        const samples = [];
+        for (let sample = 0; sample < 3; sample++) {
+          const start = process.threadCpuUsage();
+          for (let i = 0; i < 20; i++) run();
+          const usage = process.threadCpuUsage(start);
+          samples.push(usage.user + usage.system);
+        }
+        readings.push(Math.min(...samples));
+        expect(normalizeEffectiveFilters({ recipient_id: value })).toMatchObject({
+          reason: 'invalid_recipient_id',
+        });
+        expect(CODE_FILTER_FIELDS.def_codes.safeParse([value]).success).toBe(false);
+        expect(normalizeCodeFilters({ def_codes: [value] }).def_codes).toEqual([
+          value.toUpperCase(),
+        ]);
+        const normalized = normalizeEffectiveFilters({ naics_codes: [value] });
+        if (value.includes('_')) expect(normalized).toMatchObject({ reason: 'invalid_naics_code' });
+        else if (value.includes('(') || value.slice(0, -1).includes('\n'))
+          expect(normalized).toEqual({ naics_codes: [value] });
+        else expect(normalized).toEqual({ naics_codes: ['54'] });
+      }
+      guard(readings[0]!, readings[3]!);
+    }
+  });
+  it.each([
+    ['054', '54'],
+    ['+54', '54'],
+    [' 54 ', '54'],
+    ['00541512', '541512'],
+    ['54_15', '5415'],
+    ['５４', '５４'],
+  ])('normalizes %s to %s', (value, expected) => {
+    expect(normalizeEffectiveFilters({ naics_codes: [value] })).toEqual({
+      naics_codes: [expected],
+    });
+  });
+  it.each(['abc', '541', '54151', '00'])('rejects known invalid NAICS %s', (value) => {
+    expect(normalizeEffectiveFilters({ naics_codes: [value] })).toMatchObject({
+      reason: 'invalid_naics_code',
+    });
+  });
+  it('preserves significant keyword whitespace and rejects short effective keywords', () => {
+    expect(normalizeEffectiveFilters({ keywords: [' AI'] })).toEqual({ keywords: [' AI'] });
+    expect(normalizeEffectiveFilters({ keywords: ['AI'] })).toMatchObject({
+      reason: 'invalid_keyword',
+    });
+  });
+  it('normalizes arbitrary recipient hash bits without UUID restrictions', () => {
+    expect(
+      normalizeEffectiveFilters({ recipient_id: 'ABCDEF12-1234-0000-0000-ABCDEF123456-R' }),
+    ).toEqual({ recipient_id: 'abcdef12-1234-0000-0000-abcdef123456-R' });
+    expect(normalizeEffectiveFilters({ recipient_id: '' })).toEqual({});
+    expect(normalizeEffectiveFilters({ recipient_id: 'not-a-hash' })).toMatchObject({
+      reason: 'invalid_recipient_id',
+      message: expect.stringContaining('usaspending_search_recipients'),
+    });
+  });
+});
 
 describe('buildFilters', () => {
   it.each([

@@ -15,6 +15,8 @@ const mockGetDisasterByGeography = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
+    disasterDeadline: () => Date.now() + 45_000,
+    getDisasterAmountCodes: async () => ['L', 'M', 'N', 'O', 'P', 'U', 'V'],
     getDisasterOverview: mockGetDisasterOverview,
     getDisasterByAgency: mockGetDisasterByAgency,
     getDisasterByCfda: mockGetDisasterByCfda,
@@ -114,7 +116,12 @@ describe('disasterSpendingTool', () => {
     await disasterSpendingTool.handler(input, ctx);
 
     // Service is called with 'total' as the spendingType arg (forwarded as body field in service)
-    expect(mockGetDisasterByAgency).toHaveBeenCalledWith('total', expect.any(Object), ctx);
+    expect(mockGetDisasterByAgency).toHaveBeenCalledWith(
+      'total',
+      expect.any(Object),
+      ctx,
+      expect.any(Number),
+    );
   });
 
   it('returns geography breakdown mapping the real amount field (issue #18)', async () => {
@@ -422,6 +429,7 @@ describe('disasterSpendingTool', () => {
       'award',
       expect.objectContaining({ filter: { def_codes: ['L', 'M'] } }),
       ctx,
+      expect.any(Number),
     );
   });
 
@@ -452,6 +460,7 @@ describe('disasterSpendingTool', () => {
     expect(mockGetDisasterByGeography).toHaveBeenCalledWith(
       expect.objectContaining({ geo_layer: 'county', spending_type: 'obligation' }),
       ctx,
+      expect.any(Number),
     );
   });
 
@@ -502,7 +511,7 @@ describe('disasterSpendingTool', () => {
 
     // Top-level {limit,page} are ignored upstream; the fix nests them under `pagination`.
     const body = mockGetDisasterByAgency.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(body.pagination).toEqual({ page: 2, limit: 2 });
+    expect(body.pagination).toEqual({ page: 2, limit: 2, sort: 'obligation', order: 'desc' });
     expect(body.limit).toBeUndefined();
     expect(body.page).toBeUndefined();
   });
@@ -523,7 +532,7 @@ describe('disasterSpendingTool', () => {
     await disasterSpendingTool.handler(input, ctx);
 
     const body = mockGetDisasterByCfda.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(body.pagination).toEqual({ page: 3, limit: 5 });
+    expect(body.pagination).toEqual({ page: 3, limit: 5, sort: 'obligation', order: 'desc' });
     expect(body.limit).toBeUndefined();
     expect(body.page).toBeUndefined();
   });
@@ -545,7 +554,7 @@ describe('disasterSpendingTool', () => {
     await disasterSpendingTool.handler(input, ctx);
 
     const body = mockGetDisasterByRecipient.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(body.pagination).toEqual({ page: 1, limit: 2 });
+    expect(body.pagination).toEqual({ page: 1, limit: 2, sort: 'obligation', order: 'desc' });
     expect(body.limit).toBeUndefined();
     expect(body.page).toBeUndefined();
   });
@@ -580,8 +589,8 @@ describe('disasterSpendingTool', () => {
 
     const call1Body = mockGetDisasterByAgency.mock.calls[0]?.[1] as Record<string, unknown>;
     const call2Body = mockGetDisasterByAgency.mock.calls[1]?.[1] as Record<string, unknown>;
-    expect(call1Body.pagination).toEqual({ page: 1, limit: 2 });
-    expect(call2Body.pagination).toEqual({ page: 2, limit: 2 });
+    expect(call1Body.pagination).toEqual({ page: 1, limit: 2, sort: 'obligation', order: 'desc' });
+    expect(call2Body.pagination).toEqual({ page: 2, limit: 2, sort: 'obligation', order: 'desc' });
     const ids1 = page1.results.map((r) => r.id);
     const ids2 = page2.results.map((r) => r.id);
     expect(ids1).toEqual(['882', '95']);
@@ -863,10 +872,19 @@ describe('disasterSpendingTool api_timeout recovery (#57)', () => {
     return text.slice(start, to ? text.indexOf(to) : undefined);
   };
 
-  it('points agency, cfda, and recipient at fewer def_codes or a smaller limit', () => {
-    const text = clause('agency, cfda, recipient:', 'geography:');
+  it('points direct agency, cfda, and recipient paths at fewer def_codes or a smaller limit', () => {
+    const text = clause(
+      'agency total, agency award with filters.award_type_codes, cfda, recipient:',
+      'geography:',
+    );
     expect(text).toContain('fewer filters.def_codes');
     expect(text).toContain('smaller limit');
+  });
+
+  it('does not suggest reducing limit to reduce a complete agency award page walk', () => {
+    const text = clause('agency award without filters.award_type_codes:', 'agency total,');
+    expect(text).toContain('fewer filters.def_codes');
+    expect(text).toContain('a smaller limit does not reduce that work');
   });
 
   it('points geography at fewer def_codes only — limit does not shrink its upstream response', () => {

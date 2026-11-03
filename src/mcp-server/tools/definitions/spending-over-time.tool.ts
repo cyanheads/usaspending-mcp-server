@@ -16,16 +16,18 @@ import {
   optionalIsoDate,
 } from './dates.js';
 import {
+  AWARD_TYPE_CODES,
   analyticsTypeMismatch,
   buildFilters,
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
+  normalizeEffectiveFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
 
 /** Award types sent when the call names none: contracts. */
-const DEFAULT_AWARD_TYPE_CODES = ['A', 'B', 'C', 'D'];
+const DEFAULT_AWARD_TYPE_CODES = AWARD_TYPE_CODES.contracts;
 
 export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   title: 'Spending Over Time',
@@ -41,7 +43,12 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       ),
     filters: z
       .object({
-        keywords: z.array(z.string()).optional().describe('Full-text keyword filters'),
+        keywords: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Full-text keyword filters; each effective term needs at least three characters, including significant whitespace',
+          ),
         award_type_codes: z
           .array(z.string())
           .optional()
@@ -54,8 +61,18 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
           .describe(
             'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
           ),
-        recipient_id: z.string().optional().describe('Exact recipient hash ID filter'),
-        naics_codes: z.array(z.string()).optional().describe('NAICS code filters'),
+        recipient_id: z
+          .string()
+          .optional()
+          .describe(
+            'recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash plus uppercase -P, -C, or -R; hash letters normalize to lowercase; empty is unset',
+          ),
+        naics_codes: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'NAICS codes: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize whitespace, plus, leading zeros and digit underscores; unclassified spellings remain provider-validated',
+          ),
         ...CODE_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start of the time window (YYYY-MM-DD), 2007-10-01 or later. Given alone, the window runs through today (UTC).',
@@ -123,7 +140,9 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
               .optional()
               .describe('Other financial assistance obligation amount in USD for this period'),
           })
-          .describe('Time period row with total obligations and optional award-type breakdowns'),
+          .describe(
+            'Time period row with total obligations and optional award-type breakdowns, all restricted to applied_award_type_codes; an excluded category is not an agency-wide zero',
+          ),
       )
       .describe('Time-series of obligation totals'),
     total_periods: z.number().describe('Number of time periods returned'),
@@ -131,6 +150,19 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
 
   // Agent-facing context: time grouping, period count, and optional recovery notice for empty results.
   enrichment: {
+    applied_recipient_id: z
+      .string()
+      .optional()
+      .describe('Normalized recipient hash and level sent'),
+    applied_award_type_codes: z
+      .string()
+      .describe(
+        'Effective award type codes sent (comma-separated); totals and every breakdown cover only these codes',
+      ),
+    applied_award_type_default: z
+      .literal('contracts')
+      .optional()
+      .describe('Present only when omitted or empty codes select the contract default'),
     time_group: z.string().describe('Time grouping applied: fiscal_year, quarter, or month'),
     period_count: z.number().describe('Number of time periods returned'),
     applied_keywords: z.string().optional().describe('Keyword filters applied (comma-separated)'),
@@ -163,7 +195,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       .string()
       .optional()
       .describe(
-        'Names a time-window bound that was filled in because only the other was supplied, and — when no periods are returned — names any Assistance Listing, PSC, or DEF codes sent and suggests broadening filters. Absent when neither applies.',
+        'Discloses effective award-type scope, composes any filled time-window bound, and names active code/recipient filters when no periods are returned.',
       ),
   },
 
@@ -172,6 +204,29 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   },
 
   errors: [
+    {
+      reason: 'invalid_keyword',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An effective keyword has fewer than three characters.',
+      retryable: false,
+      recovery: 'Supply keywords of at least three characters; whitespace is significant.',
+    },
+    {
+      reason: 'invalid_naics_code',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An effective NAICS code is known to be invalid.',
+      retryable: false,
+      recovery:
+        'Use a 2, 4, or 6 digit NAICS code from usaspending_autocomplete_filters type=naics.',
+    },
+    {
+      reason: 'invalid_recipient_id',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An active analytics recipient_id is malformed.',
+      retryable: false,
+      recovery:
+        'Use recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash followed by uppercase -P, -C, or -R.',
+    },
     {
       reason: 'api_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -228,8 +283,11 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
 
     const supplied = input.filters?.award_type_codes;
     const awardTypeCodes = supplied?.length ? supplied : DEFAULT_AWARD_TYPE_CODES;
+    const effective = normalizeEffectiveFilters(input.filters ?? {});
+    if ('reason' in effective) throw ctx.fail(effective.reason, effective.message);
     const { filters, timePeriod, codes } = buildFilters({
       ...input.filters,
+      ...effective,
       award_type_codes: awardTypeCodes,
     });
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
@@ -285,14 +343,17 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     });
 
     ctx.enrich({
+      applied_award_type_codes: awardTypeCodes.join(', '),
+      ...(!supplied?.length ? { applied_award_type_default: 'contracts' as const } : {}),
       time_group: input.group,
       period_count: results.length,
       ...(input.filters?.keywords?.length
         ? { applied_keywords: input.filters.keywords.join(', ') }
         : {}),
       ...(input.filters?.agency_name ? { applied_agency_name: input.filters.agency_name } : {}),
-      ...(input.filters?.naics_codes?.length
-        ? { applied_naics_codes: input.filters.naics_codes.join(', ') }
+      ...(effective.recipient_id ? { applied_recipient_id: effective.recipient_id } : {}),
+      ...(effective.naics_codes?.length
+        ? { applied_naics_codes: effective.naics_codes.join(', ') }
         : {}),
       ...codeFilterEcho(codes),
       ...(timePeriod
@@ -304,9 +365,13 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     });
 
     // enrich.notice is last-wins, so every notice source joins into one string.
-    const notices = [filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS)];
+    const notices = [
+      `Totals and every breakdown are restricted to award type codes ${awardTypeCodes.join(', ')}${!supplied?.length ? ' (contract default)' : ''}; excluded categories are not agency-wide zero spending.`,
+      filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS),
+    ];
     if (results.length === 0) {
       const codeParts = describeCodeFilters(codes);
+      if (effective.recipient_id) codeParts.push(`recipient_id=${effective.recipient_id}`);
       notices.push(
         `No spending data periods returned${codeParts.length ? ` for ${codeParts.join(', ')}` : ''}. Try a broader time period or remove keyword/agency filters to get more data points.`,
       );

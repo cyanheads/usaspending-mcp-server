@@ -8,18 +8,20 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import type {
+  DisasterBreakdownRequest,
   RawDisasterBreakdownResponse,
   RawDisasterResult,
   RawDisasterTotals,
 } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { CODE_FILTER_FIELDS, normalizeCodeFilters } from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
 
 /**
  * `disaster/recipient/spending/` reports this number as a ceiling, not a count.
  * Unrelated broad `def_codes` filters all land on exactly 10,000 while a narrow one
- * reports an honest 3,045, and the set is saturated at that point: with all five COVID
+ * reports an honest count, and the set is saturated at that point: with broad COVID
  * codes the page at offset 9,900 comes back full with `hasNext: false` and the next page
  * is empty. Rows past the 10,000th are unreachable, and a caller reading the total has no
  * way to tell a cap from a count — hence the disclosure below.
@@ -61,10 +63,44 @@ function rowId(id: RawDisasterResult['id']): string | undefined {
 const ZERO_TOTAL_NOTICE =
   'No data found for the specified DEF codes and dimension. Try different DEF codes or another breakdown dimension — def_codes is required for all non-overview dimensions and cannot be removed.';
 
+/** Amount scope is independent of which awards match the requested funding codes. */
+function amountCoverage(codes: string[], supported: string[] | undefined) {
+  if (supported === undefined) return { status: 'unknown' as const };
+  const supported_def_codes = codes.filter((code) => supported.includes(code));
+  const unsupported_def_codes = codes.filter((code) => !supported.includes(code));
+  return {
+    status:
+      unsupported_def_codes.length === 0
+        ? ('complete' as const)
+        : supported_def_codes.length
+          ? ('partial' as const)
+          : ('unavailable' as const),
+    supported_def_codes,
+    unsupported_def_codes,
+  };
+}
+
+/** Every displayed monetary field shares this scope; row membership and counts do not. */
+const AMOUNT_COVERAGE_SCHEMA = z.object({
+  status: z
+    .enum(['complete', 'partial', 'unavailable', 'unknown'])
+    .describe(
+      'Coverage of requested DEF codes by monetary fields, not provider record completeness',
+    ),
+  supported_def_codes: z
+    .array(z.string().describe('DEF code included in amounts'))
+    .optional()
+    .describe('Requested codes included in amounts; omitted when unknown'),
+  unsupported_def_codes: z
+    .array(z.string().describe('DEF code excluded from amounts'))
+    .optional()
+    .describe('Requested codes excluded from amounts; omitted when unknown'),
+});
+
 export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   title: 'Disaster and Emergency Spending',
   description:
-    'Fetch disaster and emergency supplemental spending (COVID-19, hurricanes, infrastructure law, etc.) broken down by agency, CFDA assistance program, recipient, or geography. Use the dimension parameter to select the breakdown axis: overview (top-level totals), agency, cfda, recipient, or geography. Filter by DEF codes (Disaster/Emergency Funding codes) to isolate a specific emergency appropriation. DEF codes appear in usaspending_get_award account_obligations_by_defc and usaspending_get_agency def_codes fields.',
+    'Fetch disaster and emergency supplemental spending broken down by agency, CFDA assistance program, recipient, or geography, or request an overview. Filter by DEF codes to select emergency appropriations, then check amount_coverage before interpreting amounts: award breakdowns and geography cover the provider COVID grouping, while overview and agency total cover all requested codes. Rows and award counts can match codes outside the monetary scope. DEF codes appear in usaspending_get_award account_obligations_by_defc and usaspending_get_agency def_codes fields.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -81,12 +117,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       ),
     filters: z
       .object({
-        def_codes: z
-          .array(z.string())
-          .optional()
-          .describe(
-            'DEF codes to filter by (e.g., ["L", "M", "N", "O", "P"] for COVID-19). Optional for overview totals and funding; required for agency, cfda, recipient, and geography breakdowns. DEF codes appear in usaspending_get_agency def_codes fields.',
-          ),
+        def_codes: CODE_FILTER_FIELDS.def_codes.describe(
+          'DEF codes, 1–3 letters or digits, sent uppercased. Optional for overview; required for breakdowns. Amount coverage is reported separately: award breakdowns and geography aggregate only the provider COVID grouping; matching rows and counts may include other codes. Overview and agency total cover all requested codes. Find codes in usaspending_get_agency def_codes fields.',
+        ),
         award_type_codes: z.array(z.string()).optional().describe('Award type code filters'),
         query: z
           .string()
@@ -111,7 +144,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .max(100)
       .default(10)
       .describe(
-        'Maximum results per page (1–100). Applies to the agency, cfda, recipient, and geography dimensions; geography pages through its areas ranked by aggregated_amount, highest first. Ignored for overview.',
+        'Maximum results per page (1–100). Breakdowns rank obligations descending before pagination; geography ranks aggregated_amount. Agency award without award_type_codes collects all provider pages before ranking, so a smaller limit does not reduce that upstream work. Ignored for overview.',
       ),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
@@ -144,7 +177,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .number()
       .optional()
       .describe(
-        'geography: the lowest aggregated_amount on this page — no area on a later page has a higher one.',
+        'geography: the lowest aggregated_amount on this page within amount_coverage — no area on a later page has a higher reported value.',
       ),
     notice: z
       .string()
@@ -155,6 +188,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   },
 
   output: z.object({
+    amount_coverage: AMOUNT_COVERAGE_SCHEMA.optional().describe(
+      'Scope of all monetary fields, including geography amounts/per-capita and totals; independent of row membership and counts',
+    ),
     dimension: z.string().describe('Breakdown dimension returned'),
     spending_type: z
       .string()
@@ -194,11 +230,11 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         obligation: z
           .number()
           .optional()
-          .describe('Obligations in USD across the whole matching result set'),
+          .describe('Obligations in USD across the matching result set, within amount_coverage'),
         outlay: z
           .number()
           .optional()
-          .describe('Outlays in USD across the whole matching result set'),
+          .describe('Outlays in USD across the matching result set, within amount_coverage'),
         total_budgetary_resources: z
           .number()
           .optional()
@@ -308,7 +344,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       retryable: true,
       thrownBy: 'service',
       recovery:
-        'By dimension — agency, cfda, recipient: pass fewer filters.def_codes or a smaller limit, then retry. geography: pass fewer filters.def_codes, then retry. overview: narrow with optional filters.def_codes; filtered requests can still time out, so retry later, or call dimension "agency" with filters.def_codes (e.g. ["L", "M", "N", "O", "P"] for COVID-19), spending_type "total", and limit 100 for per-agency obligations and outlays plus overall totals.',
+        'By dimension — agency award without filters.award_type_codes: pass fewer filters.def_codes or retry later; all provider pages must be collected before ranking, so a smaller limit does not reduce that work. agency total, agency award with filters.award_type_codes, cfda, recipient: pass fewer filters.def_codes or a smaller limit, then retry. geography: pass fewer filters.def_codes, then retry. overview: narrow with optional filters.def_codes; filtered requests can still time out, so retry later, or call dimension "agency" with filters.def_codes (e.g. ["L"]), spending_type "total", and limit 100 for per-agency obligations and outlays plus overall totals.',
     },
   ],
 
@@ -327,6 +363,8 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }
 
     const svc = getUSASpendingService();
+    const deadlineAt = svc.disasterDeadline();
+    const defCodes = normalizeCodeFilters({ def_codes: input.filters?.def_codes }).def_codes;
     const notices: string[] = [];
     const query = input.filters?.query?.trim();
     const ignoredFilters: string[] = [];
@@ -337,20 +375,19 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       ignoredFilters.push('filters.award_type_codes');
     if (ignoredFilters.length)
       notices.push(`Ignored for dimension "${input.dimension}": ${ignoredFilters.join(', ')}.`);
-    if (input.filters?.def_codes?.length)
-      ctx.enrich({ applied_def_codes: input.filters.def_codes.join(', ') });
+    if (defCodes?.length) ctx.enrich({ applied_def_codes: defCodes.join(', ') });
     if (query && input.dimension === 'recipient') ctx.enrich({ applied_query: query });
 
     const baseBody: Record<string, unknown> = {};
     const filterBody: Record<string, unknown> = {};
-    if (input.filters?.def_codes?.length) filterBody.def_codes = input.filters.def_codes;
+    if (defCodes?.length) filterBody.def_codes = defCodes;
     if (input.filters?.award_type_codes?.length)
       filterBody.award_type_codes = input.filters.award_type_codes;
     if (query && input.dimension === 'recipient') filterBody.query = query;
     if (Object.keys(filterBody).length > 0) baseBody.filter = filterBody;
 
     if (input.dimension === 'overview') {
-      const data = await svc.getDisasterOverview(ctx, input.filters?.def_codes);
+      const data = await svc.getDisasterOverview(ctx, defCodes);
       const funding = (data.funding ?? []).map((f) => ({
         ...(f.def_code ? { def_code: f.def_code } : {}),
         ...(typeof f.amount === 'number' ? { amount: f.amount } : {}),
@@ -362,6 +399,10 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       if (notices.length) ctx.enrich.notice(notices.join(' '));
       return {
         dimension: 'overview',
+        amount_coverage: {
+          status: 'complete' as const,
+          ...(defCodes ? { supported_def_codes: defCodes, unsupported_def_codes: [] } : {}),
+        },
         spending_type: 'spending',
         overview: {
           ...(typeof data.total_budget_authority === 'number'
@@ -393,16 +434,50 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
     // Disaster breakdown endpoints require pagination nested under a `pagination` key;
     // top-level limit/page are silently ignored (upstream always returns its default page).
-    const paginationBody = { ...baseBody, pagination: { page: input.page, limit: input.limit } };
+    const paginationBody: DisasterBreakdownRequest = {
+      ...baseBody,
+      pagination: { page: input.page, limit: input.limit, sort: 'obligation', order: 'desc' },
+    };
+
+    const coverageForBreakdown = async () => {
+      const coverage = amountCoverage(
+        defCodes ?? [],
+        input.dimension === 'agency' && input.spending_type === 'total'
+          ? defCodes
+          : await svc.getDisasterAmountCodes(ctx, deadlineAt),
+      );
+      if (coverage.status !== 'complete') {
+        const scope =
+          coverage.status === 'unknown'
+            ? 'The DEF reference is unavailable; monetary coverage is unknown.'
+            : coverage.status === 'unavailable'
+              ? 'Amounts are unavailable for the requested DEF codes; retained zeros are not evidence of zero actual spending.'
+              : 'Amounts cover only the supported COVID DEF codes; other requested codes are excluded from monetary values.';
+        notices.push(
+          `${scope} Row membership and award counts can cover more codes than amounts. This scope applies to obligations, outlays, totals and derived geography amounts/per-capita. Use agency spending_type total for all-code financial activity, or general category/geography DEF filters for whole matching award amounts, not DEF-funded shares.`,
+        );
+      }
+      return coverage;
+    };
 
     let rawResults: RawDisasterBreakdownResponse;
 
     if (input.dimension === 'agency') {
-      rawResults = await svc.getDisasterByAgency(input.spending_type, paginationBody, ctx);
+      rawResults = await svc.getDisasterByAgency(
+        input.spending_type,
+        paginationBody,
+        ctx,
+        deadlineAt,
+      );
     } else if (input.dimension === 'cfda') {
-      rawResults = await svc.getDisasterByCfda(paginationBody, ctx);
+      rawResults = await svc.getDisasterByCfda(paginationBody, ctx, deadlineAt);
     } else if (input.dimension === 'recipient') {
-      rawResults = await svc.getDisasterByRecipient(input.spending_type, paginationBody, ctx);
+      rawResults = await svc.getDisasterByRecipient(
+        input.spending_type,
+        paginationBody,
+        ctx,
+        deadlineAt,
+      );
     } else {
       /**
        * geography — this endpoint requires a spending_type from a vocabulary distinct from
@@ -417,7 +492,8 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         scope: 'place_of_performance',
         spending_type: geoSpendingType,
       };
-      const data = await svc.getDisasterByGeography(geoBody, ctx);
+      const data = await svc.getDisasterByGeography(geoBody, ctx, deadlineAt);
+      const coverage = await coverageForBreakdown();
       const areas = (data.results ?? []).map((r) => ({
         ...(r.shape_code ? { shape_code: r.shape_code } : {}),
         ...(r.display_name ? { display_name: r.display_name } : {}),
@@ -451,7 +527,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       if (hasNext) {
         const ceiling = pageAreas.at(-1)?.aggregated_amount;
         notices.push(
-          `${(total - input.page * input.limit).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)}` : ''}. Request page ${input.page + 1} to continue${input.limit < 100 ? ', or raise limit (max 100)' : ''}.`,
+          `${(total - input.page * input.limit).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)} in the reported amount scope` : ''}. Request page ${input.page + 1} to continue${input.limit < 100 ? ', or raise limit (max 100)' : ''}.`,
         );
         ctx.enrich.truncated({
           shown: pageAreas.length,
@@ -465,12 +541,14 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       if (notices.length) ctx.enrich.notice(notices.join(' '));
       return {
         dimension: 'geography',
+        amount_coverage: coverage,
         spending_type: geoSpendingType,
         results: pageAreas,
         page_metadata: { has_next: hasNext, page: input.page, total, limit: input.limit },
       };
     }
 
+    const coverage = await coverageForBreakdown();
     const results = (rawResults.results ?? []).map((r) => ({
       ...(rowId(r.id) !== undefined ? { id: rowId(r.id) } : {}),
       ...(r.code ? { code: r.code } : {}),
@@ -522,6 +600,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
 
     return {
       dimension: input.dimension,
+      amount_coverage: coverage,
       spending_type: input.spending_type,
       ...(totals ? { totals } : {}),
       results,
@@ -538,6 +617,20 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     const lines: string[] = [
       `## Disaster/Emergency Spending — ${escapeMarkdownInline(result.dimension)}${result.spending_type !== 'spending' ? ` (${escapeMarkdownInline(result.spending_type)})` : ''}`,
     ];
+    if (result.amount_coverage) {
+      const coverage = result.amount_coverage;
+      lines.push(
+        `**Amount coverage:** ${coverage.status} (monetary fields only; row membership and counts have separate scope).`,
+      );
+      if (coverage.supported_def_codes)
+        lines.push(
+          `**Supported DEF codes:** ${coverage.supported_def_codes.map(escapeMarkdownInline).join(', ') || '(none)'}`,
+        );
+      if (coverage.unsupported_def_codes)
+        lines.push(
+          `**Unsupported DEF codes:** ${coverage.unsupported_def_codes.map(escapeMarkdownInline).join(', ') || '(none)'}`,
+        );
+    }
 
     if (result.overview) {
       const o = result.overview;

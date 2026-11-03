@@ -4,7 +4,7 @@
  * @module services/usaspending/usaspending-service
  */
 
-import type { Context } from '@cyanheads/mcp-ts-core';
+import { type Context, z } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import {
   JsonRpcErrorCode,
@@ -21,6 +21,7 @@ import {
 } from '@cyanheads/mcp-ts-core/utils';
 import type { ServerConfig } from '@/config/server-config.js';
 import type {
+  DisasterBreakdownRequest,
   RawAgencyAutocomplete,
   RawAgencyDetail,
   RawAgencyEntry,
@@ -264,7 +265,19 @@ export class USASpendingService {
     url: string,
     ctx: Context,
     init: FetchWithTimeoutOptions,
+    deadlineAt?: number,
   ): Promise<T> {
+    const budgetMs = Math.min(
+      this.retryBudgetMs,
+      deadlineAt === undefined ? this.retryBudgetMs : deadlineAt - Date.now(),
+    );
+    ctx.signal?.throwIfAborted();
+    if (budgetMs <= 0)
+      throw timeout('USAspending disaster call deadline elapsed.', {
+        ...upstreamFailure('api_timeout'),
+        operation,
+        budgetMs: 0,
+      });
     let cutAtBudget = false;
     try {
       return await withRetry(
@@ -283,7 +296,7 @@ export class USASpendingService {
           context: ctx,
           baseDelayMs: RETRY_BASE_DELAY_MS,
           signal: ctx.signal,
-          deadlineMs: this.retryBudgetMs,
+          deadlineMs: budgetMs,
           isTransient: (err) => !isAttemptTimeout(err) && defaultIsTransient(err),
         },
       );
@@ -294,12 +307,12 @@ export class USASpendingService {
       if (budgetSpent || attemptTimedOut) {
         throw timeout(
           budgetSpent
-            ? `USAspending did not answer ${operation} within the ${this.retryBudgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`
+            ? `USAspending did not answer ${operation} within the ${budgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`
             : `USAspending did not answer ${operation} within the ${this.timeoutMs}ms per-attempt timeout; a timed-out attempt is not retried.`,
           {
             url,
             operation,
-            budgetMs: this.retryBudgetMs,
+            budgetMs,
             timeoutMs: this.timeoutMs,
             errorSource: budgetSpent ? 'RequestBudgetExhausted' : 'AttemptTimeout',
             ...upstreamFailure('api_timeout'),
@@ -311,22 +324,39 @@ export class USASpendingService {
     }
   }
 
-  private get<T>(path: string, ctx: Context, expectedStatuses?: number[]): Promise<T> {
-    return this.request<T>(`GET ${path}`, `${this.baseUrl}${path}`, ctx, {
-      headers: { Accept: 'application/json' },
-      ...(expectedStatuses ? { expectedStatuses } : {}),
-    });
+  private get<T>(
+    path: string,
+    ctx: Context,
+    expectedStatuses?: number[],
+    deadlineAt?: number,
+  ): Promise<T> {
+    return this.request<T>(
+      `GET ${path}`,
+      `${this.baseUrl}${path}`,
+      ctx,
+      {
+        headers: { Accept: 'application/json' },
+        ...(expectedStatuses ? { expectedStatuses } : {}),
+      },
+      deadlineAt,
+    );
   }
 
-  private post<T>(path: string, body: unknown, ctx: Context): Promise<T> {
-    return this.request<T>(`POST ${path}`, `${this.baseUrl}${path}`, ctx, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
+  private post<T>(path: string, body: unknown, ctx: Context, deadlineAt?: number): Promise<T> {
+    return this.request<T>(
+      `POST ${path}`,
+      `${this.baseUrl}${path}`,
+      ctx,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      deadlineAt,
+    );
   }
 
   /**
@@ -606,6 +636,45 @@ export class USASpendingService {
 
   // --- Disaster ---
 
+  /** Absolute deadline shared by disaster page walks and reference reads; never exceeds 45 seconds. */
+  disasterDeadline(): number {
+    return Date.now() + Math.min(DEFAULT_REQUEST_BUDGET_MS, this.retryBudgetMs);
+  }
+
+  /** Best-effort official COVID grouping, bounded to two seconds within the caller's total budget. */
+  async getDisasterAmountCodes(ctx: Context, deadlineAt: number): Promise<string[] | undefined> {
+    try {
+      const raw = await this.get<unknown>(
+        'references/def_codes/',
+        ctx,
+        undefined,
+        Math.min(deadlineAt, Date.now() + 2_000),
+      );
+      ctx.signal?.throwIfAborted();
+      const parsed = z
+        .object({
+          codes: z
+            .array(z.object({ code: z.string().min(1), disaster: z.string().nullable() }))
+            .min(1),
+        })
+        .safeParse(raw);
+      if (!parsed.success) return undefined;
+      return parsed.data.codes
+        .filter((entry) => entry.disaster === 'covid_19')
+        .map((entry) => entry.code);
+    } catch (error) {
+      if (ctx.signal?.aborted) throw error;
+      if (
+        error instanceof McpError &&
+        (typeof error.data?.status === 'number' ||
+          error.code === JsonRpcErrorCode.Timeout ||
+          error.code === JsonRpcErrorCode.ServiceUnavailable)
+      )
+        return undefined;
+      throw error;
+    }
+  }
+
   getDisasterOverview(ctx: Context, defCodes?: string[]): Promise<RawDisasterOverview> {
     ctx.log.debug('getDisasterOverview');
     const query = defCodes?.length
@@ -614,38 +683,94 @@ export class USASpendingService {
     return this.get<RawDisasterOverview>(`disaster/overview/${query}`, ctx);
   }
 
-  getDisasterByAgency(
+  async getDisasterByAgency(
     spendingType: 'award' | 'total',
-    body: Record<string, unknown>,
+    body: DisasterBreakdownRequest,
     ctx: Context,
+    deadlineAt = this.disasterDeadline(),
   ): Promise<RawDisasterBreakdownResponse> {
     ctx.log.debug('getDisasterByAgency', { spendingType });
-    return this.post('disaster/agency/spending/', { ...body, spending_type: spendingType }, ctx);
+    if (spendingType !== 'award' || body.filter?.award_type_codes?.length) {
+      return this.post(
+        'disaster/agency/spending/',
+        { ...body, spending_type: spendingType },
+        ctx,
+        deadlineAt,
+      );
+    }
+    /** The FABA backend slices before sorting. Collect its complete set before selecting a ranked page. */
+    const pagination = body.pagination;
+    let first: RawDisasterBreakdownResponse | undefined;
+    const rows: NonNullable<RawDisasterBreakdownResponse['results']> = [];
+    const messages = new Set<string>();
+    for (let page = 1; ; page++) {
+      const data = await this.post<RawDisasterBreakdownResponse>(
+        'disaster/agency/spending/',
+        {
+          ...body,
+          spending_type: spendingType,
+          pagination: { page, limit: 100, sort: 'obligation', order: 'desc' },
+        },
+        ctx,
+        deadlineAt,
+      );
+      first ??= data;
+      rows.push(...(data.results ?? []));
+      for (const message of data.messages ?? []) messages.add(message);
+      if (!data.page_metadata?.hasNext) break;
+    }
+    const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+    rows.sort(
+      (a, b) =>
+        (b.obligation ?? -Infinity) - (a.obligation ?? -Infinity) ||
+        compare(a.code ?? '', b.code ?? '') ||
+        compare(String(a.id ?? ''), String(b.id ?? '')),
+    );
+    const start = (pagination.page - 1) * pagination.limit;
+    return {
+      ...first,
+      ...(messages.size ? { messages: [...messages] } : {}),
+      results: rows.slice(start, start + pagination.limit),
+      page_metadata: {
+        ...first.page_metadata,
+        page: pagination.page,
+        limit: pagination.limit,
+        hasNext: start + pagination.limit < rows.length,
+      },
+    };
   }
 
   getDisasterByCfda(
     body: Record<string, unknown>,
     ctx: Context,
+    deadlineAt?: number,
   ): Promise<RawDisasterBreakdownResponse> {
     ctx.log.debug('getDisasterByCfda');
-    return this.post('disaster/cfda/spending/', body, ctx);
+    return this.post('disaster/cfda/spending/', body, ctx, deadlineAt);
   }
 
   getDisasterByRecipient(
     spendingType: 'award' | 'total',
     body: Record<string, unknown>,
     ctx: Context,
+    deadlineAt?: number,
   ): Promise<RawDisasterBreakdownResponse> {
     ctx.log.debug('getDisasterByRecipient', { spendingType });
-    return this.post('disaster/recipient/spending/', { ...body, spending_type: spendingType }, ctx);
+    return this.post(
+      'disaster/recipient/spending/',
+      { ...body, spending_type: spendingType },
+      ctx,
+      deadlineAt,
+    );
   }
 
   getDisasterByGeography(
     body: Record<string, unknown>,
     ctx: Context,
+    deadlineAt?: number,
   ): Promise<{ scope: string; geo_layer: string; results: RawDisasterGeoResult[] }> {
     ctx.log.debug('getDisasterByGeography');
-    return this.post('disaster/spending_by_geography/', body, ctx);
+    return this.post('disaster/spending_by_geography/', body, ctx, deadlineAt);
   }
 
   // --- Federal accounts ---

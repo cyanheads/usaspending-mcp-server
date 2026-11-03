@@ -14,6 +14,46 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
 }));
 
 describe('spendingOverTimeTool', () => {
+  it.each([
+    undefined,
+    {},
+    { award_type_codes: [] },
+    { award_type_codes: ['02'] },
+    { award_type_codes: ['A', '02'] },
+  ])('discloses effective scope for %j on both surfaces', async (filters) => {
+    mockSpendingOverTime.mockResolvedValueOnce({ results: [] });
+    const response = await runToolContract(spendingOverTimeTool, { group: 'fiscal_year', filters });
+    const codes = filters?.award_type_codes?.length
+      ? filters.award_type_codes
+      : ['A', 'B', 'C', 'D'];
+    expect(response.structuredContent).toMatchObject({
+      applied_award_type_codes: codes.join(', '),
+    });
+    if (filters?.award_type_codes?.length)
+      expect(response.structuredContent).not.toHaveProperty('applied_award_type_default');
+    else
+      expect(response.structuredContent).toMatchObject({ applied_award_type_default: 'contracts' });
+    const text = response.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(text).toContain(codes.join(', '));
+    expect(text).toContain('every breakdown');
+    expect(text).toContain('No spending data periods returned');
+  });
+  it('preserves zero breakdowns and missing fields for subawards', async () => {
+    mockSpendingOverTime.mockResolvedValueOnce({
+      results: [{ time_period: { fiscal_year: '2025' }, Contract_Obligations: 0 }],
+    });
+    const response = await runToolContract(spendingOverTimeTool, {
+      group: 'fiscal_year',
+      subawards: true,
+    });
+    expect(response.structuredContent).toMatchObject({ results: [{ contracts: 0 }] });
+    expect(response.structuredContent).toMatchObject({
+      results: [{ time_period: { fiscal_year: '2025' }, contracts: 0 }],
+    });
+    expect(response.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n')).toContain(
+      '| N/A | $0 | N/A |',
+    );
+  });
   it('wires both agency tiers and retains a provider zero row for an unknown name', async () => {
     mockSpendingOverTime.mockResolvedValueOnce({
       results: [{ time_period: { fiscal_year: '2025' }, aggregated_amount: 0 }],

@@ -61,7 +61,7 @@ function selectBudgetRow(rows: RawBudgetaryResources[] | undefined) {
 export const getAgencyTool = tool('usaspending_get_agency', {
   title: 'Get Agency Overview',
   description:
-    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year with reported budget data), sub-agency count, and DEF codes for disaster/emergency funding. Also returns a paginated sub-agency breakdown with obligation and transaction counts for the same fiscal year as the budget totals (the current fiscal year when no budget year is available within 5 seconds); sub_agency_fiscal_year names the year it covers. Accepts exactly one of a 3-digit toptier_code (e.g., 097 for DoD, 012 for Agriculture) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results. When the budget or sub-agency request fails, the overview is still returned and unavailable_sections names each missing section with its reason.",
+    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year with reported budget data), sub-agency count, and DEF codes for disaster/emergency funding. Also returns a paginated sub-agency breakdown with obligation and transaction counts for the same fiscal year as the budget totals (the current fiscal year when no budget year is available within 5 seconds); sub_agency_fiscal_year names the year it covers. Accepts exactly one directory toptier_code (e.g., 097 for DoD, 1601 for Labor; one/two-digit numeric inputs are zero-padded to three digits) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results. When the budget or sub-agency request fails, the overview is still returned and unavailable_sections names each missing section with its reason.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -69,7 +69,7 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       .string()
       .optional()
       .describe(
-        '3-digit toptier agency code (e.g., 097, 012) — from usaspending_list_agencies. Use either toptier_code or agency_slug, not both.',
+        'Directory toptier agency code (e.g., 097, 012, 1601) from usaspending_list_agencies. One/two-digit numeric values are padded to three digits (80 becomes 080); three/four-digit codes are preserved. Use either toptier_code or agency_slug, not both.',
       ),
     agency_slug: z
       .string()
@@ -90,7 +90,10 @@ export const getAgencyTool = tool('usaspending_get_agency', {
   output: z.object({
     name: z.string().optional().describe('Agency full name'),
     abbreviation: z.string().optional().describe('Agency abbreviation'),
-    toptier_code: z.string().optional().describe('3-digit toptier agency code'),
+    toptier_code: z
+      .string()
+      .optional()
+      .describe('Directory toptier agency code, which can have three or four digits'),
     agency_id: z.number().optional().describe('Internal agency ID'),
     mission: z.string().optional().describe('Agency mission statement'),
     fiscal_year: z
@@ -251,6 +254,12 @@ export const getAgencyTool = tool('usaspending_get_agency', {
 
     const svc = getUSASpendingService();
     let toptierCode = input.toptier_code?.trim();
+    if (
+      toptierCode &&
+      toptierCode.length <= 2 &&
+      [...toptierCode].every((c) => c >= '0' && c <= '9')
+    )
+      toptierCode = toptierCode.padStart(3, '0');
 
     // Resolve slug → toptier_code if needed
     if (!toptierCode && input.agency_slug?.trim()) {

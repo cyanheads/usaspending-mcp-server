@@ -504,6 +504,12 @@ export interface RawDisasterTotals {
   total_budgetary_resources?: number | null;
 }
 
+/** Nested paging request shared by disaster breakdowns; provider sorting is fixed to obligations. */
+export interface DisasterBreakdownRequest extends Record<string, unknown> {
+  filter?: { def_codes?: string[]; award_type_codes?: string[]; query?: string };
+  pagination: { page: number; limit: number; sort: 'obligation'; order: 'desc' };
+}
+
 /** Raw disaster breakdown response (agency/cfda/recipient) */
 export interface RawDisasterBreakdownResponse {
   messages?: string[];

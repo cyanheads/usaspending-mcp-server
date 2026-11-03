@@ -14,7 +14,7 @@ import { formatPaginationLine } from './pagination.js';
 export const searchFederalAccountsTool = tool('usaspending_search_federal_accounts', {
   title: 'Search Federal Accounts',
   description:
-    'List and keyword-search federal accounts by agency identifier or title keyword. Returns account numbers, names, managing agencies, and budgetary resources. fiscal_year selects the resource amounts, not account membership; omit it for the latest available submission year. Search and detail totals use different calculations and can differ for the same year. Use account_number from results as input to usaspending_get_federal_account for full budget detail. Use usaspending_list_agencies to look up agency_identifier codes (3-digit strings, e.g. "097" for DoD).',
+    'List and keyword-search federal accounts by directory toptier code or title keyword. Returns account numbers, names, managing agencies, and budgetary resources. fiscal_year selects the resource amounts, not account membership; omit it for the latest available submission year. Search and detail totals use different calculations and can differ for the same year. Use account_number from results as input to usaspending_get_federal_account for full budget detail. Use usaspending_list_agencies to look up the input agency_identifier (directory toptier_code, e.g. "097" for DoD or "1601" for Labor); account rows return their account-prefix agency_identifier, e.g. "016" for Labor.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -27,7 +27,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       .string()
       .optional()
       .describe(
-        '3-digit agency identifier code (e.g., "097" for Department of Defense). Use usaspending_list_agencies to look up codes.',
+        'Directory toptier_code from usaspending_list_agencies (e.g., "097" for Defense, "1601" for Labor). This differs from the account-prefix agency_identifier returned in account rows (e.g., "016" for Labor).',
       ),
     sort_field: z
       .enum(['account_name', 'account_number', 'budgetary_resources', 'managing_agency'])
@@ -66,7 +66,9 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
             agency_identifier: z
               .string()
               .optional()
-              .describe('3-digit agency identifier code for this account'),
+              .describe(
+                'Account-prefix agency identifier (e.g., 016 for Labor); distinct from the directory toptier_code used by the input filter',
+              ),
             managing_agency: z.string().optional().describe('Name of the managing agency'),
             managing_agency_acronym: z
               .string()

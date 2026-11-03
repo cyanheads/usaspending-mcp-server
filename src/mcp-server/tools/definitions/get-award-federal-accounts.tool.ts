@@ -71,7 +71,7 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
               .number()
               .optional()
               .describe(
-                'Internal USAspending database ID of the funding toptier agency — not the 3-digit toptier code accepted by usaspending_get_agency',
+                'Internal USAspending database ID of the funding toptier agency — distinct from the directory toptier_code accepted by usaspending_get_agency',
               ),
           })
           .describe('Federal account that funded this award, with obligation and funding agency'),

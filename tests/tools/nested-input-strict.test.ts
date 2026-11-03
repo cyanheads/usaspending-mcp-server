@@ -24,6 +24,8 @@ const svc = vi.hoisted(() => ({
   spendingOverTime: vi.fn(),
   getDisasterOverview: vi.fn(),
   getDisasterByAgency: vi.fn(),
+  disasterDeadline: vi.fn(() => 45_000),
+  getDisasterAmountCodes: vi.fn(),
 }));
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
@@ -96,6 +98,7 @@ beforeEach(() => {
     results: [{ time_period: { fiscal_year: '2024' }, aggregated_amount: 10 }],
   });
   svc.getDisasterOverview.mockResolvedValue({ total_budget_authority: 1, funding: [] });
+  svc.getDisasterAmountCodes.mockResolvedValue(['L', 'M', 'N', 'O', 'P', 'U', 'V']);
   svc.getDisasterByAgency.mockResolvedValue({
     results: [{ id: '1', code: '097', description: 'DoD', obligation: 1 }],
     page_metadata: { hasNext: false, page: 1, total: 1, limit: 10 },

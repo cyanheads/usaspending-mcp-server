@@ -26,6 +26,7 @@ import { getAwardTool } from '@/mcp-server/tools/definitions/get-award.tool.js';
 import { listAgenciesTool } from '@/mcp-server/tools/definitions/list-agencies.tool.js';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
+import type { DisasterBreakdownRequest } from '@/services/usaspending/types.js';
 import { USASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { markdownText } from '../helpers/markdown-text.js';
 
@@ -63,13 +64,17 @@ const awardFixture = {
 vi.mock('@/services/usaspending/usaspending-service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/usaspending/usaspending-service.js')>()),
   getUSASpendingService: () => ({
+    disasterDeadline: () => realService().disasterDeadline(),
+    getDisasterAmountCodes: (ctx: Context, deadlineAt: number) =>
+      realService().getDisasterAmountCodes(ctx, deadlineAt),
     getDisasterOverview: (ctx: Context, defCodes?: string[]) =>
       realService().getDisasterOverview(ctx, defCodes),
     getDisasterByAgency: (
       spendingType: 'award' | 'total',
-      body: Record<string, unknown>,
+      body: DisasterBreakdownRequest,
       ctx: Context,
-    ) => realService().getDisasterByAgency(spendingType, body, ctx),
+      deadlineAt?: number,
+    ) => realService().getDisasterByAgency(spendingType, body, ctx, deadlineAt),
     listAgencies: vi.fn().mockResolvedValue({
       results: [
         {

@@ -19,6 +19,32 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
  * the flat top level cannot pass.
  */
 describe('getIdvAwardsTool', () => {
+  it.each(['amount', '', ' ', 'OBLIGATED_AMOUNT'])(
+    'rejects unsupported sort %j before I/O',
+    async (sort) => {
+      mockGetIdvAwards.mockClear();
+      expect(getIdvAwardsTool.input.safeParse({ award_id: 'CONT_IDV_PARENT', sort }).success).toBe(
+        false,
+      );
+      expect(mockGetIdvAwards).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    'award_type',
+    'description',
+    'funding_agency',
+    'awarding_agency',
+    'last_date_to_order',
+    'obligated_amount',
+    'period_of_performance_current_end_date',
+    'period_of_performance_start_date',
+    'piid',
+  ] as const)('accepts sort %s', async (sort) => {
+    mockGetIdvAwards.mockResolvedValueOnce({ results: [] });
+    const result = await runToolContract(getIdvAwardsTool, { award_id: 'CONT_IDV_PARENT', sort });
+    expect(result.isError).toBeFalsy();
+    expect(mockGetIdvAwards.mock.lastCall?.[0]).toMatchObject({ sort });
+  });
   it('returns child awards for a valid IDV award_id', async () => {
     mockGetIdvAwards.mockResolvedValueOnce({
       page_metadata: { page: 1, next: 2, previous: null, hasNext: true, hasPrevious: false },

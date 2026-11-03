@@ -8,6 +8,86 @@
 import { z } from '@cyanheads/mcp-ts-core';
 import { type DateRange, resolveDateRange } from './dates.js';
 
+/** Values selected after merge precedence, before an upstream request. */
+interface EffectiveFilters {
+  keywords?: string[] | undefined;
+  naics_codes?: string[] | undefined;
+  recipient_id?: string | undefined;
+}
+
+/** Normalize recognized integer aliases; leave Python-only grammar to the provider. */
+export function normalizeEffectiveFilters(
+  f: EffectiveFilters,
+):
+  | EffectiveFilters
+  | { reason: 'invalid_keyword' | 'invalid_naics_code' | 'invalid_recipient_id'; message: string } {
+  if (f.keywords?.some((keyword) => keyword.length < 3))
+    return {
+      reason: 'invalid_keyword',
+      message:
+        'Effective keywords must contain at least three characters; whitespace is significant.',
+    };
+  const naics: string[] = [];
+  for (const raw of f.naics_codes ?? []) {
+    const text = raw.trim();
+    let digits = '';
+    let recognized = text.length > 0;
+    let previousDigit = false;
+    let alphabetic = text.length > 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      const digit = c >= 48 && c <= 57;
+      alphabetic &&= (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+      if (digit) digits += text[i];
+      else if (
+        !(i === 0 && c === 43) &&
+        !(
+          c === 95 &&
+          previousDigit &&
+          i + 1 < text.length &&
+          text.charCodeAt(i + 1) >= 48 &&
+          text.charCodeAt(i + 1) <= 57
+        )
+      )
+        recognized = false;
+      previousDigit = digit;
+    }
+    recognized &&= previousDigit;
+    let canonical = raw;
+    if (recognized) {
+      let start = 0;
+      while (start < digits.length - 1 && digits[start] === '0') start++;
+      canonical = digits.slice(start);
+    }
+    if (alphabetic || (recognized && ![2, 4, 6].includes(canonical.length)))
+      return {
+        reason: 'invalid_naics_code',
+        message:
+          'Effective naics_codes require a 2, 4, or 6 digit NAICS code; use usaspending_autocomplete_filters type=naics.',
+      };
+    naics.push(canonical);
+  }
+  const recipient = f.recipient_id;
+  if (
+    recipient &&
+    !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-[PCR]$/.test(
+      recipient,
+    )
+  )
+    return {
+      reason: 'invalid_recipient_id',
+      message:
+        'filters.recipient_id must be a hexadecimal 8-4-4-4-12 hash followed by uppercase -P, -C, or -R from usaspending_search_recipients.',
+    };
+  return {
+    ...(f.keywords?.length ? { keywords: f.keywords } : {}),
+    ...(naics.length ? { naics_codes: naics } : {}),
+    ...(recipient
+      ? { recipient_id: `${recipient.slice(0, -2).toLowerCase()}${recipient.slice(-2)}` }
+      : {}),
+  };
+}
+
 /** Matches an awarding name at either tier; shared sub-tier names match every parent. */
 export function awardingAgencyFilters(name: string) {
   return [

@@ -53,7 +53,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
               .string()
               .optional()
               .describe(
-                'Recipient hash ID (UUID format with level suffix: -P parent, -C child, -R standalone) — pass to usaspending_get_recipient for full profile',
+                'Recipient hexadecimal 8-4-4-4-12 hash with level suffix: -P parent, -C child, -R standalone — pass to usaspending_get_recipient for full profile',
               ),
             name: z.string().optional().describe('Recipient legal business name'),
             uei: z.string().optional().describe('Unique Entity Identifier (SAM.gov)'),

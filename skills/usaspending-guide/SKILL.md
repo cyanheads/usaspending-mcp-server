@@ -4,7 +4,7 @@ description: Use with usaspending_* tools to trace federal awards through recipi
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -51,4 +51,6 @@ For a named area absent from a ranked geography result, resolve its code and sel
 
 Choose DEF codes for the appropriation being investigated, then keep them fixed across breakdowns. Use the agency breakdown's total-spending view when the question includes direct non-award spending. Recipient and program breakdowns do not gain that coverage by requesting total spending, and geography reports obligations; their sums cannot stand in for the agency total-spending view.
 
-Use the returned overall totals when present instead of summing one page. If the recipient response discloses a reachable ceiling, narrow the recipient query before treating its count as exact. Keep obligations, outlays, and budgetary resources separate in the answer.
+Check amount_coverage before interpreting any monetary value. Award breakdowns and geography aggregate only the provider's COVID DEF grouping; other codes can still add matching rows and award counts. Partial coverage means the amounts exclude unsupported codes; unavailable coverage means retained zeros cannot establish zero spending. Unknown coverage means the reference could not be verified. Overview and agency total cover all requested codes. General category/geography DEF filters offer whole matching award amounts, not the DEF-funded share.
+
+Use the returned overall totals when present instead of summing one page. Breakdowns rank obligations descending before pagination; geography ranks its reported obligation amounts. Agency award breakdowns without award-type filters collect all provider pages before ranking, so reducing the page size does not reduce that upstream work. If the recipient response discloses a reachable ceiling, narrow the recipient query before treating its count as exact. Keep obligations, outlays, and budgetary resources separate in the answer.

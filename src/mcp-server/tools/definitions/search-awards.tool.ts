@@ -27,6 +27,7 @@ import {
   codeFilterEcho,
   describeCodeFilters,
   normalizeCodeFilters,
+  normalizeEffectiveFilters,
   PROCUREMENT_AWARD_TYPE_CODES,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
@@ -156,7 +157,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     keyword: z
       .string()
       .optional()
-      .describe('Full-text search across award descriptions, recipient names, and place names'),
+      .describe(
+        'Full-text search across award descriptions, recipient names, and place names; effective keywords need at least three characters without trimming; empty is unset',
+      ),
     award_type_codes: z
       .array(z.string())
       .min(1)
@@ -180,7 +183,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .array(z.string())
       .optional()
       .describe(
-        'Filter by NAICS industry codes (e.g., ["541512"]). Use usaspending_autocomplete_filters type=naics to look up codes.',
+        'NAICS codes: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize whitespace, plus, leading zeros and digit underscores; unclassified spellings remain provider-validated. Use usaspending_autocomplete_filters type=naics to look up codes.',
       ),
     ...CODE_FILTER_FIELDS,
     time_period: z
@@ -249,7 +252,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           .array(z.string())
           .optional()
           .describe(
-            'Full-text search terms across award descriptions, recipient names, and places',
+            'Full-text search terms across award descriptions, recipient names, and places; effective terms need at least three characters without trimming; nonempty nested values override flat values',
           ),
         award_type_codes: z
           .array(z.string())
@@ -272,7 +275,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         naics_codes: z
           .array(z.string())
           .optional()
-          .describe('NAICS industry codes to require, e.g., ["541512"]'),
+          .describe(
+            'NAICS industry codes to require: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize; unclassified spellings remain provider-validated; nonempty nested values override flat values',
+          ),
         ...CODE_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC).',
@@ -469,6 +474,21 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
   errors: [
     {
+      reason: 'invalid_keyword',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An effective keyword has fewer than three characters.',
+      retryable: false,
+      recovery: 'Supply keywords of at least three characters; whitespace is significant.',
+    },
+    {
+      reason: 'invalid_naics_code',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An effective NAICS code is known to be invalid.',
+      retryable: false,
+      recovery:
+        'Use a 2, 4, or 6 digit NAICS code from usaspending_autocomplete_filters type=naics.',
+    },
+    {
       reason: 'incomplete_cursor',
       code: JsonRpcErrorCode.ValidationError,
       when: 'Only one of last_record_sort_value and last_record_unique_id was supplied.',
@@ -585,7 +605,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
      * `messages` as unused).
      */
     const f = input.filters;
-    const keywords =
+    const mergedKeywords =
       f?.keywords && f.keywords.length > 0
         ? f.keywords
         : input.keyword
@@ -596,8 +616,20 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       : input.award_type_codes;
     const agencyName = f?.agency_name || input.agency_name;
     const recipientName = f?.recipient_name || input.recipient_name;
-    const naicsCodes =
+    const mergedNaicsCodes =
       f?.naics_codes && f.naics_codes.length > 0 ? f.naics_codes : input.naics_codes;
+    const effective = normalizeEffectiveFilters({
+      keywords: mergedKeywords,
+      naics_codes: mergedNaicsCodes,
+    });
+    if ('reason' in effective) {
+      throw ctx.fail(
+        effective.reason === 'invalid_keyword' ? 'invalid_keyword' : 'invalid_naics_code',
+        effective.message,
+      );
+    }
+    const keywords = effective.keywords;
+    const naicsCodes = effective.naics_codes;
     // Both input paths (the flat time_period and the nested filters.time_period_*)
     // merge here, nested winning per bound; a blank reads as absent. A lone bound
     // is filled to a two-ended range, padded, so a half-blank flat pair is a lone

@@ -12,7 +12,7 @@ import { formatCurrency } from './formatting.js';
 export const getRecipientTool = tool('usaspending_get_recipient', {
   title: 'Get Recipient Profile',
   description:
-    "Fetch a recipient's full profile including address, business type codes, parent organization, alternate names, and total transaction and loan amounts. Recipient IDs are UUID hashes with a level suffix (-P parent, -C child, -R standalone) from usaspending_search_recipients or usaspending_get_award. Totals cover the trailing 12 months unless fiscal_year selects one fiscal year, and period names the window. For a recipient's totals by award type, use usaspending_spending_over_time with filters.recipient_id and award_type_codes. UEI and DUNS values can be used to cross-reference with SAM.gov and SEC EDGAR.",
+    "Fetch a recipient's full profile including address, business type codes, parent organization, alternate names, and total transaction and loan amounts. Recipient IDs are hexadecimal 8-4-4-4-12 hashes with a level suffix (-P parent, -C child, -R standalone) from usaspending_search_recipients or usaspending_get_award. Totals cover the trailing 12 months unless fiscal_year selects one fiscal year, and period names the window. For a recipient's totals by award type, use usaspending_spending_over_time with filters.recipient_id and award_type_codes. UEI and DUNS values can be used to cross-reference with SAM.gov and SEC EDGAR.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -20,7 +20,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       .string()
       .min(1)
       .describe(
-        'Recipient hash ID (UUID with level suffix, e.g., b97d19b0-833c-8d8f-3a2c-157d04ea55ef-P) — from usaspending_search_recipients or usaspending_get_award',
+        'Recipient hexadecimal 8-4-4-4-12 hash with level suffix, e.g., b97d19b0-833c-8d8f-3a2c-157d04ea55ef-P — from usaspending_search_recipients or usaspending_get_award',
       ),
     fiscal_year: z
       .number()

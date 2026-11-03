@@ -106,7 +106,14 @@ describe.each(TOOLS)('$name — unchanged date behavior', (tool: ToolCase) => {
     const text = textOf(result);
     expect(text).toContain('2023-10-01');
     expect(text).toContain('2024-09-30');
-    expect(result.structuredContent).not.toHaveProperty('notice');
+    if (tool.name === 'usaspending_spending_over_time') {
+      expect(result.structuredContent).toHaveProperty(
+        'notice',
+        'Totals and every breakdown are restricted to award type codes A, B, C, D (contract default); excluded categories are not agency-wide zero spending.',
+      );
+    } else {
+      expect(result.structuredContent).not.toHaveProperty('notice');
+    }
   });
 
   it('sends no time_period and echoes none when neither end is supplied', async () => {

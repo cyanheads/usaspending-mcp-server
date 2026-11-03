@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.1](changelog/0.7.x/0.7.1.md) — 2026-11-03
+
+Disclose federal spending scope and correct disaster ranking and effective input validation.
+
 ## [0.7.0](changelog/0.7.x/0.7.0.md) — 2026-10-25
 
 Publish a federal spending research guide over MCP and adopt mcp-ts-core 0.13.18 with HTTP request cleanup and literal enrichment rendering.

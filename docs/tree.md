@@ -1,6 +1,6 @@
 # usaspending-mcp-server - Directory Structure
 
-Generated on: 2026-11-03 20:59:15
+Generated on: 2026-11-12 12:15:57
 
 ```text
 usaspending-mcp-server/
@@ -152,6 +152,7 @@ usaspending-mcp-server/
 │   │   └── tools/
 │   │       └── definitions/
 │   │           ├── autocomplete-filters.tool.ts
+│   │           ├── count-limit.ts
 │   │           ├── dates.ts
 │   │           ├── disaster-spending.tool.ts
 │   │           ├── filters.ts
@@ -175,7 +176,8 @@ usaspending-mcp-server/
 │   │           ├── search-recipients.tool.ts
 │   │           ├── spending-by-category.tool.ts
 │   │           ├── spending-by-geography.tool.ts
-│   │           └── spending-over-time.tool.ts
+│   │           ├── spending-over-time.tool.ts
+│   │           └── unavailable-sections.ts
 │   ├── services/
 │   │   └── usaspending/
 │   │       ├── types.ts
@@ -195,6 +197,7 @@ usaspending-mcp-server/
 │   │       ├── transactions-contract.json
 │   │       └── transactions-loan.json
 │   ├── helpers/
+│   │   ├── clamp-mode.ts
 │   │   └── markdown-text.ts
 │   ├── scripts/
 │   │   ├── build-changelog.test.ts
@@ -205,6 +208,7 @@ usaspending-mcp-server/
 │   │   └── usaspending-service.test.ts
 │   ├── tools/
 │   │   ├── autocomplete-filters.tool.test.ts
+│   │   ├── count-limit.test.ts
 │   │   ├── date-filters.test.ts
 │   │   ├── disaster-contract.test.ts
 │   │   ├── disaster-spending.tool.test.ts
@@ -235,6 +239,7 @@ usaspending-mcp-server/
 │   │   ├── spending-by-category.tool.test.ts
 │   │   ├── spending-by-geography.tool.test.ts
 │   │   ├── spending-code-filters.test.ts
+│   │   ├── spending-location-filters.test.ts
 │   │   ├── spending-over-time.tool.test.ts
 │   │   └── tool-contract.test.ts
 │   └── utils/

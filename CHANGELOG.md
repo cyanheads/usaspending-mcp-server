@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.2](changelog/0.7.x/0.7.2.md) — 2026-11-12
+
+Resolve place names to location codes and filter category, geography, and time-series results by place; clamp oversized limits; open recipient parents and children; add multi-year agency budgets, award competition detail, and award search totals.
+
 ## [0.7.1](changelog/0.7.x/0.7.1.md) — 2026-11-03
 
 Disclose federal spending scope and correct disaster ranking and effective input validation.

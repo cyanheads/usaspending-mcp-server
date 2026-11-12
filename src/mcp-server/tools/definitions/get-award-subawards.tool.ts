@@ -7,8 +7,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
+
+/** The `subawards/` page maximum. */
+const LIMIT = countLimit({ tool: 'usaspending_get_award_subawards', default: 10, cap: 100 });
 
 export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
   title: 'Get Award Subawards',
@@ -26,13 +30,7 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       .default('action_date')
       .describe('Sort field for subawards'),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum subawards per page (1–100)'),
+    limit: LIMIT.schema.describe('Subawards per page. Default 10, at most 100 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -71,11 +69,12 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       .describe('Total subaward count across all pages (when available)'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of subawards'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Guidance when no subawards were returned — suggests checking subaward_count from usaspending_get_award first. Absent when results are present.',
+        'A reduced limit, and guidance when no subawards were returned — suggests checking subaward_count from usaspending_get_award first. Absent when neither applies.',
       ),
   },
 
@@ -85,6 +84,7 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
    * result. Both are disclosed as an enrichment notice rather than a failure.
    */
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -109,13 +109,14 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
 
   async handler(input, ctx) {
     ctx.log.info('usaspending_get_award_subawards', { award_id: input.award_id, page: input.page });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
     const data = await svc.getAwardSubawards(
       {
         award_id: input.award_id,
         sort: input.sort,
         order: input.order,
-        limit: input.limit,
+        limit: limit.applied,
         page: input.page,
       },
       ctx,
@@ -146,11 +147,13 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
       has_next_page: hasNext,
     });
 
+    const notices = limit.notice ? [limit.notice] : [];
     if (results.length === 0) {
-      ctx.enrich.notice(
+      notices.push(
         `No subawards found for award ${input.award_id}. Check subaward_count from usaspending_get_award to confirm sub-records exist before querying.`,
       );
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       award_id: input.award_id,
@@ -159,7 +162,7 @@ export const getAwardSubawardsTool = tool('usaspending_get_award_subawards', {
         has_next: hasNext,
         page: currentPage,
         ...(typeof pageMeta.total === 'number' ? { total: pageMeta.total } : {}),
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

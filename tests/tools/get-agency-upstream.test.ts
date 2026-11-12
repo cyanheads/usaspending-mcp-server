@@ -123,6 +123,92 @@ describe('usaspending_get_agency against the real service', () => {
     expect(pathsCalled(fetchMock).filter((p) => p === 'agency/247/sub_agency/')).toHaveLength(4);
   });
 
+  it('returns the budget series from the live payload shape, and none when that request keeps failing (#111)', async () => {
+    const overview = json(200, {
+      toptier_code: '080',
+      name: 'National Aeronautics and Space Administration',
+    });
+    const subAgency = json(200, {
+      toptier_code: '080',
+      fiscal_year: 2026,
+      page_metadata: { page: 1, total: 1, limit: 10, hasNext: false },
+      results: [{ name: 'National Aeronautics and Space Administration', total_obligations: 1 }],
+    });
+    // Rows as `agency/080/budgetary_resources/` answered them on 2026-11-12, trimmed to three years.
+    stubRoutes({
+      'agency/080/': overview,
+      'agency/080/sub_agency/': subAgency,
+      'agency/080/budgetary_resources/': json(200, {
+        toptier_code: '080',
+        agency_data_by_year: [
+          {
+            fiscal_year: 2027,
+            agency_budgetary_resources: null,
+            agency_total_obligated: null,
+            agency_total_outlayed: null,
+            total_budgetary_resources: null,
+            agency_obligation_by_period: [],
+          },
+          {
+            fiscal_year: 2026,
+            agency_budgetary_resources: 44_028_063_933.25,
+            agency_total_obligated: 22_854_576_671.2,
+            agency_total_outlayed: 22_889_244_716.19,
+            total_budgetary_resources: 16_181_198_695_809.91,
+            agency_obligation_by_period: [
+              { period: 10, obligated: 20_568_873_126.37 },
+              { period: 11, obligated: 22_854_576_671.2 },
+            ],
+          },
+          {
+            fiscal_year: 2017,
+            agency_budgetary_resources: 24_058_622_609.29,
+            agency_total_obligated: 22_678_235_157.39,
+            agency_total_outlayed: 21_465_276_363.26,
+            total_budgetary_resources: 7_158_037_155_046.72,
+            agency_obligation_by_period: [
+              { period: 6, obligated: 1 },
+              { period: 9, obligated: 2 },
+              { period: 12, obligated: 3 },
+            ],
+          },
+        ],
+        messages: [],
+      }),
+    });
+
+    const ok = await settle({ toptier_code: '080' });
+
+    expect(ok.isError).toBeFalsy();
+    const series = (ok.structuredContent as Record<string, unknown>).budget_by_fiscal_year as {
+      fiscal_year: number;
+      reported_through_period?: number;
+    }[];
+    expect(series.map((r) => [r.fiscal_year, r.reported_through_period])).toEqual([
+      [2026, 11],
+      [2017, 12],
+    ]);
+
+    const fetchMock = stubRoutes({
+      'agency/080/': overview,
+      'agency/080/sub_agency/': subAgency,
+      'agency/080/budgetary_resources/': () => new Response('', { status: 503 }),
+    });
+
+    const failed = await settle({ toptier_code: '080' });
+
+    expect(failed.isError).toBeFalsy();
+    const sc = failed.structuredContent as Record<string, unknown>;
+    expect(sc.name).toBe('National Aeronautics and Space Administration');
+    expect(sc).not.toHaveProperty('budget_by_fiscal_year');
+    expect(sc.unavailable_sections).toEqual([
+      expect.objectContaining({ section: 'budgetary_resources', reason: 'api_unavailable' }),
+    ]);
+    expect(
+      pathsCalled(fetchMock).filter((p) => p === 'agency/080/budgetary_resources/'),
+    ).toHaveLength(4);
+  });
+
   it('fails on a failed overview without waiting for a hung budget request', async () => {
     const fetchMock = stubRoutes({
       'agency/014/': () => new Response('', { status: 503 }),

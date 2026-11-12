@@ -14,9 +14,16 @@ import type {
   RawDisasterTotals,
 } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { CODE_FILTER_FIELDS, normalizeCodeFilters } from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
+
+/**
+ * The breakdown endpoints' page maximum. The same input pages the geography ranking,
+ * which the upstream returns whole, so one cap serves every dimension.
+ */
+const LIMIT = countLimit({ tool: 'usaspending_disaster_spending', default: 10, cap: 100 });
 
 /**
  * `disaster/recipient/spending/` reports this number as a ceiling, not a count.
@@ -137,15 +144,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .describe(
         'Filters — def_codes is required for all non-overview dimensions (agency, cfda, recipient, geography)',
       ),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe(
-        'Maximum results per page (1–100). Breakdowns rank obligations descending before pagination; geography ranks aggregated_amount. Agency award without award_type_codes collects all provider pages before ranking, so a smaller limit does not reduce that upstream work. Ignored for overview.',
-      ),
+    limit: LIMIT.schema.describe(
+      'Results per page. Default 10, at most 100 per call. Breakdowns rank obligations descending before pagination; geography ranks aggregated_amount. Agency award without award_type_codes collects all provider pages before ranking, so a smaller limit does not reduce that upstream work. Ignored for overview.',
+    ),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -179,11 +180,12 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       .describe(
         'geography: the lowest aggregated_amount on this page within amount_coverage — no area on a later page has a higher reported value.',
       ),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Upstream messages, ignored filters, empty-page recovery, and guidance for recipient ceilings or remaining geography areas.',
+        'Upstream messages, ignored filters, a reduced limit, empty-page recovery, and guidance for recipient ceilings or remaining geography areas.',
       ),
   },
 
@@ -317,6 +319,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   }),
 
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -432,11 +435,15 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       };
     }
 
+    // Overview, returned above, ignores limit, so only paged dimensions clamp it.
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
+    if (limit.notice) notices.push(limit.notice);
+
     // Disaster breakdown endpoints require pagination nested under a `pagination` key;
     // top-level limit/page are silently ignored (upstream always returns its default page).
     const paginationBody: DisasterBreakdownRequest = {
       ...baseBody,
-      pagination: { page: input.page, limit: input.limit, sort: 'obligation', order: 'desc' },
+      pagination: { page: input.page, limit: limit.applied, sort: 'obligation', order: 'desc' },
     };
 
     const coverageForBreakdown = async () => {
@@ -514,9 +521,9 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
           (a.shape_code ?? '').localeCompare(b.shape_code ?? ''),
       );
       const total = areas.length;
-      const start = (input.page - 1) * input.limit;
-      const pageAreas = areas.slice(start, start + input.limit);
-      const hasNext = input.page * input.limit < total;
+      const start = (input.page - 1) * limit.applied;
+      const pageAreas = areas.slice(start, start + limit.applied);
+      const hasNext = input.page * limit.applied < total;
 
       ctx.enrich.total(total);
       ctx.enrich({
@@ -527,24 +534,24 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       if (hasNext) {
         const ceiling = pageAreas.at(-1)?.aggregated_amount;
         notices.push(
-          `${(total - input.page * input.limit).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)} in the reported amount scope` : ''}. Request page ${input.page + 1} to continue${input.limit < 100 ? ', or raise limit (max 100)' : ''}.`,
+          `${(total - input.page * limit.applied).toLocaleString()} more of ${total.toLocaleString()} areas rank below this page${ceiling !== undefined ? `, none above ${formatCurrency(ceiling)} in the reported amount scope` : ''}. Request page ${input.page + 1} to continue${limit.applied < LIMIT.cap ? `, or raise limit (max ${LIMIT.cap})` : ''}.`,
         );
         ctx.enrich.truncated({
           shown: pageAreas.length,
-          cap: input.limit,
+          cap: limit.applied,
           ...(ceiling !== undefined ? { ceiling } : {}),
           guidance: notices.join(' '),
         });
       }
       if (pageAreas.length === 0)
-        notices.push(emptyPageNotice(input.page, input.limit, total, ZERO_TOTAL_NOTICE));
+        notices.push(emptyPageNotice(input.page, limit.applied, total, ZERO_TOTAL_NOTICE));
       if (notices.length) ctx.enrich.notice(notices.join(' '));
       return {
         dimension: 'geography',
         amount_coverage: coverage,
         spending_type: geoSpendingType,
         results: pageAreas,
-        page_metadata: { has_next: hasNext, page: input.page, total, limit: input.limit },
+        page_metadata: { has_next: hasNext, page: input.page, total, limit: limit.applied },
       };
     }
 
@@ -595,7 +602,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     }
     notices.push(...(rawResults.messages ?? []));
     if (results.length === 0)
-      notices.push(emptyPageNotice(currentPage, input.limit, pageMeta.total, ZERO_TOTAL_NOTICE));
+      notices.push(emptyPageNotice(currentPage, limit.applied, pageMeta.total, ZERO_TOTAL_NOTICE));
     if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
@@ -608,7 +615,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
         has_next: hasNext,
         page: currentPage,
         ...(typeof pageMeta.total === 'number' ? { total: pageMeta.total } : {}),
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

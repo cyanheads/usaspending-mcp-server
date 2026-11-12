@@ -1,8 +1,9 @@
 /**
- * @fileoverview The seven nested input objects across the five filter-taking
- * tools — `usaspending_search_awards` `filters` / `time_period` /
- * `location_filter`, the `filters` of the three `usaspending_spending_*`
- * analytics tools, and `usaspending_disaster_spending` `filters`. Each case runs
+ * @fileoverview The nested input objects across the five filter-taking tools —
+ * `usaspending_search_awards` `filters` / `time_period` / `location_filter`,
+ * the `filters` of the three `usaspending_spending_*` analytics tools, the two
+ * location objects inside each `filters` (award search included), and
+ * `usaspending_disaster_spending` `filters`. Each case runs
  * through the tool's public contract (argument validation, handler, output
  * schema, `format()`, enrichment) with the service stubbed, so the request the
  * tool builds can be read back and a rejected call can be shown to send nothing.
@@ -19,6 +20,7 @@ import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-ov
 
 const svc = vi.hoisted(() => ({
   searchAwards: vi.fn(),
+  countAwards: vi.fn(),
   spendingByCategory: vi.fn(),
   spendingByGeography: vi.fn(),
   spendingOverTime: vi.fn(),
@@ -42,6 +44,8 @@ const BLANK_ANALYTICS_FILTERS = {
   assistance_listings: [],
   psc_codes: [],
   def_codes: [],
+  place_of_performance_location: { country: '', state: '', county: '', city: '' },
+  recipient_location: { country: '', state: '', county: '', city: '' },
   time_period_start: '',
   time_period_end: '',
 };
@@ -86,6 +90,14 @@ beforeEach(() => {
   svc.searchAwards.mockResolvedValue({
     results: [{ 'Award ID': 'A1', generated_internal_id: 'CONT_AWD_A1' }],
     page_metadata: { hasNext: false, page: 1 },
+  });
+  svc.countAwards.mockResolvedValue({
+    contracts: 1,
+    idvs: 1,
+    grants: 1,
+    direct_payments: 1,
+    loans: 1,
+    other: 1,
   });
   svc.spendingByCategory.mockResolvedValue({
     results: [{ id: 1, code: '237310', name: 'Bridges', amount: 10 }],
@@ -152,6 +164,8 @@ describe('Nested objects made only of declared keys keep working', () => {
         assistance_listings: [],
         psc_codes: [],
         def_codes: [],
+        place_of_performance_location: { country: '', state: '', county: '', city: '' },
+        recipient_location: { country: '', state: '', county: '', city: '' },
         time_period_start: '',
         time_period_end: '',
       },
@@ -279,6 +293,14 @@ const UNDECLARED = [
     accepted: 'county',
   },
   {
+    label: 'search_awards filters.place_of_performance_location.zip',
+    run: () =>
+      searchRun({ filters: { place_of_performance_location: { state: 'WA', zip: '98101' } } }),
+    path: 'filters.place_of_performance_location.zip',
+    object: 'filters.place_of_performance_location',
+    accepted: 'county',
+  },
+  {
     label: 'search_awards time_period.fiscal_year beside valid dates',
     run: () =>
       searchRun({
@@ -302,6 +324,13 @@ const UNDECLARED = [
       path: 'filters.recipient_name',
       object: 'filters',
       accepted: 'recipient_id',
+    },
+    {
+      label: `${tool.name} filters.recipient_location.zip`,
+      run: () => tool.run({ filters: { recipient_location: { state: 'WA', zip: '98101' } } }),
+      path: 'filters.recipient_location.zip',
+      object: 'filters.recipient_location',
+      accepted: 'county',
     },
   ]),
   {

@@ -8,9 +8,17 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { accountFiscalYearRange, accountFiscalYearSchema } from './fiscal-year.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
+
+/** The page maximum of both breakdown routes. */
+const LIMIT = countLimit({
+  tool: 'usaspending_get_federal_account_breakdown',
+  default: 10,
+  cap: 100,
+});
 
 export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_account_breakdown', {
   title: 'Get Federal Account Breakdown',
@@ -31,13 +39,7 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       .describe(
         'Breakdown axis: program_activity (obligations by the program the funds support) or object_class (obligations by the category of goods/services purchased)',
       ),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum results per page (1–100)'),
+    limit: LIMIT.schema.describe('Breakdown rows per page. Default 10, at most 100 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -106,15 +108,17 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       .describe('Total number of breakdown rows across all pages (when available)'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of breakdown rows'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery for an empty page, distinguished from a known zero total; absent when results are present.',
+        'A reduced limit, and recovery for an empty page, distinguished from a known zero total; absent when neither applies.',
       ),
   },
 
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -143,12 +147,13 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       dimension: input.dimension,
       page: input.page,
     });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
 
     const fiscalYear = typeof input.fiscal_year === 'number' ? input.fiscal_year : undefined;
     const timePeriod = fiscalYear !== undefined ? accountFiscalYearRange(fiscalYear) : undefined;
     const body = {
-      limit: input.limit,
+      limit: limit.applied,
       page: input.page,
       ...(timePeriod ? { filters: { time_period: [timePeriod] } } : {}),
     };
@@ -183,16 +188,18 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
       has_next_page: hasNext,
     });
 
+    const notices = limit.notice ? [limit.notice] : [];
     if (results.length === 0) {
-      ctx.enrich.notice(
+      notices.push(
         emptyPageNotice(
           currentPage,
-          input.limit,
+          limit.applied,
           total,
           `No ${input.dimension} obligations found for federal account "${input.account_code}". Verify the code with usaspending_search_federal_accounts and pass its account_number value — a nonexistent account code returns this same empty result. Try dimension="${input.dimension === 'program_activity' ? 'object_class' : 'program_activity'}" for the other breakdown axis.`,
         ),
       );
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       ...(fiscalYear !== undefined ? { fiscal_year: fiscalYear } : {}),
@@ -206,7 +213,7 @@ export const getFederalAccountBreakdownTool = tool('usaspending_get_federal_acco
         page: currentPage,
         has_next: hasNext,
         has_previous: hasPrevious,
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

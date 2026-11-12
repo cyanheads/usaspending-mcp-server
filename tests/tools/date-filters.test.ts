@@ -17,6 +17,7 @@ import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-ov
 
 const svc = vi.hoisted(() => ({
   searchAwards: vi.fn(),
+  countAwards: vi.fn(),
   spendingByCategory: vi.fn(),
   spendingByGeography: vi.fn(),
   spendingOverTime: vi.fn(),
@@ -77,6 +78,14 @@ beforeEach(() => {
   svc.searchAwards.mockResolvedValue({
     results: [{ 'Award ID': 'A1', generated_internal_id: 'CONT_AWD_A1' }],
     page_metadata: { hasNext: false, page: 1 },
+  });
+  svc.countAwards.mockResolvedValue({
+    contracts: 1,
+    idvs: 0,
+    grants: 0,
+    direct_payments: 0,
+    loans: 0,
+    other: 0,
   });
   svc.spendingByCategory.mockResolvedValue({
     results: [{ id: 1, code: '237310', name: 'Bridges', amount: 10 }],
@@ -372,13 +381,21 @@ describe('usaspending_search_awards — date specifics (#58, #62)', () => {
 
   it('keeps the empty-result notice alongside the filled-bound notice', async () => {
     svc.searchAwards.mockResolvedValueOnce({ results: [], page_metadata: { hasNext: false } });
+    svc.countAwards.mockResolvedValueOnce({
+      contracts: 0,
+      idvs: 0,
+      grants: 0,
+      direct_payments: 0,
+      loans: 0,
+      other: 0,
+    });
     const result = await runToolContract(searchAwardsTool, {
       keyword: 'nothing-matches-this',
       filters: { time_period_start: '2024-01-01' },
     });
 
     const notice = (result.structuredContent as { notice?: string }).notice;
-    expect(notice).toContain('Page 1 returned no awards');
+    expect(notice).toContain('No awards match keyword="nothing-matches-this"');
     expect(notice).toContain('filters.time_period_end');
   });
 });

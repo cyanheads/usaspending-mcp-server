@@ -33,6 +33,14 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
       results: [],
       page_metadata: { hasNext: false, page: 1, total: 0, limit: 10 },
     }),
+    countAwards: vi.fn().mockResolvedValue({
+      contracts: 0,
+      idvs: 0,
+      grants: 0,
+      direct_payments: 0,
+      loans: 0,
+      other: 0,
+    }),
     getAward: vi.fn().mockResolvedValue({ generated_unique_award_id: 'TEST', type: 'D' }),
     getAwardSubawards: vi.fn().mockResolvedValue({
       results: [],
@@ -211,8 +219,8 @@ describe('searchAwardsTool — input validation', () => {
     expect(() => searchAwardsTool.input.parse({ limit: 0 })).toThrow();
   });
 
-  it('rejects limit=101 (above max)', () => {
-    expect(() => searchAwardsTool.input.parse({ limit: 101 })).toThrow();
+  it('accepts limit=101 for the handler to clamp (USASPENDING_CLAMP_LIMITS default, #99)', () => {
+    expect(searchAwardsTool.input.parse({ limit: 101 }).limit).toBe(101);
   });
 
   it('rejects page=0 (below min)', () => {
@@ -354,10 +362,16 @@ describe('autocompleteFiltersTool — input validation', () => {
     ).toThrow();
   });
 
-  it('rejects limit=501 (above max)', () => {
+  it('rejects a non-integer limit', () => {
     expect(() =>
-      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 501 }),
+      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 1.5 }),
     ).toThrow();
+  });
+
+  it('accepts limit=501 for the handler to clamp (USASPENDING_CLAMP_LIMITS default, #99)', () => {
+    expect(
+      autocompleteFiltersTool.input.parse({ type: 'naics', search_text: 'test', limit: 501 }).limit,
+    ).toBe(501);
   });
 
   it('accepts limit at boundaries 1 and 500', () => {
@@ -410,8 +424,12 @@ describe('getAwardSubawardsTool — input validation', () => {
     expect(() => getAwardSubawardsTool.input.parse({ award_id: 'TEST', limit: 0 })).toThrow();
   });
 
-  it('rejects limit=101', () => {
-    expect(() => getAwardSubawardsTool.input.parse({ award_id: 'TEST', limit: 101 })).toThrow();
+  it('rejects a non-integer limit', () => {
+    expect(() => getAwardSubawardsTool.input.parse({ award_id: 'TEST', limit: 1.5 })).toThrow();
+  });
+
+  it('accepts limit=101 for the handler to clamp (USASPENDING_CLAMP_LIMITS default, #99)', () => {
+    expect(getAwardSubawardsTool.input.parse({ award_id: 'TEST', limit: 101 }).limit).toBe(101);
   });
 
   it('rejects page=0', () => {
@@ -458,8 +476,8 @@ describe('spendingByCategoryTool — input validation', () => {
     expect(() => spendingByCategoryTool.input.parse({ category: 'naics', limit: 0 })).toThrow();
   });
 
-  it('rejects limit=101', () => {
-    expect(() => spendingByCategoryTool.input.parse({ category: 'naics', limit: 101 })).toThrow();
+  it('accepts limit=101 for the handler to clamp (USASPENDING_CLAMP_LIMITS default, #99)', () => {
+    expect(spendingByCategoryTool.input.parse({ category: 'naics', limit: 101 }).limit).toBe(101);
   });
 });
 
@@ -883,7 +901,14 @@ describe('spendingByCategoryTool — all valid category values', () => {
 
 describe('autocompleteFiltersTool — all valid type values', () => {
   it('accepts all valid type enum values', () => {
-    const validTypes = ['naics', 'psc', 'cfda', 'awarding_agency', 'recipient'] as const;
+    const validTypes = [
+      'naics',
+      'psc',
+      'cfda',
+      'awarding_agency',
+      'recipient',
+      'location',
+    ] as const;
     for (const type of validTypes) {
       expect(() =>
         autocompleteFiltersTool.input.parse({ type, search_text: 'test' }),
@@ -1047,7 +1072,7 @@ describe('Security — undeclared argument keys are rejected, not stripped', () 
     return found;
   };
 
-  it('finds the seven nested input objects the filter-taking tools declare (#74)', () => {
+  it('finds every nested input object the filter-taking tools declare (#74)', () => {
     const paths = allToolDefinitions.flatMap((definition) =>
       nestedObjects(z.toJSONSchema(definition.input, { io: 'input' }), '').map(
         ([path]) => `${definition.name} ${path}`,
@@ -1056,11 +1081,19 @@ describe('Security — undeclared argument keys are rejected, not stripped', () 
     expect(paths.sort()).toEqual([
       'usaspending_disaster_spending filters',
       'usaspending_search_awards filters',
+      'usaspending_search_awards filters.place_of_performance_location',
+      'usaspending_search_awards filters.recipient_location',
       'usaspending_search_awards location_filter',
       'usaspending_search_awards time_period',
       'usaspending_spending_by_category filters',
+      'usaspending_spending_by_category filters.place_of_performance_location',
+      'usaspending_spending_by_category filters.recipient_location',
       'usaspending_spending_by_geography filters',
+      'usaspending_spending_by_geography filters.place_of_performance_location',
+      'usaspending_spending_by_geography filters.recipient_location',
       'usaspending_spending_over_time filters',
+      'usaspending_spending_over_time filters.place_of_performance_location',
+      'usaspending_spending_over_time filters.recipient_location',
     ]);
   });
 

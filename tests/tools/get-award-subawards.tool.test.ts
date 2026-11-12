@@ -3,15 +3,109 @@
  * @module tests/tools/get-award-subawards.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAwardSubawardsTool } from '@/mcp-server/tools/definitions/get-award-subawards.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockGetAwardSubawards = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ getAwardSubawards: mockGetAwardSubawards }),
 }));
+
+/**
+ * Wiring of the shared count-limit mechanism, whose full table lives in
+ * tests/tools/count-limit.test.ts.
+ */
+describe('limit above the 100 cap (#99)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mockGetAwardSubawards.mockReset();
+  });
+
+  const text = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+
+  it('reads limit 101 as 100: the request, page_metadata.limit, limitClamp, and the notice on both surfaces', async () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({ id: i + 1, amount: 1 }));
+    mockGetAwardSubawards.mockResolvedValueOnce({
+      results: rows,
+      page_metadata: { hasNext: true, page: 2 },
+    });
+
+    const result = await runToolContract(getAwardSubawardsTool, {
+      award_id: 'CONT_AWD_PRIME',
+      limit: 101,
+      page: 2,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockGetAwardSubawards.mock.calls[0]?.[0]).toMatchObject({ limit: 100, page: 2 });
+    expect(result.structuredContent).toMatchObject({
+      page_metadata: { limit: 100, page: 2, has_next: true },
+      limitClamp: { field: 'limit', requested: 101, applied: 100 },
+      notice: 'limit 101 exceeds the per-call maximum of 100; this call used limit 100.',
+    });
+    const raw = result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+    expect(raw).toContain('**Per page:** 100');
+    expect(raw).toContain('**Limit clamp:** `limit` requested 101, applied 100');
+    expect(text(result)).toContain(
+      'limit 101 exceeds the per-call maximum of 100; this call used limit 100.',
+    );
+  });
+
+  it('keeps the clamp sentence beside the empty-page notice', async () => {
+    mockGetAwardSubawards.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1 },
+    });
+
+    const result = await runToolContract(getAwardSubawardsTool, {
+      award_id: 'CONT_AWD_NO_SUBS',
+      limit: 500,
+    });
+
+    const notice = (result.structuredContent as { notice?: string }).notice;
+    expect(notice).toContain('limit 500 exceeds the per-call maximum of 100');
+    expect(notice).toContain('subaward_count');
+  });
+
+  it('reports no clamp at the cap', async () => {
+    mockGetAwardSubawards.mockResolvedValueOnce({
+      results: [{ id: 1 }],
+      page_metadata: { hasNext: false, page: 1 },
+    });
+
+    const result = await runToolContract(getAwardSubawardsTool, { award_id: 'X', limit: 100 });
+
+    expect(result.structuredContent).not.toHaveProperty('limitClamp');
+    expect(result.structuredContent).not.toHaveProperty('notice');
+  });
+
+  it('advertises no maximum by default, and maximum 100 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(getAwardSubawardsTool.input, 'limit')).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+      description: 'Subawards per page. Default 10, at most 100 per call.',
+    });
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/get-award-subawards.tool.js'))
+          .getAwardSubawardsTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 100 });
+    const rejected = await runToolContract(strict, { award_id: 'X', limit: 101 });
+    expect(rejected.isError).toBe(true);
+    expect(text(rejected)).toContain('Too big: expected number to be <=100');
+    expect(mockGetAwardSubawards).not.toHaveBeenCalled();
+  });
+});
 
 describe('getAwardSubawardsTool', () => {
   it('returns subawards for a valid award ID', async () => {

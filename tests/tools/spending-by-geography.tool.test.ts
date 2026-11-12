@@ -4,8 +4,9 @@
  */
 
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
 
 const mockSpendingByGeography = vi.fn();
 
@@ -566,19 +567,71 @@ describe('spendingByGeographyTool shape_codes (#72)', () => {
   });
 });
 
-describe('spendingByGeographyTool truncation guidance (#72)', () => {
-  it('at limit 500, names shape_codes and does not suggest raising limit', async () => {
-    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
-    const sc = structuredOf(await runGeo({ limit: 500 }));
-    expect(sc.notice).toContain('500 highest-obligation areas of 700');
-    expect(sc.notice).toContain('shape_codes');
-    expect(sc.notice).not.toMatch(/raise limit/i);
+describe('spendingByGeographyTool truncation guidance (#72, #99)', () => {
+  it.each([10, 500])(
+    'at limit %i, offers raising limit to every matched area, and shape_codes',
+    async (limit) => {
+      mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+      const sc = structuredOf(await runGeo({ limit }));
+      expect(sc.notice).toContain(`${limit} highest-obligation areas of 700`);
+      expect(sc.notice).toContain('Raise limit to 700');
+      expect(sc.notice).toContain('shape_codes');
+      expect(sc.notice).not.toContain('max 500');
+    },
+  );
+});
+
+describe('spendingByGeographyTool limit has no maximum (#99)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const expectUncapped = (property: unknown) => {
+    expect(property).toMatchObject({ type: 'integer', minimum: 1, default: 50 });
+    expect(property).not.toHaveProperty('maximum');
+    expect((property as { description: string }).description).not.toMatch(/500/);
+  };
+
+  it('advertises no maximum with the switch on or off', async () => {
+    expectUncapped(advertisedProperty(spendingByGeographyTool.input, 'limit'));
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/spending-by-geography.tool.js'))
+          .spendingByGeographyTool,
+    );
+    expectUncapped(advertisedProperty(strict.input, 'limit'));
   });
 
-  it('below 500, offers both raising limit and shape_codes', async () => {
-    mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
-    const sc = structuredOf(await runGeo({ limit: 10 }));
-    expect(sc.notice).toContain('Raise limit (max 500)');
-    expect(sc.notice).toContain('shape_codes');
+  it.each(['true', 'false'] as const)(
+    'returns 501 areas at limit 501 and reports no clamp (USASPENDING_CLAMP_LIMITS=%s)',
+    async (mode) => {
+      const tool = await loadWithClampLimits(
+        mode,
+        async () =>
+          (await import('@/mcp-server/tools/definitions/spending-by-geography.tool.js'))
+            .spendingByGeographyTool,
+      );
+      mockSpendingByGeography.mockResolvedValueOnce({ results: COUNTY_AGGREGATE });
+      const result = await runToolContract(tool, {
+        scope: 'place_of_performance',
+        geo_layer: 'county',
+        filters: DOI_FY2025,
+        limit: 501,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const sc = structuredOf(result);
+      expect(sc.results).toHaveLength(501);
+      expect(sc.cap).toBe(501);
+      expect(result.structuredContent).not.toHaveProperty('limitClamp');
+      expect(sc.notice).not.toMatch(/per-call maximum/);
+    },
+  );
+
+  it('still rejects zero and non-integer limits', async () => {
+    mockSpendingByGeography.mockClear();
+    for (const limit of [0, -1, 1.5]) {
+      expect((await runGeo({ limit })).isError).toBe(true);
+    }
+    expect(mockSpendingByGeography).not.toHaveBeenCalled();
   });
 });

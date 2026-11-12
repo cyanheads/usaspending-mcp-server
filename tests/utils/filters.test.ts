@@ -3,14 +3,21 @@
  * @module tests/utils/filters.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   analyticsTypeMismatch,
+  applyLocationFilters,
   buildFilters,
   CODE_FILTER_FIELDS,
+  describeLocationFilters,
+  LOCATION_FILTER_FIELDS,
+  locationFilterEcho,
   normalizeCodeFilters,
   normalizeEffectiveFilters,
+  resolveLocationFilters,
 } from '@/mcp-server/tools/definitions/filters.js';
+import { resolveLocation } from '@/mcp-server/tools/definitions/locations.js';
 
 describe('effective filter validation', () => {
   it.each(['P', 'C', 'R'])('preserves recipient level %s', (level) => {
@@ -345,5 +352,154 @@ describe('analyticsTypeMismatch (#77)', () => {
   it('never rejects def_codes, which every award type can carry', () => {
     expect(analyticsTypeMismatch({ def_codes: ['Z'] }, ['A'], FIELD)).toBeUndefined();
     expect(analyticsTypeMismatch({ def_codes: ['Z'] }, ['02'], FIELD)).toBeUndefined();
+  });
+});
+
+/**
+ * One shape per failure branch of `resolveLocation`, with the field each
+ * message must name: the offending field, quoted value included when it has one.
+ */
+const LOCATION_FAILURES = [
+  ['a county under a non-USA country', { country: 'CAN', county: '049' }, 'county "049"'],
+  ['a FIPS-number state under a non-USA country', { country: 'CAN', state: '35' }, 'state "35"'],
+  ['an unknown US state', { state: 'ZZ' }, 'state "ZZ"'],
+  ['a state contradicting a territory code', { country: 'PRI', state: 'NM' }, 'state "NM"'],
+  ['a 5-digit county with an unknown state prefix', { county: '99049' }, 'county "99049"'],
+  [
+    'a 5-digit county with an armed-forces state',
+    { state: 'AE', county: '35049' },
+    'county "35049"',
+  ],
+  ['a 5-digit county contradicting state', { state: 'NM', county: '06037' }, 'county "06037"'],
+  ['a 3-digit county without state', { county: '049' }, 'county "049"'],
+  ['a 3-digit county with an armed-forces state', { state: 'AE', county: '049' }, 'county "049"'],
+] as const;
+
+describe('resolveLocation field path (#109)', () => {
+  it('names location_filter when no field is given, as award search calls it', () => {
+    expect(resolveLocation({ county: '049' })).toEqual({
+      ok: false,
+      message:
+        'location_filter.county "049" needs location_filter.state: a 3-digit county code is unique only within its state. Add state, or send the 5-digit state + county code.',
+    });
+  });
+
+  it.each(LOCATION_FAILURES)(
+    'names the given field for %s, never location_filter',
+    (_label, location, named) => {
+      const result = resolveLocation(location, 'filters.recipient_location');
+
+      expect(result.ok).toBe(false);
+      const { message } = result as { message: string };
+      expect(message).toContain(`filters.recipient_location.${named}`);
+      expect(message).not.toContain('location_filter');
+    },
+  );
+});
+
+describe('location filters (#109)', () => {
+  it('declares both keys as strict location objects with their own descriptions', () => {
+    const schema = z.toJSONSchema(z.object(LOCATION_FILTER_FIELDS), { io: 'input' }) as {
+      properties: Record<
+        string,
+        { additionalProperties?: boolean; description?: string; properties?: object }
+      >;
+      required?: string[];
+    };
+    const pop = schema.properties.place_of_performance_location;
+    const recipient = schema.properties.recipient_location;
+
+    expect(schema.required ?? []).toEqual([]);
+    for (const field of [pop, recipient]) {
+      expect(Object.keys(field?.properties ?? {})).toEqual(['country', 'state', 'county', 'city']);
+      expect(field?.additionalProperties).toBe(false);
+      expect(field?.description).toContain('usaspending_autocomplete_filters type=location');
+    }
+    expect(pop?.description).toContain('applied_location');
+    expect(recipient?.description).toContain('applied_recipient_location');
+    expect(pop?.description).not.toEqual(recipient?.description);
+  });
+
+  it('resolves no key to no location', () => {
+    expect(resolveLocationFilters({})).toEqual({ ok: true, locations: {} });
+  });
+
+  it('normalizes each key as award search normalizes location_filter', () => {
+    expect(
+      resolveLocationFilters({
+        place_of_performance_location: { county: '35049' },
+        recipient_location: { country: 'PRI' },
+      }),
+    ).toEqual({
+      ok: true,
+      locations: {
+        place_of_performance_location: { country: 'USA', state: 'NM', county: '049' },
+        recipient_location: { country: 'USA', state: 'PR' },
+      },
+    });
+    expect(resolveLocationFilters({ recipient_location: { state: '53' } })).toEqual({
+      ok: true,
+      locations: { recipient_location: { country: 'USA', state: 'WA' } },
+    });
+  });
+
+  it('treats an all-blank object as no filter on either key', () => {
+    const blank = { country: '', state: ' ', county: '', city: '' };
+    expect(
+      resolveLocationFilters({
+        place_of_performance_location: blank,
+        recipient_location: blank,
+      }),
+    ).toEqual({ ok: true, locations: {} });
+  });
+
+  it.each([
+    ['place_of_performance_location', 'recipient_location'],
+    ['recipient_location', 'place_of_performance_location'],
+  ] as const)('names filters.%s when that key fails, beside a valid %s', (bad, good) => {
+    const result = resolveLocationFilters({
+      [good]: { state: 'WA' },
+      [bad]: { state: 'NM', county: '06037' },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      message: expect.stringContaining(`filters.${bad}.county "06037"`),
+    });
+    expect((result as { message: string }).message).not.toContain('location_filter');
+    expect((result as { message: string }).message).not.toContain(good);
+  });
+
+  it('writes each location as a one-element upstream list, and nothing when unset', () => {
+    const filters: Record<string, unknown> = { keywords: ['bridge'] };
+    applyLocationFilters(filters, {});
+    expect(filters).toEqual({ keywords: ['bridge'] });
+
+    applyLocationFilters(filters, {
+      place_of_performance_location: { country: 'USA', state: 'NM' },
+      recipient_location: { country: 'USA', state: 'WA', county: '033' },
+    });
+    expect(filters).toEqual({
+      keywords: ['bridge'],
+      place_of_performance_locations: [{ country: 'USA', state: 'NM' }],
+      recipient_locations: [{ country: 'USA', state: 'WA', county: '033' }],
+    });
+  });
+
+  it('echoes and describes each location sent, and nothing when unset', () => {
+    const locations = {
+      place_of_performance_location: { country: 'USA', state: 'NM', county: '049' },
+      recipient_location: { country: 'CAN', state: 'ON', city: 'Ottawa' },
+    };
+    expect(locationFilterEcho(locations)).toEqual({
+      applied_location: 'country=USA, state=NM, county=049',
+      applied_recipient_location: 'country=CAN, state=ON, city=Ottawa',
+    });
+    expect(describeLocationFilters(locations)).toEqual([
+      'place_of_performance_location="country=USA, state=NM, county=049"',
+      'recipient_location="country=CAN, state=ON, city=Ottawa"',
+    ]);
+    expect(locationFilterEcho({})).toEqual({});
+    expect(describeLocationFilters({})).toEqual([]);
   });
 });

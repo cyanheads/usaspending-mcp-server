@@ -38,10 +38,10 @@ await createApp({
   sessionMode: 'stateless',
   instructions:
     'USAspending.gov MCP server — federal award, recipient, agency, and spending data from the US Treasury DATA Act platform.\n' +
-    '- Start with usaspending_list_agencies or usaspending_autocomplete_filters to discover agency codes, NAICS/PSC codes, and Assistance Listing numbers\n' +
+    '- Start with usaspending_list_agencies or usaspending_autocomplete_filters to discover agency codes, NAICS/PSC codes, Assistance Listing numbers, and state, county, and district location codes\n' +
     '- Use usaspending_search_awards to find awards, then usaspending_get_award for full details\n' +
     '- Reuse NAICS, PSC, Assistance Listing, and DEF codes as filters on usaspending_search_awards and the usaspending_spending_* tools to see where and when that money went\n' +
-    '- Chain recipient_id from usaspending_get_award into usaspending_get_recipient for entity profiles\n' +
+    '- Chain recipient_id from usaspending_search_awards rows or usaspending_get_award into usaspending_get_recipient for entity profiles\n' +
     '- Search window: 2007-10-01 onward. DoD contracts have a 90-day publication lag.',
   setup(core) {
     const serverConfig = getServerConfig();

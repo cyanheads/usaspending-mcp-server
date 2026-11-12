@@ -38,6 +38,7 @@ import type {
   RawFederalAccountSearchResponse,
   RawGeographyResult,
   RawIdvAwardsResponse,
+  RawLocationAutocompleteResponse,
   RawNaicsAutocomplete,
   RawPageMetadata,
   RawPscAutocomplete,
@@ -50,6 +51,7 @@ import type {
   RawSubaward,
   RawTransaction,
 } from './types.js';
+import { LOCATION_AUTOCOMPLETE_LIMIT_MAX } from './types.js';
 
 /**
  * Upstream statuses that mean "no such entity" on the single-entity detail
@@ -82,6 +84,25 @@ const RETRY_BASE_DELAY_MS = 1000;
  */
 const DEFAULT_REQUEST_BUDGET_MS = 45_000;
 
+/**
+ * How long the recipient children side read waits. `recipient/children/` answered
+ * in 0.21–1.27 s across 16 cold parents (the largest 217 children) and 0.22–0.27 s
+ * warm, so 5 s is about four times its slowest measured answer.
+ */
+const RECIPIENT_CHILDREN_WAIT_MS = 5_000;
+
+/** One `recipient/children/` row; `state_province` is absent when upstream has no location for the child. */
+const RecipientChildSchema = z.object({
+  amount: z.number().nullish(),
+  duns: z.string().nullish(),
+  name: z.string().nullish(),
+  recipient_id: z.string().nullish(),
+  state_province: z.string().nullish(),
+  uei: z.string().nullish(),
+});
+const RecipientChildrenSchema = z.array(RecipientChildSchema);
+type RecipientChild = z.infer<typeof RecipientChildSchema>;
+
 /** `fetchWithTimeout`'s own per-attempt timeout firing, header or body phase. */
 function isAttemptTimeout(err: unknown): boolean {
   return (
@@ -107,7 +128,10 @@ function isBudgetExpiry(err: unknown): boolean {
  */
 const ERROR_BODY_READ_BYTES = 4_096;
 
-/** Bytes of that body kept on `data.body`, matching the framework's default capture. */
+/**
+ * Bytes of that body kept on `data.body` for the failure log, matching the
+ * framework's default capture. The body never reaches a client envelope.
+ */
 const ERROR_BODY_KEEP_BYTES = 500;
 
 /** Share of {@link ERROR_BODY_KEEP_BYTES} kept from the head of an over-budget body, as the framework does. */
@@ -142,7 +166,8 @@ function boundBody(text: string): string {
 /**
  * The explanation USAspending puts in a 4xx JSON body: its `detail` string, or
  * a `message` string when there is no detail — the mixed-award-type 422 carries
- * only `message`, beside an `award_type_groups` map that stays in `data.body`.
+ * only `message`, beside an `award_type_groups` map that stays in the
+ * server-side `data.body`.
  */
 function extractDetail(body: unknown): string | undefined {
   if (typeof body !== 'string') return;
@@ -170,8 +195,14 @@ function extractDetail(body: unknown): string | undefined {
  *   field are kept.
  *
  * Status-mapped errors had their body read at {@link ERROR_BODY_READ_BYTES};
- * the rebuilt `data.body` is bounded back to the usual capture so error
- * payloads do not grow. Anything else (a non-`McpError`) passes through.
+ * the rebuilt `data.body` is bounded back to the usual capture so the failure
+ * log does not grow. The upstream body stays on the server: spreading
+ * `err.data` carries the framework's server-only marker for `body` and
+ * `responseBody`, so the bounded copies are logged and left out of every
+ * client envelope. A proxy's HTML error page never reaches a client, and the
+ * 4xx detail travels in the message instead. Rebuilding `data` any other way
+ * (a fresh literal, `Object.entries`) drops the marker and sends the body.
+ * Anything else (a non-`McpError`) passes through.
  */
 function classifyUpstreamError(err: unknown, operation: string): unknown {
   if (!(err instanceof McpError)) return err;
@@ -201,6 +232,25 @@ function classifyUpstreamError(err: unknown, operation: string): unknown {
   }
   return data === err.data ? err : rebuild(err.message, data);
 }
+
+/**
+ * `search/spending_by_award_count/` for prime awards: the matches in each
+ * award-type group, the same partition `search/spending_by_award/` accepts one
+ * group at a time.
+ */
+const AwardCountResponseSchema = z.object({
+  results: z.object({
+    contracts: z.number().int().nonnegative(),
+    direct_payments: z.number().int().nonnegative(),
+    grants: z.number().int().nonnegative(),
+    idvs: z.number().int().nonnegative(),
+    loans: z.number().int().nonnegative(),
+    other: z.number().int().nonnegative(),
+  }),
+});
+
+/** Award matches per award-type group, as {@link USASpendingService.countAwards} returns them. */
+export type AwardCounts = z.infer<typeof AwardCountResponseSchema>['results'];
 
 export class USASpendingService {
   private readonly baseUrl: string;
@@ -259,6 +309,9 @@ export class USASpendingService {
    * `Timeout` or `ServiceUnavailable` reaches the caller as the calling tool's
    * declared `api_timeout` / `api_unavailable`, and a 4xx carries upstream's
    * `detail` (or `message`) in its message.
+   *
+   * `maxRetries` overrides `withRetry`'s default of three retries; a side read
+   * beside a call's main request passes 0, so a failure ends it at once.
    */
   private async request<T>(
     operation: string,
@@ -266,6 +319,7 @@ export class USASpendingService {
     ctx: Context,
     init: FetchWithTimeoutOptions,
     deadlineAt?: number,
+    maxRetries?: number,
   ): Promise<T> {
     const budgetMs = Math.min(
       this.retryBudgetMs,
@@ -273,7 +327,7 @@ export class USASpendingService {
     );
     ctx.signal?.throwIfAborted();
     if (budgetMs <= 0)
-      throw timeout('USAspending disaster call deadline elapsed.', {
+      throw timeout(`The call deadline elapsed before USAspending was asked for ${operation}.`, {
         ...upstreamFailure('api_timeout'),
         operation,
         budgetMs: 0,
@@ -297,6 +351,7 @@ export class USASpendingService {
           baseDelayMs: RETRY_BASE_DELAY_MS,
           signal: ctx.signal,
           deadlineMs: budgetMs,
+          ...(maxRetries !== undefined ? { maxRetries } : {}),
           isTransient: (err) => !isAttemptTimeout(err) && defaultIsTransient(err),
         },
       );
@@ -307,7 +362,9 @@ export class USASpendingService {
       if (budgetSpent || attemptTimedOut) {
         throw timeout(
           budgetSpent
-            ? `USAspending did not answer ${operation} within the ${budgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`
+            ? maxRetries === 0
+              ? `USAspending did not answer ${operation} within its ${budgetMs}ms deadline (one attempt, not retried).`
+              : `USAspending did not answer ${operation} within the ${budgetMs}ms request budget (${this.timeoutMs}ms per attempt, retries included).`
             : `USAspending did not answer ${operation} within the ${this.timeoutMs}ms per-attempt timeout; a timed-out attempt is not retried.`,
           {
             url,
@@ -329,6 +386,7 @@ export class USASpendingService {
     ctx: Context,
     expectedStatuses?: number[],
     deadlineAt?: number,
+    maxRetries?: number,
   ): Promise<T> {
     return this.request<T>(
       `GET ${path}`,
@@ -339,10 +397,17 @@ export class USASpendingService {
         ...(expectedStatuses ? { expectedStatuses } : {}),
       },
       deadlineAt,
+      maxRetries,
     );
   }
 
-  private post<T>(path: string, body: unknown, ctx: Context, deadlineAt?: number): Promise<T> {
+  private post<T>(
+    path: string,
+    body: unknown,
+    ctx: Context,
+    deadlineAt?: number,
+    maxRetries?: number,
+  ): Promise<T> {
     return this.request<T>(
       `POST ${path}`,
       `${this.baseUrl}${path}`,
@@ -356,6 +421,7 @@ export class USASpendingService {
         body: JSON.stringify(body),
       },
       deadlineAt,
+      maxRetries,
     );
   }
 
@@ -432,6 +498,32 @@ export class USASpendingService {
   }> {
     ctx.log.debug('searchAwards', { sort: params.sort, limit: params.limit, page: params.page });
     return this.post('search/spending_by_award/', params, ctx);
+  }
+
+  /**
+   * Counts the awards matching `filters` in each award-type group. A side read
+   * beside a search: one attempt, never retried, aborted at `deadlineAt` (epoch
+   * ms). Upstream builds the count from the same filter query as the search, so
+   * the search's own `filters` give its total.
+   * @throws {McpError} The classified upstream failure; `api_unavailable` when the
+   * body lacks a non-negative integer count for every group.
+   */
+  async countAwards(
+    filters: Record<string, unknown>,
+    ctx: Context,
+    deadlineAt: number,
+  ): Promise<AwardCounts> {
+    ctx.log.debug('countAwards');
+    const path = 'search/spending_by_award_count/';
+    const raw = await this.post<unknown>(path, { filters }, ctx, deadlineAt, 0);
+    const parsed = AwardCountResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw serviceUnavailable('USAspending returned an award count without a count per group.', {
+        operation: `POST ${path}`,
+        ...upstreamFailure('api_unavailable'),
+      });
+    }
+    return parsed.data.results;
   }
 
   // --- Award detail ---
@@ -521,6 +613,50 @@ export class USASpendingService {
       `recipient/${encodeURIComponent(recipientId)}/${query}`,
       ctx,
     );
+  }
+
+  /**
+   * The deadline of a request issued now: its full request budget. A tool that
+   * chains a side read after such a request passes this, so the chain ends inside
+   * the first request's deadline.
+   */
+  requestDeadline(): number {
+    return Date.now() + this.retryBudgetMs;
+  }
+
+  /**
+   * Child recipients of a parent, keyed by the parent's UEI or DUNS (not its hash):
+   * `recipient/children/{uei_or_duns}/`, every child in one response. `fiscal_year`
+   * scopes the amounts as {@link getRecipient} scopes the profile's. A best-effort
+   * side read: one attempt, cut at {@link RECIPIENT_CHILDREN_WAIT_MS} or
+   * `deadlineAt`, whichever comes first.
+   * @throws {McpError} The classified upstream failure; `ServiceUnavailable` (not
+   * retryable) when the body is not a list of child rows.
+   */
+  async getRecipientChildren(
+    ueiOrDuns: string,
+    params: { fiscal_year?: number },
+    ctx: Context,
+    deadlineAt: number,
+  ): Promise<RecipientChild[]> {
+    ctx.log.debug('getRecipientChildren', { ueiOrDuns, fiscalYear: params.fiscal_year });
+    const query = params.fiscal_year !== undefined ? `?year=${params.fiscal_year}` : '';
+    const path = `recipient/children/${encodeURIComponent(ueiOrDuns)}/${query}`;
+    const raw = await this.get<unknown>(
+      path,
+      ctx,
+      undefined,
+      Math.min(deadlineAt, Date.now() + RECIPIENT_CHILDREN_WAIT_MS),
+      0,
+    );
+    const parsed = RecipientChildrenSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw serviceUnavailable('USAspending returned recipient children in an unexpected shape.', {
+        ...upstreamFailure('api_unavailable', false),
+        operation: `GET ${path}`,
+      });
+    }
+    return parsed.data;
   }
 
   // --- Agencies ---
@@ -915,6 +1051,23 @@ export class USASpendingService {
   ): Promise<{ results: RawRecipientAutocomplete[] }> {
     ctx.log.debug('autocompleteRecipient', { searchText });
     return this.post('autocomplete/recipient/', { search_text: searchText, limit }, ctx);
+  }
+
+  /**
+   * Location names matching `searchText`, up to `limit` per bucket. Sends at most
+   * {@link LOCATION_AUTOCOMPLETE_LIMIT_MAX}, the largest limit the route answers.
+   */
+  autocompleteLocation(
+    searchText: string,
+    limit: number,
+    ctx: Context,
+  ): Promise<RawLocationAutocompleteResponse> {
+    ctx.log.debug('autocompleteLocation', { searchText });
+    return this.post(
+      'autocomplete/location/',
+      { search_text: searchText, limit: Math.min(limit, LOCATION_AUTOCOMPLETE_LIMIT_MAX) },
+      ctx,
+    );
   }
 }
 

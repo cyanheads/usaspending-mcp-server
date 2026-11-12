@@ -4,8 +4,9 @@
  */
 
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
 
 const mockGetDisasterOverview = vi.fn();
 const mockGetDisasterByAgency = vi.fn();
@@ -851,6 +852,208 @@ describe('disasterSpendingTool geography paging (#73)', () => {
     const limitDescription = disasterSpendingTool.input.shape.limit.description ?? '';
     expect(limitDescription).toContain('geography');
     expect(limitDescription).not.toMatch(/ignored for[^.]*geography/);
+  });
+});
+
+/**
+ * Wiring of the shared count-limit mechanism (full table in
+ * tests/tools/count-limit.test.ts). One input feeds the paginated breakdowns and the
+ * locally sliced geography ranking, so the cap is 100 on every dimension.
+ */
+describe('disasterSpendingTool limit above the 100 cap (#99)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    // Drop any queued response a rejected call left unconsumed.
+    for (const mock of [
+      mockGetDisasterOverview,
+      mockGetDisasterByCfda,
+      mockGetDisasterByRecipient,
+      mockGetDisasterByGeography,
+    ])
+      mock.mockReset();
+  });
+
+  const CLAMP = 'limit 101 exceeds the per-call maximum of 100; this call used limit 100.';
+  const raw = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+  const sc = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.structuredContent as Record<string, unknown> & {
+      results: { shape_code?: string }[];
+      notice?: string;
+    };
+  /** 150 ranked areas, amounts descending: A000 (150) … A149 (1). */
+  const serveAreas = () =>
+    mockGetDisasterByGeography.mockResolvedValueOnce({
+      results: Array.from({ length: 150 }, (_, i) => ({
+        shape_code: `A${String(i).padStart(3, '0')}`,
+        display_name: `Area ${i}`,
+        amount: 150 - i,
+      })),
+    });
+
+  it('reads limit 101 as 100 on a breakdown: pagination.limit, page_metadata.limit, limitClamp, and the notice on both surfaces', async () => {
+    mockGetDisasterByCfda.mockResolvedValueOnce({
+      results: [{ code: '93.498', description: 'Provider Relief', obligation: 1, outlay: 1 }],
+      page_metadata: { hasNext: true, page: 2, total: 387 },
+    });
+
+    const result = await runToolContract(disasterSpendingTool, {
+      dimension: 'cfda',
+      filters: { def_codes: ['L'] },
+      limit: 101,
+      page: 2,
+    });
+
+    expect(result.isError).toBeFalsy();
+    const body = mockGetDisasterByCfda.mock.calls[0]?.[0] as { pagination: unknown };
+    expect(body.pagination).toEqual({ page: 2, limit: 100, sort: 'obligation', order: 'desc' });
+    expect(sc(result)).toMatchObject({
+      page_metadata: { limit: 100, page: 2 },
+      limitClamp: { field: 'limit', requested: 101, applied: 100 },
+      notice: CLAMP,
+    });
+    expect(raw(result)).toContain('**Per page:** 100');
+    expect(raw(result)).toContain('**Limit clamp:** `limit` requested 101, applied 100');
+  });
+
+  it('keeps the clamp sentence beside the ignored-filter notice, the recipient ceiling guidance, and upstream messages', async () => {
+    mockGetDisasterByRecipient.mockResolvedValueOnce({
+      results: [{ id: '1', name: 'Recipient A', obligation: 1 }],
+      page_metadata: { hasNext: true, page: 1, total: 10_000 },
+      messages: ['Upstream message.'],
+    });
+
+    const result = await runToolContract(disasterSpendingTool, {
+      dimension: 'recipient',
+      filters: { def_codes: ['L'], geo_layer: 'state' },
+      limit: 101,
+    });
+
+    const out = sc(result);
+    expect(out).toMatchObject({ truncated: true, cap: 10_000 });
+    expect(out.notice).toMatch(
+      /^Ignored for dimension "recipient": filters\.geo_layer\. limit 101 exceeds the per-call maximum of 100; this call used limit 100\. The recipient breakdown caps .* Upstream message\.$/,
+    );
+  });
+
+  it('slices geography with the applied limit: limit 101 page 2 returns the rows limit 100 page 2 returns', async () => {
+    serveAreas();
+    const clamped = sc(
+      await runToolContract(disasterSpendingTool, {
+        dimension: 'geography',
+        filters: { def_codes: ['L'] },
+        limit: 101,
+        page: 2,
+      }),
+    );
+    serveAreas();
+    const atCap = sc(
+      await runToolContract(disasterSpendingTool, {
+        dimension: 'geography',
+        filters: { def_codes: ['L'] },
+        limit: 100,
+        page: 2,
+      }),
+    );
+
+    expect(clamped.results.map((r) => r.shape_code)).toEqual(
+      atCap.results.map((r) => r.shape_code),
+    );
+    expect(clamped.results).toHaveLength(50);
+    expect(clamped.results[0]?.shape_code).toBe('A100');
+    expect(clamped).toMatchObject({
+      page_metadata: { has_next: false, page: 2, limit: 100, total: 150 },
+      limitClamp: { field: 'limit', requested: 101, applied: 100 },
+      notice: CLAMP,
+    });
+  });
+
+  it('discloses the remaining geography areas against the applied limit, with no raise-limit hint at the cap', async () => {
+    serveAreas();
+
+    const out = sc(
+      await runToolContract(disasterSpendingTool, {
+        dimension: 'geography',
+        filters: { def_codes: ['L'] },
+        limit: 101,
+      }),
+    );
+
+    expect(out.results).toHaveLength(100);
+    expect(out).toMatchObject({
+      page_metadata: { has_next: true, page: 1, limit: 100, total: 150 },
+      truncated: true,
+      shown: 100,
+      cap: 100,
+      truncationCeiling: 51,
+    });
+    expect(out.notice).toBe(
+      `${CLAMP} 50 more of 150 areas rank below this page, none above $51 in the reported amount scope. Request page 2 to continue.`,
+    );
+  });
+
+  it('places an empty geography page against the applied limit', async () => {
+    serveAreas();
+
+    const out = sc(
+      await runToolContract(disasterSpendingTool, {
+        dimension: 'geography',
+        filters: { def_codes: ['L'] },
+        limit: 101,
+        page: 3,
+      }),
+    );
+
+    expect(out.results).toEqual([]);
+    expect(out.notice).toBe(
+      `${CLAMP} Page 3 is past the end of the 150 matching results. Request an earlier page with the same filters.`,
+    );
+  });
+
+  it('ignores limit on overview and reports no clamp', async () => {
+    mockGetDisasterOverview.mockResolvedValueOnce({ total_budget_authority: 1, spending: {} });
+
+    const result = await runToolContract(disasterSpendingTool, {
+      dimension: 'overview',
+      limit: 101,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(sc(result)).not.toHaveProperty('limitClamp');
+    expect(sc(result)).not.toHaveProperty('notice');
+    expect(raw(result)).not.toContain('Limit clamp');
+  });
+
+  it('advertises no maximum by default, and maximum 100 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(disasterSpendingTool.input, 'limit')).toMatchObject({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+    });
+    expect(advertisedProperty(disasterSpendingTool.input, 'limit')).not.toHaveProperty('maximum');
+    expect(disasterSpendingTool.input.shape.limit.description).toMatch(
+      /^Results per page\. Default 10, at most 100 per call\. /,
+    );
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/disaster-spending.tool.js'))
+          .disasterSpendingTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 100 });
+    const rejected = await runToolContract(strict, {
+      dimension: 'cfda',
+      filters: { def_codes: ['L'] },
+      limit: 101,
+    });
+    expect(rejected.isError).toBe(true);
+    expect(raw(rejected)).toContain('Too big: expected number to be <=100');
+    expect(mockGetDisasterByCfda).not.toHaveBeenCalled();
   });
 });
 

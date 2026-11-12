@@ -4,14 +4,127 @@
  */
 
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getIdvAwardsTool } from '@/mcp-server/tools/definitions/get-idv-awards.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockGetIdvAwards = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ getIdvAwards: mockGetIdvAwards }),
 }));
+
+/** Wiring of the shared count-limit mechanism (full table in tests/tools/count-limit.test.ts). */
+describe('limit above the 100 cap (#99)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mockGetIdvAwards.mockReset();
+  });
+
+  const raw = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+  const fullPage = (hasNext: boolean) => ({
+    page_metadata: { page: 1, hasNext, hasPrevious: false },
+    results: Array.from({ length: 100 }, (_, i) => ({
+      generated_unique_award_id: `CONT_AWD_CHILD_${i}`,
+    })),
+  });
+
+  it.each([100, 101])(
+    'a full 100-row page the upstream marks as last reports has_next at limit %i, since the fullness guard reads the applied limit',
+    async (limit) => {
+      mockGetIdvAwards.mockResolvedValueOnce(fullPage(false));
+
+      const result = await runToolContract(getIdvAwardsTool, { award_id: 'CONT_IDV_X', limit });
+
+      expect(result.isError).toBeFalsy();
+      expect(mockGetIdvAwards.mock.calls[0]?.[0]).toMatchObject({ limit: 100 });
+      expect(result.structuredContent).toMatchObject({
+        page_metadata: { has_next: true, limit: 100 },
+        has_next_page: true,
+      });
+      expect(raw(result)).toContain('**Has next:** Yes');
+      expect(raw(result)).toContain('**Per page:** 100');
+      if (limit === 101) {
+        expect(result.structuredContent).toMatchObject({
+          limitClamp: { field: 'limit', requested: 101, applied: 100 },
+          notice: 'limit 101 exceeds the per-call maximum of 100; this call used limit 100.',
+        });
+        expect(raw(result)).toContain('**Limit clamp:** `limit` requested 101, applied 100');
+      } else {
+        expect(result.structuredContent).not.toHaveProperty('limitClamp');
+      }
+    },
+  );
+
+  it('keeps the clamp sentence beside the truncation guidance, with truncated cap at the applied limit and no raise-limit hint', async () => {
+    mockGetIdvAwards.mockResolvedValueOnce(fullPage(true));
+
+    const result = await runToolContract(getIdvAwardsTool, { award_id: 'CONT_IDV_X', limit: 101 });
+
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc).toMatchObject({ truncated: true, shown: 100, cap: 100 });
+    expect(sc.notice).toBe(
+      'limit 101 exceeds the per-call maximum of 100; this call used limit 100. More child awards remain beyond this page. Request the next page to continue; an empty or short page marks the end.',
+    );
+    expect(markdownText(raw(result))).toContain(
+      'this call used limit 100. More child awards remain beyond this page.',
+    );
+  });
+
+  it('keeps the raise-limit hint below the cap', async () => {
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page_metadata: { page: 1, hasNext: true, hasPrevious: false },
+      results: [{ generated_unique_award_id: 'A' }, { generated_unique_award_id: 'B' }],
+    });
+
+    const result = await runToolContract(getIdvAwardsTool, { award_id: 'CONT_IDV_X', limit: 2 });
+
+    expect((result.structuredContent as { notice?: string }).notice).toBe(
+      'More child awards remain beyond this page. Request the next page to continue; an empty or short page marks the end. Raise limit up to 100 for fewer round-trips.',
+    );
+  });
+
+  it('keeps the clamp sentence beside the empty-page notice', async () => {
+    mockGetIdvAwards.mockResolvedValueOnce({
+      page_metadata: { page: 1, hasNext: false, hasPrevious: false },
+      results: [],
+    });
+
+    const result = await runToolContract(getIdvAwardsTool, {
+      award_id: 'CONT_IDV_EMPTY',
+      limit: 250,
+    });
+
+    const notice = (result.structuredContent as { notice?: string }).notice;
+    expect(notice).toContain('limit 250 exceeds the per-call maximum of 100');
+    expect(notice).toContain(
+      'No child awards of type "child_awards" found for IDV "CONT_IDV_EMPTY"',
+    );
+  });
+
+  it('advertises no maximum by default, and maximum 100 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(getIdvAwardsTool.input, 'limit')).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+      description: 'Child awards per page. Default 10, at most 100 per call.',
+    });
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/get-idv-awards.tool.js')).getIdvAwardsTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 100 });
+    const rejected = await runToolContract(strict, { award_id: 'X', limit: 101 });
+    expect(rejected.isError).toBe(true);
+    expect(raw(rejected)).toContain('Too big: expected number to be <=100');
+    expect(mockGetIdvAwards).not.toHaveBeenCalled();
+  });
+});
 
 /**
  * POST idvs/awards/ returns only `results` and `page_metadata` at the top level —

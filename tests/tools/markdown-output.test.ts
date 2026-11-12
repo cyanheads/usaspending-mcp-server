@@ -27,6 +27,25 @@ describe('upstream text rendered as data', () => {
     expect(result.name).toBe(name);
   });
 
+  it('preserves parent and child recipient names with markup punctuation in their tables (#110)', () => {
+    const parentName = 'P | *Q* [R](https://example.com)';
+    const childName = 'A | *B* [C](https://example.com)';
+    const result = getRecipientTool.output.parse({
+      name: 'PARENT',
+      period: 'FY2024',
+      parents: [{ parent_id: 'p-P', parent_name: parentName }],
+      children: [{ recipient_id: 'c-C', name: childName, amount: 1 }],
+      children_total: 1,
+    });
+    const text = getRecipientTool.format!(result)
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('\n');
+    const rendered = markdownText(text);
+    expect(rendered).toContain(parentName);
+    expect(rendered).toContain(childName);
+    expect(result.children?.[0]?.name).toBe(childName);
+  });
+
   it('preserves a table value with markup punctuation', () => {
     const name = 'A | *B* [C](https://example.com)';
     const result = spendingByGeographyTool.output.parse({

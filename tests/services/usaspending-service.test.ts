@@ -11,7 +11,9 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
+import { autocompleteFiltersTool } from '@/mcp-server/tools/definitions/autocomplete-filters.tool.js';
 import { disasterSpendingTool } from '@/mcp-server/tools/definitions/disaster-spending.tool.js';
+import { getRecipientTool } from '@/mcp-server/tools/definitions/get-recipient.tool.js';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
@@ -97,6 +99,83 @@ const stubHangingFetch = () => {
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 };
+
+describe('USASpendingService.autocompleteLocation (#108)', () => {
+  /** Verbatim live body for "King County". */
+  const KING_COUNTY = {
+    count: 4,
+    results: {
+      cities: [
+        { city_name: 'KING COUNTY', state_name: 'TEXAS', country_name: 'UNITED STATES' },
+        { city_name: 'KING COUNTY', state_name: 'WASHINGTON', country_name: 'UNITED STATES' },
+      ],
+      counties: [
+        {
+          county_name: 'KING',
+          county_fips: '48269',
+          state_name: 'TEXAS',
+          country_name: 'UNITED STATES',
+        },
+        {
+          county_name: 'KING',
+          county_fips: '53033',
+          state_name: 'WASHINGTON',
+          country_name: 'UNITED STATES',
+        },
+      ],
+    },
+    messages: [''],
+  };
+
+  it.each([
+    [11, 11],
+    [100, 100],
+    [101, 100],
+    [500, 100],
+  ])('posts limit %i as %i, never above the 100 the route answers', async (limit, sent) => {
+    const fetchMock = stubFetch(200, JSON.stringify(KING_COUNTY));
+
+    const result = await newService().autocompleteLocation(
+      'King County',
+      limit,
+      createMockContext(),
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.usaspending.gov/api/v2/autocomplete/location/');
+    expect(JSON.parse(init.body as string)).toEqual({ search_text: 'King County', limit: sent });
+    expect(result).toEqual(KING_COUNTY);
+  });
+
+  it.each([
+    [1, 2],
+    [99, 100],
+    [100, 100],
+    [500, 100],
+    [501, 100],
+  ])('sends limit <= 100 from the tool at caller limit %i (%i)', async (limit, sent) => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+    const fetchMock = stubFetch(200, JSON.stringify(KING_COUNTY));
+
+    const response = await runToolContract(autocompleteFiltersTool, {
+      type: 'location',
+      search_text: 'King County',
+      limit,
+    });
+
+    expect(response.isError).toBeFalsy();
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ search_text: 'King County', limit: sent });
+    expect((response.structuredContent as { results: unknown[] }).results).toEqual(
+      limit === 1
+        ? [{ kind: 'county', code: '48269', name: 'KING', state: 'TX' }]
+        : [
+            { kind: 'county', code: '48269', name: 'KING', state: 'TX' },
+            { kind: 'county', code: '53033', name: 'KING', state: 'WA' },
+          ],
+    );
+  });
+});
 
 describe('USASpendingService entity lookups', () => {
   it('carries each agency-name consumer through the real service to its HTTP request', async () => {
@@ -551,6 +630,110 @@ describe('USASpendingService POST', () => {
     await expect(
       newService().spendingOverTime({ group: 'month', filters: {} }, ctx),
     ).rejects.toMatchObject({ code: JsonRpcErrorCode.Forbidden });
+  });
+});
+
+/**
+ * The award count is a side read beside a search: one attempt, never retried, cut
+ * at the caller's deadline, and a body without the per-group buckets is an
+ * upstream failure rather than a count.
+ */
+describe('USASpendingService countAwards (#114)', () => {
+  const COUNT_URL = 'https://api.usaspending.gov/api/v2/search/spending_by_award_count/';
+  const buckets = { contracts: 90, direct_payments: 0, grants: 0, idvs: 3, loans: 0, other: 0 };
+  let ctx: ReturnType<typeof createMockContext>;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('posts the filters alone to the count endpoint and returns the buckets', async () => {
+    const fetchMock = stubFetch(
+      200,
+      JSON.stringify({ results: buckets, spending_level: 'awards', messages: ['advisory'] }),
+    );
+    const filters = { award_type_codes: ['A', 'B', 'C', 'D'], keywords: ['hydrographic'] };
+
+    await expect(newService().countAwards(filters, ctx, Date.now() + 10_000)).resolves.toEqual(
+      buckets,
+    );
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(COUNT_URL);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ filters });
+  });
+
+  it('makes one attempt and never retries a transient failure', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fetchMock = stubFetch(503, JSON.stringify({ detail: 'Service Unavailable' }));
+    let settled = false;
+    const outcome = newService()
+      .countAwards({}, ctx, Date.now() + 10_000)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    // A retried request would now be asleep in its first backoff.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    expect(await outcome).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'api_unavailable' },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the request at the deadline and fails as api_timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fetchMock = stubHangingFetch();
+    let settled = false;
+    const outcome = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 })
+      .countAwards({}, ctx, Date.now() + 10_000)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBe(true);
+    expect(await outcome).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message:
+        'USAspending did not answer POST search/spending_by_award_count/ within its 10000ms deadline (one attempt, not retried).',
+      data: { reason: 'api_timeout', errorSource: 'RequestBudgetExhausted' },
+    });
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it.each([
+    ['an array of results', { results: [] }],
+    ['a missing bucket', { results: { contracts: 1, grants: 0, idvs: 0, loans: 0, other: 0 } }],
+    ['a string count', { results: { ...buckets, contracts: '90' } }],
+  ])('fails %s as api_unavailable', async (_label, body) => {
+    stubFetch(200, JSON.stringify(body));
+
+    await expect(newService().countAwards({}, ctx, Date.now() + 10_000)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'api_unavailable', retryable: true },
+    });
+  });
+
+  it("carries a 4xx detail into the message, as every request's classification does", async () => {
+    stubFetch(422, JSON.stringify({ detail: 'Field filters|keywords must be a list' }));
+
+    await expect(newService().countAwards({}, ctx, Date.now() + 10_000)).rejects.toMatchObject({
+      message:
+        'USAspending rejected POST search/spending_by_award_count/ (HTTP 422): Field filters|keywords must be a list',
+      data: { status: 422 },
+    });
   });
 });
 
@@ -1302,7 +1485,7 @@ describe('USASpendingService 4xx detail (#58)', () => {
     ).toBe(true);
     expect(err.message.endsWith('…')).toBe(true);
     expect(err.message.length).toBe(prefix.length + 500);
-    // The body on the wire stays at the framework's bounded capture.
+    // The server-side body (logged, never sent) stays at the framework's bounded capture.
     expect(err.data?.status).toBe(400);
     expect(String(err.data?.body)).toContain('bytes elided');
     expect(new TextEncoder().encode(String(err.data?.body)).byteLength).toBeLessThan(560);
@@ -1422,5 +1605,361 @@ describe('USASpendingService 4xx detail (#58)', () => {
 
     expect(err.code).toBe(JsonRpcErrorCode.InvalidParams);
     expect(err.message).toBe('Fetch failed for https://api.usaspending.gov/…. Status: 400');
+  });
+});
+
+/** A child row as `recipient/children/ZFKQZW16QPU3/` answered it on 2026-11-12. */
+const ORACLE_HEALTH_CHILD = {
+  recipient_id: '9232b26d-789d-bdd2-5a6d-28714f1dfa2c-C',
+  name: 'ORACLE HEALTH GOVERNMENT SERVICES, INC.',
+  duns: '080898173',
+  uei: 'DT2KS3HH5FP5',
+  amount: 2_063_908_489.28,
+  state_province: 'MO',
+};
+
+describe('USASpendingService getRecipientChildren (#110)', () => {
+  let ctx: ReturnType<typeof createMockContext>;
+  const callDeadline = () => Date.now() + 45_000;
+
+  beforeEach(() => {
+    ctx = createMockContext();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('requests the children of a UEI with the fiscal year as year, and without year otherwise', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify([ORACLE_HEALTH_CHILD]));
+    const svc = newService();
+
+    expect(
+      await svc.getRecipientChildren('ZFKQZW16QPU3', { fiscal_year: 2025 }, ctx, callDeadline()),
+    ).toEqual([ORACLE_HEALTH_CHILD]);
+    await svc.getRecipientChildren('ZFKQZW16QPU3', {}, ctx, callDeadline());
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls).toEqual([
+      'https://api.usaspending.gov/api/v2/recipient/children/ZFKQZW16QPU3/?year=2025',
+      'https://api.usaspending.gov/api/v2/recipient/children/ZFKQZW16QPU3/',
+    ]);
+  });
+
+  it('makes one attempt on a 503, where the profile request would retry', async () => {
+    const fetchMock = stubFetch(503, JSON.stringify({ detail: 'Service Unavailable' }));
+
+    const err = await newService()
+      .getRecipientChildren('ZFKQZW16QPU3', {}, ctx, callDeadline())
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'api_unavailable', retryable: true },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the upstream 400 detail and does not retry it', async () => {
+    const fetchMock = stubFetch(
+      400,
+      JSON.stringify({ detail: "Recipient not found: 'ZZZZ9Q9Q9Q9Q'." }),
+    );
+
+    const err = await newService()
+      .getRecipientChildren('ZZZZ9Q9Q9Q9Q', {}, ctx, callDeadline())
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err.code).toBe(JsonRpcErrorCode.InvalidParams);
+    expect(err.message).toBe(
+      "USAspending rejected GET recipient/children/ZZZZ9Q9Q9Q9Q/ (HTTP 400): Recipient not found: 'ZZZZ9Q9Q9Q9Q'.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting after 5 seconds inside a later call deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fetchMock = stubHangingFetch();
+    let settled = false;
+    const outcome = newService()
+      .getRecipientChildren('ZFKQZW16QPU3', {}, ctx, callDeadline())
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(settled).toBe(true);
+    expect(await outcome).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', retryable: true },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at the call deadline when it comes before the 5 seconds', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    stubHangingFetch();
+    let settled = false;
+    const outcome = newService()
+      .getRecipientChildren('ZFKQZW16QPU3', {}, ctx, Date.now() + 1_000)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(settled).toBe(true);
+    expect(await outcome).toMatchObject({ data: { reason: 'api_timeout' } });
+  });
+
+  it('fails at once, without a request, when the call deadline has passed', async () => {
+    const fetchMock = stubFetch(200, '[]');
+
+    const err = await newService()
+      .getRecipientChildren('ZFKQZW16QPU3', {}, ctx, Date.now() - 1)
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: { reason: 'api_timeout', retryable: true },
+    });
+    expect(err.message).toBe(
+      'The call deadline elapsed before USAspending was asked for GET recipient/children/ZFKQZW16QPU3/.',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an object', { detail: 'not a list' }],
+    ['a list of non-objects', ['x']],
+    ['a row with a text amount', [{ ...ORACLE_HEALTH_CHILD, amount: '12' }]],
+  ])('rejects %s as an unexpected children payload', async (_label, body) => {
+    stubFetch(200, JSON.stringify(body));
+
+    const err = await newService()
+      .getRecipientChildren('ZFKQZW16QPU3', {}, ctx, callDeadline())
+      .then(failIfResolved, (e: unknown) => e as McpError);
+
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'api_unavailable', retryable: false },
+    });
+  });
+
+  it('accepts sparse rows: null members, and a row without state_province', async () => {
+    const { state_province: _omitted, ...withoutState } = ORACLE_HEALTH_CHILD;
+    const rows = [withoutState, { ...ORACLE_HEALTH_CHILD, duns: null, uei: null }];
+    stubFetch(200, JSON.stringify(rows));
+
+    expect(
+      await newService().getRecipientChildren('ZFKQZW16QPU3', {}, ctx, callDeadline()),
+    ).toEqual(rows);
+  });
+
+  it('leaves a caller abort classified as a caller abort', async () => {
+    stubHangingFetch();
+    const caller = new AbortController();
+
+    const pending = newService()
+      .getRecipientChildren(
+        'ZFKQZW16QPU3',
+        {},
+        createMockContext({ signal: caller.signal }),
+        callDeadline(),
+      )
+      .then(failIfResolved, (e: unknown) => e);
+    caller.abort();
+
+    expect(await pending).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+  });
+});
+
+describe('usaspending_get_recipient children side read through the real service (#110)', () => {
+  const ORACLE_P = 'c406663e-71aa-fbe3-4678-97f901f9fee6-P';
+  const ORACLE_PROFILE = {
+    name: 'ORACLE CORP',
+    recipient_id: ORACLE_P,
+    recipient_level: 'P',
+    uei: 'ZFKQZW16QPU3',
+    duns: null,
+    parent_id: ORACLE_P,
+    parent_name: 'ORACLE CORP',
+    parent_uei: 'ZFKQZW16QPU3',
+    parent_duns: null,
+    parents: [
+      {
+        parent_id: ORACLE_P,
+        parent_duns: null,
+        parent_uei: 'ZFKQZW16QPU3',
+        parent_name: 'ORACLE CORP',
+      },
+    ],
+    total_transaction_amount: 2_132_996_423.61,
+  };
+
+  /** Serves the profile and the children route; anything else fails the test. */
+  const serve = (profile: unknown, children: (init: RequestInit) => Promise<Response>) => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.startsWith('/api/v2/recipient/children/')) return children(init);
+      if (path.startsWith('/api/v2/recipient/')) return Response.json(profile);
+      throw new Error(`Unmocked fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  };
+  const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+
+  beforeEach(() => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns the profile without children, never recipient_not_found, when the children read answers 400', async () => {
+    const fetchMock = serve(ORACLE_PROFILE, async () =>
+      Response.json({ detail: 'Recipient is not listed as a parent' }, { status: 400 }),
+    );
+
+    const result = await runToolContract(getRecipientTool, { recipient_id: ORACLE_P });
+
+    expect(result.isError).toBeFalsy();
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc.name).toBe('ORACLE CORP');
+    expect(sc).not.toHaveProperty('children');
+    expect(sc).not.toHaveProperty('children_total');
+    expect(sc.unavailable_sections).toEqual([
+      {
+        section: 'children',
+        reason: 'upstream_error',
+        retryable: false,
+        message:
+          'USAspending rejected GET recipient/children/ZFKQZW16QPU3/ (HTTP 400): Recipient is not listed as a parent',
+      },
+    ]);
+    expect(textOf(result)).toContain(
+      '- children: upstream_error — USAspending rejected GET recipient/children/ZFKQZW16QPU3/ (HTTP 400): Recipient is not listed as a parent',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the profile with children unavailable once the 5 second cap passes on a hung children read', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    serve(ORACLE_PROFILE, hang);
+    let settled: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    const pending = runToolContract(getRecipientTool, { recipient_id: ORACLE_P }).then((r) => {
+      settled = r;
+    });
+
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(settled?.isError).toBeFalsy();
+    expect(settled?.structuredContent).toMatchObject({
+      name: 'ORACLE CORP',
+      unavailable_sections: [{ section: 'children', reason: 'api_timeout', retryable: true }],
+      notice: expect.stringContaining('Retry the call to load children'),
+    });
+    await pending;
+  });
+
+  it("ends a hung children read at the profile request's deadline, not 5 seconds after a slow profile", async () => {
+    // Date is faked too: the request budget is measured against Date.now().
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    initUSASpendingService({} as AppConfig, {} as StorageService, {
+      ...serverConfig,
+      timeoutMs: 8_000,
+      retryBudgetMs: 8_000,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (new URL(url).pathname.startsWith('/api/v2/recipient/children/')) return hang(init);
+        await new Promise((resolve) => setTimeout(resolve, 7_000));
+        return Response.json(ORACLE_PROFILE);
+      }),
+    );
+    let settled: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    const pending = runToolContract(getRecipientTool, { recipient_id: ORACLE_P }).then((r) => {
+      settled = r;
+    });
+
+    // The profile answers at 7 s, leaving 1 s of its 8 s deadline for the children read.
+    await vi.advanceTimersByTimeAsync(7_900);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(settled?.structuredContent).toMatchObject({
+      name: 'ORACLE CORP',
+      unavailable_sections: [{ section: 'children', reason: 'api_timeout', retryable: true }],
+    });
+    await pending;
+  });
+
+  it('returns the children of a live-shaped parent, ranked by amount', async () => {
+    serve(ORACLE_PROFILE, async () =>
+      Response.json([
+        {
+          ...ORACLE_HEALTH_CHILD,
+          recipient_id: 'a-C',
+          name: 'CERNER FEDERAL SOLUTIONS LLC',
+          amount: 0,
+        },
+        {
+          ...ORACLE_HEALTH_CHILD,
+          recipient_id: 'b-C',
+          name: 'ORACLE AMERICA, INC',
+          amount: 69_087_934.33,
+        },
+        ORACLE_HEALTH_CHILD,
+      ]),
+    );
+
+    const result = await runToolContract(getRecipientTool, { recipient_id: ORACLE_P });
+
+    const sc = result.structuredContent as {
+      children: { amount: number }[];
+      children_total: number;
+    };
+    expect(sc.children.map((c) => c.amount)).toEqual([2_063_908_489.28, 69_087_934.33, 0]);
+    expect(sc.children_total).toBe(3);
+  });
+
+  it.each([
+    [{ fiscal_year: 2025 }, '?year=2025'],
+    [{}, ''],
+  ])('sends the same year on the profile and children requests for %j', async (extra, query) => {
+    const fetchMock = serve(ORACLE_PROFILE, async () => Response.json([]));
+
+    await runToolContract(getRecipientTool, { recipient_id: ORACLE_P, ...extra });
+
+    expect(fetchMock.mock.calls.map(([url]) => new URL(url).search)).toEqual([query, query]);
+  });
+
+  it('sends no children request for a -R profile', async () => {
+    const fetchMock = serve(
+      {
+        name: 'UNIVERSITY OF CALIFORNIA, SAN DIEGO',
+        recipient_id: 'ce42d274-7283-659b-de1c-e11666794c48-R',
+        recipient_level: 'R',
+        uei: 'UYTTZT6G9DT1',
+        duns: '804355790',
+        parent_id: null,
+        parents: [],
+      },
+      async () => Response.json([]),
+    );
+
+    const result = await runToolContract(getRecipientTool, {
+      recipient_id: 'ce42d274-7283-659b-de1c-e11666794c48-R',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (const key of ['parent_id', 'parents', 'children', 'children_total'])
+      expect(result.structuredContent).not.toHaveProperty(key);
   });
 });

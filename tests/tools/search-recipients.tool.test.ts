@@ -3,15 +3,109 @@
  * @module tests/tools/search-recipients.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { searchRecipientsTool } from '@/mcp-server/tools/definitions/search-recipients.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockSearchRecipients = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ searchRecipients: mockSearchRecipients }),
 }));
+
+/**
+ * Wiring of the shared count-limit mechanism (full table in
+ * tests/tools/count-limit.test.ts). The cap is the upstream's 1,000-row page maximum.
+ */
+describe('limit above the 1,000 cap (#99)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mockSearchRecipients.mockReset();
+  });
+
+  const raw = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+
+  it('accepts limit 1000, which the previous 100 maximum refused, with no clamp', async () => {
+    mockSearchRecipients.mockResolvedValueOnce({
+      results: Array.from({ length: 1000 }, (_, i) => ({ id: `r-${i}-R`, name: `R${i}` })),
+      page_metadata: { page: 1, total: 5000, hasNext: true },
+    });
+
+    const result = await runToolContract(searchRecipientsTool, { keyword: 'acme', limit: 1000 });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockSearchRecipients.mock.calls[0]?.[0]).toMatchObject({ limit: 1000 });
+    expect(result.structuredContent).toMatchObject({
+      page_metadata: { limit: 1000 },
+      recipient_count: 1000,
+    });
+    expect(result.structuredContent).not.toHaveProperty('limitClamp');
+  });
+
+  it('reads limit 1001 as 1000: the request, page_metadata.limit, limitClamp, and the clamp sentence beside the continuation notice', async () => {
+    mockSearchRecipients.mockResolvedValueOnce({
+      results: [{ id: 'r-1-R', name: 'R1' }],
+      page_metadata: { page: 1, total: 5000, hasNext: true },
+    });
+
+    const result = await runToolContract(searchRecipientsTool, { keyword: 'acme', limit: 1001 });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockSearchRecipients.mock.calls[0]?.[0]).toMatchObject({ limit: 1000, page: 1 });
+    expect(result.structuredContent).toMatchObject({
+      page_metadata: { limit: 1000 },
+      limitClamp: { field: 'limit', requested: 1001, applied: 1000 },
+      notice:
+        'limit 1001 exceeds the per-call maximum of 1000; this call used limit 1000. More recipients match (5,000 total). Request page 2 to continue.',
+    });
+    expect(raw(result)).toContain('**Per page:** 1000');
+    expect(raw(result)).toContain('**Limit clamp:** `limit` requested 1001, applied 1000');
+    expect(markdownText(raw(result))).toContain('this call used limit 1000. More recipients match');
+  });
+
+  it('places an empty page against the applied limit, the clamp sentence beside that notice', async () => {
+    // Page 2 of 1,001 matches: at limit 1000 it is not past the end; at 1001 it would be.
+    mockSearchRecipients.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { page: 2, total: 1001, hasNext: false },
+    });
+
+    const result = await runToolContract(searchRecipientsTool, {
+      keyword: 'acme',
+      limit: 1001,
+      page: 2,
+    });
+
+    expect((result.structuredContent as { notice?: string }).notice).toBe(
+      'limit 1001 exceeds the per-call maximum of 1000; this call used limit 1000. Page 2 returned no results. The API reports 1,001 matching results across all pages.',
+    );
+  });
+
+  it('advertises no maximum by default, and maximum 1000 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(searchRecipientsTool.input, 'limit')).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+      description: 'Recipients per page. Default 10, at most 1,000 per call.',
+    });
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/search-recipients.tool.js'))
+          .searchRecipientsTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 1000 });
+    const rejected = await runToolContract(strict, { keyword: 'acme', limit: 1001 });
+    expect(rejected.isError).toBe(true);
+    expect(raw(rejected)).toContain('Too big: expected number to be <=1000');
+    expect(mockSearchRecipients).not.toHaveBeenCalled();
+  });
+});
 
 describe('searchRecipientsTool', () => {
   it('returns recipients for a name keyword', async () => {

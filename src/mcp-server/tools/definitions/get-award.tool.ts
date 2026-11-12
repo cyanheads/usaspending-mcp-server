@@ -14,21 +14,44 @@ type Present<T> = { [K in keyof T]?: Exclude<T[K], null | undefined> };
 /**
  * Keeps the members upstream populated — dropping null, undefined, and empty
  * strings, keeping zeros — and returns undefined when none are left, so an
- * all-null upstream block emits no key rather than `{}`.
+ * all-null upstream block emits no key rather than `{}`. A member that is itself
+ * a `compact()` result is dropped the same way when it came back empty.
  */
-function compact<T extends Record<string, string | number | null | undefined>>(
-  fields: T,
-): Present<T> | undefined {
+function compact<T extends Record<string, unknown>>(fields: T): Present<T> | undefined {
   const entries = Object.entries(fields).filter(
     ([, value]) => value !== null && value !== undefined && value !== '',
   );
   return entries.length ? (Object.fromEntries(entries) as Present<T>) : undefined;
 }
 
+/**
+ * Upstream sends the offer count as a string. A whole number becomes a number;
+ * any other text is kept as sent rather than dropped.
+ */
+function offersReceived(value: string | null | undefined): number | string | null | undefined {
+  return value && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))
+    ? Number(value)
+    : value;
+}
+
+/** An upstream code with its description — the shape `naics` and `product_or_service_code` use. */
+const codedValue = (what: string, meaning: string) =>
+  z
+    .object({
+      code: z.string().optional().describe(`${what} code`),
+      description: z.string().optional().describe(`${what} description`),
+    })
+    .optional()
+    .describe(meaning);
+
+/** Renders a code and its description as `CODE — DESCRIPTION`, either alone when the other is absent. */
+const codeLine = (value: { code?: string | undefined; description?: string | undefined }) =>
+  escapeMarkdownInline([value.code, value.description].filter(Boolean).join(' — '));
+
 export const getAwardTool = tool('usaspending_get_award', {
   title: 'Get Award Details',
   description:
-    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient identity (UEI, parent organization, business categories), agency hierarchy, period of performance, place of performance, Assistance Listings with the obligation under each, loan face value and subsidy cost for loans, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count. Use generated_internal_id values from usaspending_search_awards as input. Recipient and parent recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters, and Assistance Listing numbers in its assistance_listings filter. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
+    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient identity (UEI, parent organization, business categories), agency hierarchy, period of performance, place of performance with its county code, Assistance Listings with the obligation under each, loan face value and subsidy cost for loans, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count and total. For contracts and IDVs it also returns competition (extent competed, solicitation procedure, set-aside, the authority for not competing, the fair-opportunity status of an order under a multiple-award IDV, offers received) and contract_pricing. Use generated_internal_id values from usaspending_search_awards as input. Recipient and parent recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters, Assistance Listing numbers in its assistance_listings filter, and the place of performance county_code with state_code in its location_filter. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -82,6 +105,10 @@ export const getAwardTool = tool('usaspending_get_award', {
       .number()
       .optional()
       .describe('Number of subawards; use with usaspending_get_award_subawards'),
+    total_subaward_amount: z
+      .number()
+      .optional()
+      .describe('Total amount of the subawards in USD; absent when upstream reports none'),
     date_signed: z.string().optional().describe('Date award was signed (YYYY-MM-DD)'),
     period_of_performance: z
       .object({
@@ -108,6 +135,12 @@ export const getAwardTool = tool('usaspending_get_award', {
           .optional()
           .describe('Congressional district of performance, preserving leading zeros'),
         county_name: z.string().optional().describe('County of performance'),
+        county_code: z
+          .string()
+          .optional()
+          .describe(
+            'Three-digit county FIPS code of performance, preserving leading zeros. With state_code it fills usaspending_search_awards location_filter.county and location_filter.state.',
+          ),
       })
       .optional()
       .describe('Place of performance; absent when upstream reports no location fields'),
@@ -143,6 +176,10 @@ export const getAwardTool = tool('usaspending_get_award', {
               .optional()
               .describe('Recipient congressional district, preserving leading zeros'),
             county_name: z.string().optional().describe('Recipient county'),
+            county_code: z
+              .string()
+              .optional()
+              .describe('Recipient three-digit county FIPS code, preserving leading zeros'),
             country_code: z
               .string()
               .optional()
@@ -198,6 +235,46 @@ export const getAwardTool = tool('usaspending_get_award', {
       })
       .optional()
       .describe('Product or service code (contracts)'),
+    contract_pricing: codedValue(
+      'Contract pricing type',
+      'Type of contract pricing, e.g. J FIRM FIXED PRICE (contracts and IDVs)',
+    ),
+    competition: z
+      .object({
+        extent_competed: codedValue(
+          'Extent competed',
+          'Whether the action was competed, e.g. A FULL AND OPEN COMPETITION, C NOT COMPETED',
+        ),
+        solicitation_procedures: codedValue(
+          'Solicitation procedure',
+          'How offers were solicited, e.g. NP NEGOTIATED PROPOSAL/QUOTE, SSS ONLY ONE SOURCE',
+        ),
+        type_set_aside: codedValue(
+          'Set-aside type',
+          'Set-aside used, e.g. SBA SMALL BUSINESS SET ASIDE - TOTAL, NONE when no set-aside was used',
+        ),
+        other_than_full_and_open: codedValue(
+          'Other than full and open competition',
+          'The authority for not competing, reported when extent_competed is not competed, e.g. PI PUBLIC INTEREST (FAR 6.302-7)',
+        ),
+        fair_opportunity_limited: codedValue(
+          'Fair opportunity',
+          'Fair-opportunity status of an order placed under a multiple-award IDV, e.g. FAIR FAIR OPPORTUNITY GIVEN, or the exception that limited it',
+        ),
+        number_of_offers_received: z
+          .union([
+            z.number().describe('Offer count'),
+            z.string().describe('Upstream offer text that is not a whole number'),
+          ])
+          .optional()
+          .describe(
+            'Number of offers received: a number when upstream reports a whole number, otherwise the upstream text as sent',
+          ),
+      })
+      .optional()
+      .describe(
+        'Competition data from the latest contract transaction (contracts and IDVs); each attribute is omitted when upstream reports it null, and the block is absent when every attribute is',
+      ),
     assistance_listings: z
       .array(
         z
@@ -302,6 +379,7 @@ export const getAwardTool = tool('usaspending_get_award', {
       zip5: pop?.zip5,
       congressional_code: pop?.congressional_code,
       county_name: pop?.county_name,
+      county_code: pop?.county_code,
     });
     const recipientLocation = compact({
       city_name: rcp?.location?.city_name,
@@ -310,6 +388,34 @@ export const getAwardTool = tool('usaspending_get_award', {
       zip5: rcp?.location?.zip5,
       congressional_code: rcp?.location?.congressional_code,
       county_name: rcp?.location?.county_name,
+      county_code: rcp?.location?.county_code,
+    });
+    const contractPricing = compact({
+      code: contractData?.type_of_contract_pricing,
+      description: contractData?.type_of_contract_pricing_description,
+    });
+    const competition = compact({
+      extent_competed: compact({
+        code: contractData?.extent_competed,
+        description: contractData?.extent_competed_description,
+      }),
+      solicitation_procedures: compact({
+        code: contractData?.solicitation_procedures,
+        description: contractData?.solicitation_procedures_description,
+      }),
+      type_set_aside: compact({
+        code: contractData?.type_set_aside,
+        description: contractData?.type_set_aside_description,
+      }),
+      other_than_full_and_open: compact({
+        code: contractData?.other_than_full_and_open,
+        description: contractData?.other_than_full_and_open_description,
+      }),
+      fair_opportunity_limited: compact({
+        code: contractData?.fair_opportunity_limited,
+        description: contractData?.fair_opportunity_limited_description,
+      }),
+      number_of_offers_received: offersReceived(contractData?.number_of_offers_received),
     });
     const businessCategories = rcp?.business_categories?.length
       ? rcp.business_categories
@@ -394,6 +500,9 @@ export const getAwardTool = tool('usaspending_get_award', {
         ? { total_subsidy_cost: r.total_subsidy_cost }
         : {}),
       ...(typeof r.subaward_count === 'number' ? { subaward_count: r.subaward_count } : {}),
+      ...(typeof r.total_subaward_amount === 'number'
+        ? { total_subaward_amount: r.total_subaward_amount }
+        : {}),
       ...(r.date_signed ? { date_signed: r.date_signed } : {}),
       ...(periodOfPerformance ? { period_of_performance: periodOfPerformance } : {}),
       ...(placeOfPerformance ? { place_of_performance: placeOfPerformance } : {}),
@@ -421,6 +530,8 @@ export const getAwardTool = tool('usaspending_get_award', {
             },
           }
         : {}),
+      ...(contractPricing ? { contract_pricing: contractPricing } : {}),
+      ...(competition ? { competition } : {}),
       ...(assistanceListings.length ? { assistance_listings: assistanceListings } : {}),
       ...(r.account_obligations_by_defc?.length
         ? {
@@ -487,6 +598,8 @@ export const getAwardTool = tool('usaspending_get_award', {
         );
       if (pop.county_name)
         lines.push(`**Performance County:** ${escapeMarkdownInline(pop.county_name)}`);
+      if (pop.county_code)
+        lines.push(`**Performance County Code:** ${escapeMarkdownInline(pop.county_code)}`);
     }
 
     if (result.recipient) {
@@ -523,6 +636,8 @@ export const getAwardTool = tool('usaspending_get_award', {
           );
         if (loc.county_name)
           lines.push(`**Recipient County:** ${escapeMarkdownInline(loc.county_name)}`);
+        if (loc.county_code)
+          lines.push(`**Recipient County Code:** ${escapeMarkdownInline(loc.county_code)}`);
       }
     }
 
@@ -547,9 +662,30 @@ export const getAwardTool = tool('usaspending_get_award', {
       lines.push(
         `**PSC:** ${escapeMarkdownInline(String(result.product_or_service_code.code))}${result.product_or_service_code.description ? ` — ${escapeMarkdownInline(result.product_or_service_code.description)}` : ''}`,
       );
+    if (result.contract_pricing)
+      lines.push(`**Contract Pricing:** ${codeLine(result.contract_pricing)}`);
 
     if (typeof result.subaward_count === 'number')
       lines.push(`**Subaward Count:** ${escapeMarkdownInline(String(result.subaward_count))}`);
+    if (typeof result.total_subaward_amount === 'number')
+      lines.push(`**Total Subaward Amount:** ${formatCurrency(result.total_subaward_amount)}`);
+
+    if (result.competition) {
+      const c = result.competition;
+      lines.push('\n### Competition');
+      if (c.extent_competed) lines.push(`**Extent Competed:** ${codeLine(c.extent_competed)}`);
+      if (c.solicitation_procedures)
+        lines.push(`**Solicitation Procedures:** ${codeLine(c.solicitation_procedures)}`);
+      if (c.type_set_aside) lines.push(`**Set-Aside:** ${codeLine(c.type_set_aside)}`);
+      if (c.other_than_full_and_open)
+        lines.push(`**Other Than Full and Open:** ${codeLine(c.other_than_full_and_open)}`);
+      if (c.fair_opportunity_limited)
+        lines.push(`**Fair Opportunity Limited:** ${codeLine(c.fair_opportunity_limited)}`);
+      if (c.number_of_offers_received !== undefined)
+        lines.push(
+          `**Offers Received:** ${escapeMarkdownInline(String(c.number_of_offers_received))}`,
+        );
+    }
 
     if (result.assistance_listings?.length) {
       lines.push('\n### Assistance Listings');

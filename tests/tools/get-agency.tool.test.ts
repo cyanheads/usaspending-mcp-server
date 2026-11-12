@@ -3,6 +3,7 @@
  * @module tests/tools/get-agency.tool.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -587,6 +588,182 @@ describe('getAgencyTool', () => {
       ]);
       expect(sc.fiscal_year).toBe(2025);
       expect(sc.budgetary_resources_amount).toBe(2);
+    });
+  });
+
+  describe('multi-year budget series (#111)', () => {
+    const run = async (rows: Record<string, unknown>[]) => {
+      mockGetAgency.mockResolvedValueOnce(agencyFixture);
+      mockGetAgencySubAgencies.mockResolvedValueOnce({ results: [] });
+      mockGetAgencyBudgetaryResources.mockResolvedValueOnce({ agency_data_by_year: rows });
+      const result = await runToolContract(getAgencyTool, { toptier_code: '080' });
+      expect(result.isError).toBeFalsy();
+      const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+      return { sc: result.structuredContent as Record<string, unknown>, text };
+    };
+    /** Monthly periods 2..last, the shape upstream reports from FY2022 on (no period 1). */
+    const monthly = (last: number) =>
+      Array.from({ length: last - 1 }, (_, i) => ({ period: i + 2, obligated: (i + 1) * 10 }));
+    const quarterly = [3, 6, 9, 12].map((period) => ({ period, obligated: period }));
+    const year = (fiscal_year: number, amounts: Record<string, unknown>, periods: unknown[]) => ({
+      fiscal_year,
+      agency_budgetary_resources: null,
+      agency_total_obligated: null,
+      agency_total_outlayed: null,
+      total_budgetary_resources: 16_181_198_695_809.91,
+      ...amounts,
+      agency_obligation_by_period: periods,
+    });
+    const fy2027 = year(2027, { total_budgetary_resources: null }, []);
+    const fy2026 = year(
+      2026,
+      {
+        agency_budgetary_resources: 44_028_063_933.25,
+        agency_total_obligated: 22_854_576_671.2,
+        agency_total_outlayed: 22_889_244_716.19,
+      },
+      monthly(11),
+    );
+    const fy2025 = year(
+      2025,
+      {
+        agency_budgetary_resources: 41_459_964_664.05,
+        agency_total_obligated: 28_773_421_746.59,
+        agency_total_outlayed: 26_820_529_908.4,
+      },
+      monthly(12),
+    );
+    const fy2017 = year(
+      2017,
+      {
+        agency_budgetary_resources: 24_058_622_609.29,
+        agency_total_obligated: 22_678_235_157.39,
+        agency_total_outlayed: 21_465_276_363.26,
+      },
+      quarterly.slice(1),
+    );
+
+    it('returns every year with data newest first, starting at the top-level year', async () => {
+      const { sc } = await run([fy2025, fy2027, fy2017, fy2026]);
+
+      expect(sc.budget_by_fiscal_year).toEqual([
+        {
+          fiscal_year: 2026,
+          budgetary_resources_amount: 44_028_063_933.25,
+          obligated_amount: 22_854_576_671.2,
+          outlay_amount: 22_889_244_716.19,
+          reported_through_period: 11,
+        },
+        {
+          fiscal_year: 2025,
+          budgetary_resources_amount: 41_459_964_664.05,
+          obligated_amount: 28_773_421_746.59,
+          outlay_amount: 26_820_529_908.4,
+          reported_through_period: 12,
+        },
+        {
+          fiscal_year: 2017,
+          budgetary_resources_amount: 24_058_622_609.29,
+          obligated_amount: 22_678_235_157.39,
+          outlay_amount: 21_465_276_363.26,
+          reported_through_period: 12,
+        },
+      ]);
+      const [first] = sc.budget_by_fiscal_year as { fiscal_year: number }[];
+      expect(first?.fiscal_year).toBe(sc.fiscal_year);
+      // The top-level totals are untouched by the series.
+      expect(sc.budgetary_resources_amount).toBe(44_028_063_933.25);
+    });
+
+    it('omits a null amount from an interior row and keeps a 0', async () => {
+      const { sc, text } = await run([
+        fy2026,
+        year(2024, { agency_budgetary_resources: 30_051_004_236.67, agency_total_outlayed: 0 }, []),
+        fy2017,
+      ]);
+
+      const rows = sc.budget_by_fiscal_year as Record<string, unknown>[];
+      expect(rows.map((r) => r.fiscal_year)).toEqual([2026, 2024, 2017]);
+      expect(rows[1]).toEqual({
+        fiscal_year: 2024,
+        budgetary_resources_amount: 30_051_004_236.67,
+        outlay_amount: 0,
+      });
+      expect(text).toContain('| 2024 | $30,051,004,236.67 | N/A | $0 | N/A |');
+    });
+
+    it('reports the highest reported period, in any upstream order, and none for a row without periods', async () => {
+      const { sc } = await run([
+        year(2026, { agency_total_obligated: 1 }, [...monthly(11)].reverse()),
+        year(2021, { agency_total_obligated: 2 }, [{ period: 12 }, { period: null }, ...quarterly]),
+        year(2019, { agency_total_obligated: 3 }, [{ period: null }]),
+        { fiscal_year: 2018, agency_total_obligated: 4 },
+      ]);
+
+      expect(
+        (sc.budget_by_fiscal_year as Record<string, unknown>[]).map((r) => [
+          r.fiscal_year,
+          r.reported_through_period,
+        ]),
+      ).toEqual([
+        [2026, 11],
+        [2021, 12],
+        [2019, undefined],
+        [2018, undefined],
+      ]);
+    });
+
+    it.each([
+      ['no rows', []],
+      ['only all-null rows', [fy2027, year(2026, {}, [])]],
+    ])('emits no series when agency_data_by_year has %s', async (_label, rows) => {
+      const { sc, text } = await run(rows);
+
+      expect(sc).not.toHaveProperty('budget_by_fiscal_year');
+      expect(text).not.toContain('Budget by Fiscal Year');
+    });
+
+    it('omits the series with the other budget fields when the budget request fails', async () => {
+      mockGetAgency.mockResolvedValueOnce(agencyFixture);
+      mockGetAgencySubAgencies.mockResolvedValueOnce({ results: [] });
+      mockGetAgencyBudgetaryResources.mockRejectedValueOnce(
+        new McpError(JsonRpcErrorCode.ServiceUnavailable, 'Fetch failed. Status: 503', {
+          reason: 'api_unavailable',
+          retryable: true,
+        }),
+      );
+
+      const result = await runToolContract(getAgencyTool, { toptier_code: '080' });
+
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(result.isError).toBeFalsy();
+      expect(sc).not.toHaveProperty('budget_by_fiscal_year');
+      expect(sc.unavailable_sections).toEqual([
+        expect.objectContaining({ section: 'budgetary_resources' }),
+      ]);
+    });
+
+    it('renders the series as a table, marking a year still being reported', async () => {
+      const { text } = await run([fy2027, fy2026, fy2025]);
+
+      expect(text).toContain('### Budget by Fiscal Year');
+      expect(text).toContain(
+        '| Fiscal Year | Budgetary Resources | Obligated | Outlays | Reported Through Period |',
+      );
+      expect(text).toContain(
+        '| 2026 | $44,028,063,933.25 | $22,854,576,671.2 | $22,889,244,716.19 | 11 (year to date) |',
+      );
+      expect(text).toContain(
+        '| 2025 | $41,459,964,664.05 | $28,773,421,746.59 | $26,820,529,908.4 | 12 |',
+      );
+      expect(text).not.toContain('| 2027 |');
+    });
+
+    it('describes the series in the tool description and the budgetary_resources section', () => {
+      expect(getAgencyTool.description).toContain('budget_by_fiscal_year');
+      const section = getAgencyTool.enrichment?.unavailable_sections;
+      expect(section).toBeDefined();
+      expect(JSON.stringify(z.toJSONSchema(section!))).toContain('budget_by_fiscal_year');
     });
   });
 

@@ -7,9 +7,16 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { AWARD_TYPE_CODES } from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
+
+/**
+ * Below the upstream's 5,000-row page maximum: tiled from the heaviest award sampled,
+ * 5,000 rows measure about 2.2 MB / 2.0 MB per surface and 2,000 rows about 875 KB / 786 KB.
+ */
+const LIMIT = countLimit({ tool: 'usaspending_get_award_transactions', default: 10, cap: 2000 });
 
 export const getAwardTransactionsTool = tool('usaspending_get_award_transactions', {
   title: 'Get Award Transactions',
@@ -27,13 +34,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .default('action_date')
       .describe('Sort field for transactions'),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum transactions per page (1–100)'),
+    limit: LIMIT.schema.describe('Transactions per page. Default 10, at most 2,000 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -92,11 +93,12 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .describe('Total transaction count across all pages (when available)'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of transactions'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Guidance when no transactions were returned — helps confirm the award_id is a valid generated_internal_id. Absent when results are present.',
+        'A reduced limit, and guidance when no transactions were returned — helps confirm the award_id is a valid generated_internal_id. Absent when neither applies.',
       ),
   },
 
@@ -107,6 +109,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
    * no input can produce.
    */
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -134,13 +137,14 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       award_id: input.award_id,
       page: input.page,
     });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
     const data = await svc.getAwardTransactions(
       {
         award_id: input.award_id,
         sort: input.sort,
         order: input.order,
-        limit: input.limit,
+        limit: limit.applied,
         page: input.page,
       },
       ctx,
@@ -188,11 +192,13 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       has_next_page: hasNext,
     });
 
+    const notices = limit.notice ? [limit.notice] : [];
     if (results.length === 0) {
-      ctx.enrich.notice(
+      notices.push(
         `No transactions found for award ${input.award_id}. Verify the award_id is a valid generated_internal_id from usaspending_search_awards; an invalid ID or a page past the last returns no transactions.`,
       );
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       award_id: input.award_id,
@@ -201,7 +207,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
         has_next: hasNext,
         page: currentPage,
         ...(typeof pageMeta.total === 'number' ? { total: pageMeta.total } : {}),
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

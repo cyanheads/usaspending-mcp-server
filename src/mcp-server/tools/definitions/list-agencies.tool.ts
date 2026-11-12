@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countInput } from './count-limit.js';
 import { formatCurrency } from './formatting.js';
 
 export const listAgenciesTool = tool('usaspending_list_agencies', {
@@ -23,10 +24,7 @@ export const listAgenciesTool = tool('usaspending_list_agencies', {
         'Sort field: agency_name (alphabetical), budget_authority_amount, obligated_amount, or outlay_amount',
       ),
     order: z.enum(['asc', 'desc']).default('asc').describe('Sort direction: asc or desc'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
+    limit: countInput()
       .optional()
       .describe('Agencies per page; omitted returns the full directory. No maximum.'),
     page: z

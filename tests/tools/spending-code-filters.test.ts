@@ -77,8 +77,17 @@ const answer = (endpoint: string, body: unknown) =>
   http.route({ method: 'POST', match: endpoint, respond: Response.json(body) });
 
 const SEARCH_ENDPOINT = `${BASE}search/spending_by_award/`;
-const answerSearch = (rows: Record<string, unknown>[] = [{ 'Award ID': 'A1' }]) =>
+/**
+ * Routes one award search answer and its count: `rows.length` in every award-type
+ * group. The search leaves first, so its body stays at its own call index.
+ */
+const answerSearch = (rows: Record<string, unknown>[] = [{ 'Award ID': 'A1' }]) => {
   answer(SEARCH_ENDPOINT, { results: rows, page_metadata: { page: 1, hasNext: false } });
+  const n = rows.length;
+  answer(`${BASE}search/spending_by_award_count/`, {
+    results: { contracts: n, idvs: n, grants: n, direct_payments: n, loans: n, other: n },
+  });
+};
 const runSearch = (args: Record<string, unknown>) =>
   runToolContract(searchAwardsTool, { limit: 5, ...args } as never);
 
@@ -504,7 +513,7 @@ describe('usaspending_search_awards code filters (#77)', () => {
     const result = await runSearch({ psc_codes: ['zz'], def_codes: ['q'] });
 
     const notice = (result.structuredContent as { notice?: string }).notice;
-    expect(notice).toContain('Page 1 returned no awards');
+    expect(notice).toContain('No awards match');
     expect(notice).toContain('psc_codes=ZZ');
     expect(notice).toContain('def_codes=Q');
   });

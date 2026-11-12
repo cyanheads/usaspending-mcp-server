@@ -1,13 +1,18 @@
 /**
  * @fileoverview Tool to search federal awards by keyword, recipient, agency, award type,
- * NAICS, Assistance Listing, PSC, or DEF code, location, or date range.
+ * NAICS, Assistance Listing, PSC, or DEF code, place of performance or recipient
+ * location, or date range.
  * @module mcp-server/tools/definitions/search-awards.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
-import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import {
+  type AwardCounts,
+  getUSASpendingService,
+} from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import {
   ANALYTICS_DATE_FIELDS,
   blankableIsoDate,
@@ -22,22 +27,36 @@ import {
   ASSISTANCE_AWARD_TYPE_CODES,
   AWARD_TYPE_CODES,
   applyCodeFilters,
+  applyLocationFilters,
   awardingAgencyFilters,
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
+  describeLocationFilters,
+  LOCATION_FILTER_FIELDS,
+  locationFilterEcho,
   normalizeCodeFilters,
   normalizeEffectiveFilters,
   PROCUREMENT_AWARD_TYPE_CODES,
+  resolveLocationFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
-import { describeLocation, LocationFilterSchema, resolveLocation } from './locations.js';
-import { resolveHasNext } from './pagination.js';
+import { LocationFilterSchema, resolveLocation } from './locations.js';
+import { emptyPageNotice, resolveHasNext } from './pagination.js';
+import {
+  renderUnavailableSections,
+  settleSection,
+  type UnavailableSection,
+  unavailableNotice,
+  unavailableSectionSchema,
+} from './unavailable-sections.js';
 
 /** Award search default fields — covers summary + chaining IDs. */
 const AWARD_SEARCH_FIELDS = [
   'Award ID',
   'Recipient Name',
+  'recipient_id',
+  'Recipient UEI',
   'Award Amount',
   'Total Outlays',
   'Awarding Agency',
@@ -93,7 +112,8 @@ interface AwardTypeGroup {
  * partition its mixed-group 422 lists, F-codes and -1 included — and the sorts
  * each group's field mapping allows; upstream answers any other sort with a 400.
  * IDVs have no End Date; loans have no amount or date fields of the contract
- * kind and sort by their own. Labels follow USAspending's type names.
+ * kind and sort by their own. Labels follow USAspending's type names. The keys
+ * are the buckets `search/spending_by_award_count/` reports, one per group.
  */
 const AWARD_TYPE_GROUPS = {
   contracts: { label: 'contracts', codes: AWARD_TYPE_CODES.contracts, sorts: CONTRACT_SORTS },
@@ -110,15 +130,18 @@ const AWARD_TYPE_GROUPS = {
   },
   loans: { label: 'loans', codes: AWARD_TYPE_CODES.loans, sorts: LOAN_SORTS },
   other: { label: 'other', codes: AWARD_TYPE_CODES.other, sorts: CONTRACT_SORTS },
-} satisfies Record<string, AwardTypeGroup>;
+} satisfies Record<keyof AwardCounts, AwardTypeGroup>;
+
+type AwardTypeGroupName = keyof typeof AWARD_TYPE_GROUPS;
 
 /**
  * The group every code belongs to, or `undefined` when the codes span groups or
  * include one outside them — upstream's own 422 then decides, unguessed.
  */
-function resolveAwardTypeGroup(codes: readonly string[]): AwardTypeGroup | undefined {
+function resolveAwardTypeGroup(codes: readonly string[]): AwardTypeGroupName | undefined {
+  const names = Object.keys(AWARD_TYPE_GROUPS) as AwardTypeGroupName[];
   const groups = new Set(
-    codes.map((code) => Object.values(AWARD_TYPE_GROUPS).find((g) => g.codes.includes(code))),
+    codes.map((code) => names.find((name) => AWARD_TYPE_GROUPS[name].codes.includes(code))),
   );
   const [only] = groups;
   return groups.size === 1 ? only : undefined;
@@ -147,10 +170,48 @@ const MAX_PAGE_OFFSET = 50_000;
  */
 const CURSOR_WINDOW_OFFSET = 10_000;
 
+/**
+ * How long the count request may run, measured from the start of the call: about
+ * 2.5× the slowest cold count measured (an 18-year all-contracts filter); warm
+ * repeats answer in well under a second. Past it the request is aborted and the
+ * total reported unavailable, so a slow count never holds the answer longer.
+ */
+const COUNT_DEADLINE_MS = 10_000;
+
+/** search/spending_by_award/ answers a limit above 100 with a 422. */
+const LIMIT = countLimit({ tool: 'usaspending_search_awards', default: 10, cap: 100 });
+
+const UnavailableSectionSchema = unavailableSectionSchema(
+  ['total'],
+  'total: page_metadata.total and totalCount, from the count request.',
+);
+
+/** Paging guidance before the 10,000-result offset where the cursor pair stops. */
+const CURSOR_GUIDANCE = `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`;
+
+/**
+ * Paging guidance for a page-number page with rows past it and a known total.
+ * The cursor guidance is kept only for matches page numbers cannot reach.
+ */
+function knownTotalGuidance(page: number, limit: number, total: number): string {
+  const parts = [
+    `${total.toLocaleString()} awards match; this page ends at result ${(page * limit).toLocaleString()}.`,
+    (page + 1) * limit <= MAX_PAGE_OFFSET
+      ? `Request page ${page + 1} for more.`
+      : `The next page would pass the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window.`,
+  ];
+  if (total > MAX_PAGE_OFFSET) {
+    parts.push(
+      `${(total - MAX_PAGE_OFFSET).toLocaleString()} of them lie past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window: reach them with last_record_sort_value + last_record_unique_id from page_metadata, returned only while page × limit stays under ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture the pair before then — or narrow the filters.`,
+    );
+  }
+  return parts.join(' ');
+}
+
 export const searchAwardsTool = tool('usaspending_search_awards', {
   title: 'Search Federal Awards',
   description:
-    'Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, PSC, DEF code, location, or date range. Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
+    'Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, PSC, DEF code, location, or date range. Location filters by place of performance (location_filter, or filters.place_of_performance_location, which overrides it) or by where the recipient is based (filters.recipient_location). Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Rows carry the recipient_id that opens usaspending_get_recipient, and the recipient UEI, when upstream has them; page_metadata.total counts every match in the selected award-type group. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -218,13 +279,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         'Sort field for results. Loans (07/08/F003/F004) sort by Loan Value, Subsidy Cost, Issued Date, Recipient Name, or Awarding Agency, defaulting to Loan Value. Every other group sorts by Award Amount, Total Outlays, Start Date, End Date, Recipient Name, or Awarding Agency, defaulting to Award Amount — except IDVs, which have no End Date. A sort the group does not support is rejected before the search runs.',
       ),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum results per page (1–100)'),
+    limit: LIMIT.schema.describe('Awards per page. Default 10, at most 100 per call.'),
     page: z
       .number()
       .int()
@@ -279,6 +334,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
             'NAICS industry codes to require: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize; unclassified spellings remain provider-validated; nonempty nested values override flat values',
           ),
         ...CODE_FILTER_FIELDS,
+        ...LOCATION_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC).',
         ),
@@ -309,6 +365,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
                 'Generated unique award ID — pass to usaspending_get_award to fetch full details',
               ),
             recipient_name: z.string().optional().describe('Name of the award recipient'),
+            recipient_id: z
+              .string()
+              .optional()
+              .describe(
+                'Recipient hash ID with its level suffix (-C, -R, or -P) — pass to usaspending_get_recipient for the profile. Absent when upstream has none, as on rows aggregated as MULTIPLE RECIPIENTS.',
+              ),
+            uei: z
+              .string()
+              .optional()
+              .describe('Recipient Unique Entity Identifier. Absent when upstream has none.'),
             award_amount: z.number().optional().describe('Total award amount in USD'),
             total_outlays: z.number().optional().describe('Total outlays in USD'),
             loan_value: z
@@ -357,10 +423,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         has_next: z
           .boolean()
           .describe(
-            `Whether more results may remain — true on a full page even when the upstream flag reports none, since this endpoint under-reports continuation on a final full page and on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset. A short or empty page marks the end.`,
+            `Whether more results remain. With total known on page-number paging, true exactly when rows lie past this page. Without it — the count failed, or the page came by cursor — true on any full page, since the upstream flag reads false on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset; an exactly-full final page then reports one page more than exists. A short or empty page marks the end.`,
           ),
         page: z.number().describe('Current page number'),
         limit: z.number().describe('Results per page'),
+        total: z
+          .number()
+          .optional()
+          .describe(
+            'Awards matching the filters in the selected award-type group, across all pages. Absent when the count request failed; unavailable_sections then names it.',
+          ),
         last_record_sort_value: z
           .string()
           .optional()
@@ -375,7 +447,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           ),
       })
       .describe(
-        'Pagination metadata. This endpoint does not return a total match count; use has_next and the cursor pair to page.',
+        'Pagination metadata: has_next, the page and limit, the total match count, and the keyset cursor pair.',
       ),
   }),
 
@@ -387,13 +459,19 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     has_next: z
       .boolean()
       .describe(
-        'Whether more results may remain — set on a full page even when the upstream flag reports none.',
+        'Whether more results remain: exact with a known total on page-number paging, otherwise true on any full page.',
       ),
     truncated: z
       .boolean()
       .optional()
       .describe(
-        `True when the upstream reports more results beyond this page (continue via page or the cursor). Absent on a full page the upstream marks as last, including every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset where the upstream stops reporting continuation — has_next still says whether to request another.`,
+        `True when rows are known to lie past this page: page × limit is below the total, or the upstream reports a next page (continue via page or the cursor). Without a total — the count failed, or the page came by cursor — only the upstream flag counts, and it reads false on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset; has_next still says whether to request another.`,
+      ),
+    totalCount: z
+      .number()
+      .optional()
+      .describe(
+        'Awards matching the filters in the selected award-type group, across all pages — the same value as page_metadata.total. Absent when the count request failed.',
       ),
     shown: z
       .number()
@@ -433,6 +511,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe(
         'Place of performance location sent, as normalized (e.g. country=USA, state=NM, county=049)',
       ),
+    applied_recipient_location: z
+      .string()
+      .optional()
+      .describe('Recipient location sent, as normalized (e.g. country=USA, state=WA)'),
     applied_time_period_start: z
       .string()
       .optional()
@@ -441,11 +523,18 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe('End of the date range sent (YYYY-MM-DD), including a filled-in end'),
+    unavailable_sections: z
+      .array(UnavailableSectionSchema)
+      .optional()
+      .describe(
+        `Present when the count request failed, was rejected, or ran past its ${COUNT_DEADLINE_MS / 1000}-second deadline; the awards on the page are unaffected. Absent when the count loaded.`,
+      ),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'How to page on when more results may remain, which date bound was filled in when only the other was supplied, and the applied filters on an empty page. This endpoint supplies no total, so an empty page does not establish zero matches. Absent when none applies.',
+        'A reduced limit, how to page on when more results remain, which date bound was filled in when only the other was supplied, why an empty page is empty (nothing matches, the page is past the last match, or — without a total — unknown), and which section failed to load. Absent when none applies.',
       ),
   },
 
@@ -455,7 +544,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   // full escape hatch and never consults a sibling `label`, so an unheaded bullet list
   // would otherwise sit unattributed between the surrounding `**key:** value` lines.
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+    unavailable_sections: { render: renderUnavailableSections },
     upstream_messages: {
       /**
        * The trailing empty element closes the bullet list with a blank line. The
@@ -562,17 +653,20 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     {
       reason: 'invalid_location',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'location_filter names an unknown US state, a county without a state or under an armed-forces code, a county or FIPS-number state under a non-USA country, or parts that place it in different states.',
+      when: 'location_filter, filters.place_of_performance_location, or filters.recipient_location names an unknown US state, a county without a state or under an armed-forces code, a county or FIPS-number state under a non-USA country, or parts that place it in different states.',
       retryable: false,
       recovery:
-        "Under country USA (the default) or a US territory code, send location_filter.state as a postal code (NM) or 2-digit FIPS code (35), and location_filter.county as 3 digits with that state or as the 5-digit state + county code (35049). Under another country, send state as that country's own 2-letter subdivision code and no county.",
+        "Under country USA (the default) or a US territory code, send state as a postal code (NM) or 2-digit FIPS code (35), and county as 3 digits with that state or as the 5-digit state + county code (35049). Under another country, send state as that country's own 2-letter subdivision code and no county.",
     },
   ],
 
   async handler(input, ctx) {
+    const countDeadlineAt = Date.now() + COUNT_DEADLINE_MS;
+    // Every read below uses the applied limit, never input.limit.
+    const { applied: limit, notice: clampNotice } = LIMIT.apply(ctx, 'limit', input.limit);
     ctx.log.info('usaspending_search_awards', {
       keyword: input.keyword,
-      limit: input.limit,
+      limit,
       page: input.page,
     });
     const svc = getUSASpendingService();
@@ -591,10 +685,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
     // Page-number pagination caps at a 50,000-result offset; fail fast with the cursor
     // recovery path instead of letting the upstream 422 bubble up unclassified.
-    if (!usingCursor && input.page * input.limit > MAX_PAGE_OFFSET) {
+    if (!usingCursor && input.page * limit > MAX_PAGE_OFFSET) {
       throw ctx.fail(
         'pagination_limit_exceeded',
-        `Requested page ${input.page} at limit ${input.limit} exceeds this endpoint's ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window.`,
+        `${clampNotice ? `${clampNotice} ` : ''}Requested page ${input.page} at limit ${limit} exceeds this endpoint's ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number window.`,
       );
     }
 
@@ -696,8 +790,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
     // Upstream checks the sort against the group's field mapping and answers 400
     // outside it. Codes spanning groups skip the check: upstream's 422 decides.
-    const group = resolveAwardTypeGroup(awardTypeCodes);
-    const isLoan = group === AWARD_TYPE_GROUPS.loans;
+    const groupName = resolveAwardTypeGroup(awardTypeCodes);
+    const group: AwardTypeGroup | undefined = groupName ? AWARD_TYPE_GROUPS[groupName] : undefined;
+    const isLoan = groupName === 'loans';
     const sort = input.sort ?? (isLoan ? 'Loan Value' : 'Award Amount');
     if (group && !group.sorts.includes(sort)) {
       throw ctx.fail(
@@ -708,14 +803,19 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
     /**
      * Upstream 422s on a missing country or a 5-digit county, and answers an empty
-     * page for a FIPS-number state or a territory's ISO code, so the location is
-     * normalized to the one shape it matches, or rejected, before the request.
+     * page for a FIPS-number state or a territory's ISO code, so each location is
+     * normalized to the one shape it matches, or rejected naming its input path,
+     * before the request. A nested place of performance wins over the flat
+     * location_filter, which is then neither sent nor checked.
      */
-    const resolvedLocation = resolveLocation(input.location_filter);
-    if (!resolvedLocation.ok) {
-      throw ctx.fail('invalid_location', resolvedLocation.message);
+    const located = resolveLocationFilters(f ?? {});
+    if (!located.ok) throw ctx.fail('invalid_location', located.message);
+    const { locations } = located;
+    if (!locations.place_of_performance_location) {
+      const flat = resolveLocation(input.location_filter);
+      if (!flat.ok) throw ctx.fail('invalid_location', flat.message);
+      if (flat.location) locations.place_of_performance_location = flat.location;
     }
-    const location = resolvedLocation.location;
 
     const filters: Record<string, unknown> = {};
     if (keywords?.length) filters.keywords = keywords;
@@ -731,15 +831,15 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     if (timePeriod) {
       filters.time_period = [{ start_date: timePeriod.start_date, end_date: timePeriod.end_date }];
     }
-    if (location) filters.place_of_performance_locations = [location];
+    applyLocationFilters(filters, locations);
 
-    const data = await svc.searchAwards(
+    const searchRequest = svc.searchAwards(
       {
         filters,
         fields: isLoan ? [...AWARD_SEARCH_FIELDS, ...LOAN_FIELDS] : AWARD_SEARCH_FIELDS,
         sort,
         order: input.order,
-        limit: input.limit,
+        limit,
         // page and cursor are mutually exclusive; omit page when paging by cursor.
         // Re-test both fields inline so exactOptionalPropertyTypes narrows away `undefined`.
         ...(input.last_record_sort_value !== undefined && input.last_record_unique_id !== undefined
@@ -751,6 +851,23 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       },
       ctx,
     );
+    /**
+     * The count gets the very `filters` object the search sends, so every filter
+     * reaches both, and runs beside the search as a best-effort side read under its
+     * own deadline. Codes spanning groups never reach it: upstream's 422 fails the
+     * search. Settled up front, so a count that rejects after a failed search is
+     * still handled; the search is awaited alone, so its failure surfaces at once.
+     */
+    const countLeg = Promise.allSettled([
+      groupName ? svc.countAwards(filters, ctx, countDeadlineAt) : undefined,
+    ]);
+    const data = await searchRequest;
+    const [countResult] = await countLeg;
+
+    // A failed count leaves the total unknown and is disclosed; a caller abort rethrows.
+    const unavailable: UnavailableSection<'total'>[] = [];
+    const counts = settleSection(ctx, 'total', countResult, unavailable);
+    const total = groupName && counts ? counts[groupName] : undefined;
 
     const results = (data.results ?? []).map((r) => ({
       ...(r['Award ID'] ? { award_id: String(r['Award ID']) } : {}),
@@ -758,6 +875,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         ? { generated_internal_id: String(r.generated_internal_id) }
         : {}),
       ...(r['Recipient Name'] ? { recipient_name: String(r['Recipient Name']) } : {}),
+      ...(r.recipient_id ? { recipient_id: r.recipient_id } : {}),
+      ...(r['Recipient UEI'] ? { uei: r['Recipient UEI'] } : {}),
       ...(typeof r['Award Amount'] === 'number' ? { award_amount: r['Award Amount'] } : {}),
       ...(typeof r['Total Outlays'] === 'number' ? { total_outlays: r['Total Outlays'] } : {}),
       ...(typeof r['Loan Value'] === 'number' ? { loan_value: r['Loan Value'] } : {}),
@@ -795,10 +914,19 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     }));
 
     const pageMeta = data.page_metadata ?? {};
-    // Past a 10,000-result offset this endpoint keeps returning full pages while
-    // reporting hasNext: false, so forwarding the flag verbatim ends pagination with
-    // tens of thousands of matches still behind it. Page fullness is the honest signal.
-    const hasNext = resolveHasNext(pageMeta.hasNext, results.length, input.limit);
+    const page = pageMeta.page ?? input.page;
+    /**
+     * A known total settles continuation on page-number paging: rows remain exactly
+     * when this page ends before the total. Without one — the count failed, or the
+     * page came by cursor, whose absolute offset is unknown — page fullness stands
+     * in, since past a 10,000-result offset upstream reports hasNext: false on every
+     * full page and forwarding the flag would strand the matches behind it.
+     */
+    const pagedTotal = usingCursor ? undefined : total;
+    const hasNext =
+      pagedTotal !== undefined
+        ? page * limit < pagedTotal || pageMeta.hasNext === true
+        : resolveHasNext(pageMeta.hasNext, results.length, limit);
     // The keyset cursor is usable only on interior pages. On the final page the upstream
     // returns last_record_unique_id: null and last_record_sort_value: "None" (a stringified
     // Python None) — a bare `!== undefined` forwards that null and crashes the z.number()
@@ -809,8 +937,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     const uniqueCursor = pageMeta.last_record_unique_id;
     const page_metadata = {
       has_next: hasNext,
-      page: pageMeta.page ?? input.page,
-      limit: input.limit,
+      page,
+      limit,
+      ...(total !== undefined ? { total } : {}),
       ...(hasNext &&
       typeof sortCursor === 'string' &&
       sortCursor !== 'None' &&
@@ -827,7 +956,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ...(agencyName ? { applied_agency_name: agencyName } : {}),
       ...(naicsCodes?.length ? { applied_naics_codes: naicsCodes.join(', ') } : {}),
       ...codeFilterEcho(codes),
-      ...(location ? { applied_location: describeLocation(location) } : {}),
+      ...locationFilterEcho(locations),
       ...(timePeriod
         ? {
             applied_time_period_start: timePeriod.start_date,
@@ -836,20 +965,23 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         : {}),
     });
 
+    if (total !== undefined) ctx.enrich.total(total);
+
     // enrich.notice is last-wins, and enrich.truncated writes the notice too, so
     // every notice source joins into one string written at the end.
-    const notices: (string | undefined)[] = [];
+    const notices: (string | undefined)[] = [clampNotice];
 
     /**
-     * Paging guidance follows has_next, which keeps the page-fullness fallback. The
-     * truncated/shown/cap disclosure needs evidence that rows exist past this page — the
-     * upstream hasNext — so an exactly-full final page and every page past the
-     * CURSOR_WINDOW_OFFSET (where hasNext is always false) carry the notice alone.
+     * The truncated/shown/cap disclosure needs evidence that rows exist past this
+     * page: the known total, or the upstream hasNext. Without a total, an exactly-full
+     * final page and every page past the CURSOR_WINDOW_OFFSET (where hasNext is always
+     * false) carry the paging notice alone.
      */
-    if (page_metadata.has_next) {
-      const guidance = `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`;
-      if (pageMeta.hasNext) {
-        ctx.enrich.truncated({ shown: results.length, cap: input.limit, guidance });
+    if (hasNext) {
+      const guidance =
+        pagedTotal !== undefined ? knownTotalGuidance(page, limit, pagedTotal) : CURSOR_GUIDANCE;
+      if (pagedTotal !== undefined || pageMeta.hasNext) {
+        ctx.enrich.truncated({ shown: results.length, cap: limit, guidance });
       }
       notices.push(guidance);
     }
@@ -859,16 +991,18 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       const filterParts: string[] = [];
       if (keywords?.length) filterParts.push(`keyword="${keywords.join(', ')}"`);
       if (agencyName) filterParts.push(`agency="${agencyName}"`);
-      filterParts.push(...describeCodeFilters(codes));
-      if (location) filterParts.push(`location="${describeLocation(location)}"`);
-      if (awardTypeCodes?.length) {
-        filterParts.push(`types=${awardTypeCodes.join(',')}`);
-      }
+      filterParts.push(...describeCodeFilters(codes), ...describeLocationFilters(locations));
+      filterParts.push(`types=${awardTypeCodes.join(',')}`);
+      const filterText = filterParts.join(', ');
       notices.push(
-        filterParts.length > 0
-          ? `Page ${page_metadata.page} returned no awards for ${filterParts.join(', ')}. The API does not supply a total match count.`
-          : `Page ${page_metadata.page} returned no awards. The API does not supply a total match count.`,
+        pagedTotal !== undefined
+          ? emptyPageNotice(page, limit, pagedTotal, `No awards match ${filterText}.`)
+          : `Page ${page} returned no awards for ${filterText}.${total !== undefined ? ` The API reports ${total.toLocaleString()} matching awards across all pages.` : ' The total match count is unavailable, so an empty page does not establish zero matches.'}`,
       );
+    }
+    if (unavailable.length > 0) {
+      ctx.enrich({ unavailable_sections: unavailable });
+      notices.push(unavailableNotice(unavailable));
     }
     const notice = notices.filter(Boolean).join(' ');
     if (notice) ctx.enrich.notice(notice);
@@ -878,8 +1012,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
   format: (result) => {
     const lines: string[] = ['## Federal Award Search Results'];
+    const { total } = result.page_metadata;
     lines.push(
-      `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
+      `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page}${total !== undefined ? ` | **Total matches:** ${total.toLocaleString()}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
     );
     for (const r of result.results) {
       lines.push('');
@@ -891,6 +1026,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         lines.push(
           `**Chain ID (for get_award):** ${escapeMarkdownInline(r.generated_internal_id)}`,
         );
+      if (r.recipient_id)
+        lines.push(`**Recipient ID (for get_recipient):** ${escapeMarkdownInline(r.recipient_id)}`);
+      if (r.uei) lines.push(`**UEI:** ${escapeMarkdownInline(r.uei)}`);
       if (r.agency_slug)
         lines.push(`**Agency Slug (for get_agency):** ${escapeMarkdownInline(r.agency_slug)}`);
       if (typeof r.award_amount === 'number')
@@ -937,9 +1075,13 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         // the MAX_PAGE_OFFSET cap there is no next page to direct to: the handler's own
         // pagination_limit_exceeded guard rejects it.
         const nextPage = result.page_metadata.page + 1;
+        const beyond =
+          total !== undefined
+            ? ` — ${(total - result.page_metadata.page * result.page_metadata.limit).toLocaleString()} matching awards lie past it`
+            : '';
         lines.push(
           nextPage * result.page_metadata.limit > MAX_PAGE_OFFSET
-            ? `**No further pages reachable:** this page sits at the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number cap and no keyset cursor was returned, so nothing beyond it can be read. Narrow the filters to bring the result set inside the window.`
+            ? `**No further pages reachable:** this page sits at the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number cap and no keyset cursor was returned, so nothing beyond it can be read${beyond}. Narrow the filters to bring the result set inside the window.`
             : `**Next page:** request page ${nextPage}. No keyset cursor was returned for this page — the endpoint withholds the pair on a final page and on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset, so continue by page number; a short or empty page marks the true end.`,
         );
       }

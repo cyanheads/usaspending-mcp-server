@@ -35,7 +35,13 @@ export interface RawAwardSummary {
   'Recipient Country Code'?: string | null;
   'Recipient Name'?: string;
   'Recipient State Code'?: string | null;
+  'Recipient UEI'?: string | null;
   'Recipient Zip Code'?: string | null;
+  /**
+   * Recipient hash plus level suffix (`-C`, `-R`, `-P`); null when the award's
+   * recipient key carries no level, as on rows aggregated as MULTIPLE RECIPIENTS.
+   */
+  recipient_id?: string | null;
   'Start Date'?: string | null;
   'Subsidy Cost'?: number | null;
   'Total Outlays'?: number | string | null;
@@ -118,6 +124,7 @@ export interface RawAwardDetail {
   } | null;
   generated_unique_award_id?: string | null;
   id?: number | null;
+  /** Contracts and IDVs only; assistance awards carry no such key. Every member is a nullable string. */
   latest_transaction_contract_data?: {
     naics?: string | null;
     naics_description?: string | null;
@@ -127,6 +134,16 @@ export interface RawAwardDetail {
     type_of_contract_pricing_description?: string | null;
     extent_competed?: string | null;
     extent_competed_description?: string | null;
+    solicitation_procedures?: string | null;
+    solicitation_procedures_description?: string | null;
+    type_set_aside?: string | null;
+    type_set_aside_description?: string | null;
+    other_than_full_and_open?: string | null;
+    other_than_full_and_open_description?: string | null;
+    fair_opportunity_limited?: string | null;
+    fair_opportunity_limited_description?: string | null;
+    /** A digit string (e.g. "4") on most records. */
+    number_of_offers_received?: string | null;
   } | null;
   parent_award?: {
     agency_name?: string | null;
@@ -137,8 +154,6 @@ export interface RawAwardDetail {
     last_date_to_order?: string | null;
     piid?: string | null;
     solicitation_id?: string | null;
-    type_of_set_aside?: string | null;
-    type_of_set_aside_description?: string | null;
   } | null;
   period_of_performance?: {
     start_date?: string | null;
@@ -149,6 +164,8 @@ export interface RawAwardDetail {
   piid?: string | null;
   place_of_performance?: {
     city_name?: string | null;
+    /** Three-digit county FIPS code within the state, leading zeros kept. */
+    county_code?: string | null;
     county_name?: string | null;
     state_code?: string | null;
     state_name?: string | null;
@@ -170,6 +187,8 @@ export interface RawAwardDetail {
       address_line1?: string | null;
       address_line2?: string | null;
       city_name?: string | null;
+      /** Three-digit county FIPS code within the state, leading zeros kept. */
+      county_code?: string | null;
       county_name?: string | null;
       congressional_code?: string | null;
       state_code?: string | null;
@@ -187,6 +206,7 @@ export interface RawAwardDetail {
   total_loan_value?: number | null;
   total_obligation?: number | null;
   total_outlay?: number | null;
+  total_subaward_amount?: number | null;
   total_subsidy_cost?: number | null;
   type?: string | null;
   type_description?: string | null;
@@ -296,7 +316,6 @@ export interface RawRecipientSearchResponse {
 export interface RawRecipientDetail {
   alternate_names?: string[] | null;
   business_types?: string[] | null;
-  children?: unknown[] | null;
   duns?: string | null;
   location?: {
     address_line1?: string | null;
@@ -314,6 +333,18 @@ export interface RawRecipientDetail {
   parent_id?: string | null;
   parent_name?: string | null;
   parent_uei?: string | null;
+  /**
+   * Every parent, in upstream order: a -C child's affiliated parents (which can
+   * include its own -P record), a -P parent itself, `[]` for -R. The single
+   * `parent_*` fields above are the first entry. An entry is all-null when an
+   * affiliated UEI has no recipient record.
+   */
+  parents?: Array<{
+    parent_duns?: string | null;
+    parent_id?: string | null;
+    parent_name?: string | null;
+    parent_uei?: string | null;
+  }> | null;
   recipient_id?: string | null;
   recipient_level?: string | null;
   total_face_value_loan_amount?: number | null;
@@ -398,11 +429,22 @@ export interface RawSubAgencyEntry {
   transaction_count?: number | null;
 }
 
-/** Raw budgetary resources entry */
+/**
+ * Raw budgetary resources entry: one fiscal year, as of that year's latest closed
+ * reporting period.
+ */
 export interface RawBudgetaryResources {
   agency_budget_authority_amount?: number | null;
   agency_budgetary_resources?: number | null;
   agency_obligated_amount?: number | null;
+  /**
+   * Cumulative obligations at each reported period (1–12, 1 = October): quarterly
+   * (3, 6, 9, 12) before FY2022, monthly after. Empty for a year with no submission.
+   */
+  agency_obligation_by_period?: Array<{
+    obligated?: number | null;
+    period?: number | null;
+  }> | null;
   agency_total_obligated?: number | null;
   agency_total_outlayed?: number | null;
   fiscal_year?: number | null;
@@ -423,9 +465,12 @@ export interface RawGeographyResult {
 /**
  * Raw spending by category result. `recipient_duns` rows carry no `id`; they
  * carry `recipient_id` (the recipient hash) and `uei` instead, either of which
- * can be null.
+ * can be null. `defc` rows carry a null `id`. Agency-category rows carry
+ * `agency_slug` — on a subagency row, the parent department's — null when the
+ * agency has no published profile.
  */
 export interface RawSpendingByCategoryResult {
+  agency_slug?: string | null;
   amount?: number | null;
   category?: string | null;
   code?: string | null;
@@ -711,4 +756,41 @@ export interface RawRecipientAutocomplete {
   recipient_level?: string | null;
   recipient_name?: string | null;
   uei?: string | null;
+}
+
+/**
+ * Largest `limit` POST /autocomplete/location/ answers. Its contract allows 500, but
+ * 101 and above draw an HTTP 503 with an empty body (measured at the 100/101 boundary).
+ */
+export const LOCATION_AUTOCOMPLETE_LIMIT_MAX = 100;
+
+/**
+ * Raw response from POST /autocomplete/location/. `limit` applies to each bucket on
+ * its own, an empty bucket is omitted, and a search matching nothing answers
+ * `results: {}`. Names are uppercase upstream spellings (`U.S. VIRGIN ISLANDS`).
+ * The `countries`, `cities`, `zip_codes`, and `districts_original` buckets also
+ * arrive and are not read.
+ */
+export interface RawLocationAutocompleteResponse {
+  count?: number | null;
+  messages?: string[] | null;
+  results?: {
+    /** 5-digit state + county FIPS code in `county_fips`. */
+    counties?: Array<{
+      country_name?: string | null;
+      county_fips?: string | null;
+      county_name?: string | null;
+      state_name?: string | null;
+    }> | null;
+    /**
+     * `current_cd` is the postal code, a dash, and the two-digit district (`WA-07`,
+     * `WY-00`). Built from award records, so it includes codes no district carries (`DC-14`).
+     */
+    districts_current?: Array<{
+      country_name?: string | null;
+      current_cd?: string | null;
+      state_name?: string | null;
+    }> | null;
+    states?: Array<{ country_name?: string | null; state_name?: string | null }> | null;
+  } | null;
 }

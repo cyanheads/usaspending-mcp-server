@@ -6,15 +6,16 @@
 
 /**
  * Resolves the continuation flag for endpoints whose `hasNext` under-reports: one
- * USAspending endpoint, `search/spending_by_award/`, returns a full page while
- * reporting `hasNext: false`, which reads as a clean end-of-results and strands every
- * remaining match. A full page (`shown >= limit`) forces continuation; a short or
- * empty page marks the end.
+ * USAspending endpoint, `search/spending_by_award/`, computes its page-number flag
+ * from Elasticsearch's 10,000-capped hit total. Below a 10,000-result offset the flag
+ * is exact, an exactly-full final page included; from that offset on it reads
+ * `hasNext: false` on every page, full ones included, which reads as a clean
+ * end-of-results and strands every remaining match. A full page (`shown >= limit`)
+ * forces continuation; a short or empty page marks the end.
  *
- * Keyed off page fullness rather than an offset threshold, because that endpoint keeps
- * under-reporting on every subsequent page instead of recovering at a fixed point. The
- * tradeoff is an exactly-full final page reporting one page more than exists — an extra
- * round trip instead of silently truncated results.
+ * The fallback is what over-reports: an exactly-full final page reports one page more
+ * than exists — an extra round trip instead of silently truncated results. Award search
+ * applies it only when it has no total to compare against.
  *
  * Apply it only where the flag is known to lie, or where no independent cross-check
  * exists. Every other paginated endpoint on this server was verified truthful, and a

@@ -281,7 +281,8 @@ describe('award child records through the real service', () => {
     it.each([
       { award_id: '' },
       { award_id: CONTRACT, page: 0 },
-      { award_id: CONTRACT, limit: 101 },
+      { award_id: CONTRACT, limit: 0 },
+      { award_id: CONTRACT, limit: 1.5 },
     ])(`rejects invalid ${endpoint} inputs before upstream I/O`, async (input) => {
       const fetch = servePage(endpoint, {});
       const result = await runChild(endpoint, input);
@@ -495,6 +496,210 @@ describe('usaspending_get_award — fields read from current paths', () => {
   });
 });
 
+describe('usaspending_get_award — competition, pricing, county codes, subaward total (#112)', () => {
+  /** The contract fixture with its competition members replaced. */
+  const contractWith = (competition: Record<string, unknown>) => {
+    const record = fixture(CONTRACT);
+    return {
+      ...record,
+      latest_transaction_contract_data: {
+        ...(record.latest_transaction_contract_data as Record<string, unknown>),
+        ...competition,
+      },
+    };
+  };
+  const NO_COMPETITION = {
+    extent_competed: null,
+    extent_competed_description: null,
+    solicitation_procedures: null,
+    solicitation_procedures_description: null,
+    type_set_aside: null,
+    type_set_aside_description: null,
+    other_than_full_and_open: null,
+    other_than_full_and_open_description: null,
+    fair_opportunity_limited: null,
+    fair_opportunity_limited_description: null,
+    number_of_offers_received: null,
+  };
+
+  it('returns the populated competition attributes of a contract order and its pricing on both surfaces', async () => {
+    const { structured, text } = await run(fixture(CONTRACT));
+
+    expect(structured.competition).toEqual({
+      extent_competed: { code: 'A', description: 'FULL AND OPEN COMPETITION' },
+      solicitation_procedures: {
+        code: 'MAFO',
+        description: 'SUBJECT TO MULTIPLE AWARD FAIR OPPORTUNITY',
+      },
+      fair_opportunity_limited: { code: 'FAIR', description: 'FAIR OPPORTUNITY GIVEN' },
+      number_of_offers_received: 2,
+    });
+    expect(structured.contract_pricing).toEqual({ code: 'J', description: 'FIRM FIXED PRICE' });
+    for (const line of [
+      '### Competition',
+      '**Extent Competed:** A — FULL AND OPEN COMPETITION',
+      '**Solicitation Procedures:** MAFO — SUBJECT TO MULTIPLE AWARD FAIR OPPORTUNITY',
+      '**Fair Opportunity Limited:** FAIR — FAIR OPPORTUNITY GIVEN',
+      '**Offers Received:** 2',
+      '**Contract Pricing:** J — FIRM FIXED PRICE',
+    ])
+      expect(text).toContain(line);
+    expect(text).not.toContain('Set-Aside');
+    expect(text).not.toContain('Other Than Full and Open');
+  });
+
+  it('returns the not-competed justification and set-aside when upstream reports them', async () => {
+    const { structured, text } = await run(
+      contractWith({
+        extent_competed: 'C',
+        extent_competed_description: 'NOT COMPETED',
+        solicitation_procedures: 'SSS',
+        solicitation_procedures_description: 'ONLY ONE SOURCE',
+        other_than_full_and_open: 'PI',
+        other_than_full_and_open_description: 'PUBLIC INTEREST (FAR 6.302-7)',
+        fair_opportunity_limited: null,
+        fair_opportunity_limited_description: null,
+        type_set_aside: 'SBA',
+        type_set_aside_description: 'SMALL BUSINESS SET ASIDE - TOTAL',
+        number_of_offers_received: null,
+      }),
+    );
+
+    expect(structured.competition).toEqual({
+      extent_competed: { code: 'C', description: 'NOT COMPETED' },
+      solicitation_procedures: { code: 'SSS', description: 'ONLY ONE SOURCE' },
+      type_set_aside: { code: 'SBA', description: 'SMALL BUSINESS SET ASIDE - TOTAL' },
+      other_than_full_and_open: { code: 'PI', description: 'PUBLIC INTEREST (FAR 6.302-7)' },
+    });
+    expect(text).toContain('**Other Than Full and Open:** PI — PUBLIC INTEREST (FAR 6.302-7)');
+    expect(text).toContain('**Set-Aside:** SBA — SMALL BUSINESS SET ASIDE - TOTAL');
+    expect(text).not.toContain('Offers Received');
+  });
+
+  it('returns the competition block of an IDV', async () => {
+    const { structured } = await run(fixture(IDV));
+
+    expect(structured.competition).toEqual({
+      extent_competed: { code: 'A', description: 'FULL AND OPEN COMPETITION' },
+      solicitation_procedures: { code: 'NP', description: 'NEGOTIATED PROPOSAL/QUOTE' },
+      type_set_aside: { code: 'NONE', description: 'NO SET ASIDE USED.' },
+      number_of_offers_received: 999,
+    });
+    expect(structured.contract_pricing).toEqual({
+      code: 'K',
+      description: 'FIXED PRICE WITH ECONOMIC PRICE ADJUSTMENT',
+    });
+  });
+
+  it('omits competition for an IDV whose competition members are all null, keeping its pricing', async () => {
+    const record = fixture(IDV);
+    const { structured, text } = await run({
+      ...record,
+      latest_transaction_contract_data: {
+        ...(record.latest_transaction_contract_data as Record<string, unknown>),
+        ...NO_COMPETITION,
+      },
+    });
+
+    expect(structured).not.toHaveProperty('competition');
+    expect(structured.contract_pricing).toEqual({
+      code: 'K',
+      description: 'FIXED PRICE WITH ECONOMIC PRICE ADJUSTMENT',
+    });
+    expect(text).not.toContain('### Competition');
+    expect(text).toContain('**Contract Pricing:** K — FIXED PRICE WITH ECONOMIC PRICE ADJUSTMENT');
+  });
+
+  it('keeps a code whose description is null, and a description whose code is null', async () => {
+    const { structured } = await run(
+      contractWith({
+        ...NO_COMPETITION,
+        extent_competed: 'A',
+        type_set_aside_description: 'NO SET ASIDE USED.',
+        type_of_contract_pricing: null,
+        type_of_contract_pricing_description: null,
+      }),
+    );
+
+    expect(structured.competition).toEqual({
+      extent_competed: { code: 'A' },
+      type_set_aside: { description: 'NO SET ASIDE USED.' },
+    });
+    expect(structured).not.toHaveProperty('contract_pricing');
+  });
+
+  it.each([GRANT, LOAN])('returns no competition or contract_pricing for %s', async (id) => {
+    const { structured, text } = await run(fixture(id));
+
+    expect(structured).not.toHaveProperty('competition');
+    expect(structured).not.toHaveProperty('contract_pricing');
+    expect(text).not.toContain('Competition');
+    expect(text).not.toContain('Contract Pricing');
+  });
+
+  it.each([
+    ['"4"', '4', 4],
+    ['a leading zero', '04', 4],
+    ['a non-numeric string', '1 TO 3', '1 TO 3'],
+    ['a decimal string', '2.5', '2.5'],
+  ])('converts number_of_offers_received %s', async (_label, sent, expected) => {
+    const { structured, text } = await run(
+      contractWith({ ...NO_COMPETITION, number_of_offers_received: sent }),
+    );
+
+    expect(structured.competition).toEqual({ number_of_offers_received: expected });
+    expect(text).toContain(`**Offers Received:** ${String(expected)}`);
+  });
+
+  it('returns county codes with leading zeros on both locations and both surfaces', async () => {
+    const { structured, text } = await run(fixture(GRANT));
+
+    expect(structured.place_of_performance).toMatchObject({ county_code: '099' });
+    expect(structured.recipient).toMatchObject({ location: { county_code: '099' } });
+    expect(text).toContain('**Performance County Code:** 099');
+    expect(text).toContain('**Recipient County Code:** 099');
+  });
+
+  it('omits a null county_code and keeps an all-null place of performance absent', async () => {
+    const idv = await run(fixture(IDV));
+    expect(idv.structured).not.toHaveProperty('place_of_performance');
+    expect(idv.structured.recipient).toMatchObject({ location: { county_code: '491' } });
+
+    const record = fixture(CONTRACT);
+    const { structured, text } = await run({
+      ...record,
+      place_of_performance: {
+        ...(record.place_of_performance as Record<string, unknown>),
+        county_code: null,
+      },
+    });
+    expect(structured.place_of_performance).not.toHaveProperty('county_code');
+    expect(text).not.toContain('Performance County Code');
+  });
+
+  it.each([
+    ['a total', 56, 16_780_540.85, '$16,780,540.85'],
+    ['a zero total', 0, 0, '$0'],
+  ])('returns %s of subawards beside the count', async (_label, count, total, rendered) => {
+    const { structured, text } = await run({
+      ...fixture(CONTRACT),
+      subaward_count: count,
+      total_subaward_amount: total,
+    });
+
+    expect(structured).toMatchObject({ subaward_count: count, total_subaward_amount: total });
+    expect(text).toContain(`**Total Subaward Amount:** ${rendered}`);
+  });
+
+  it('omits a null total_subaward_amount', async () => {
+    const { structured, text } = await run(fixture(CONTRACT));
+
+    expect(structured.subaward_count).toBe(0);
+    expect(structured).not.toHaveProperty('total_subaward_amount');
+    expect(text).not.toContain('Total Subaward Amount');
+  });
+});
+
 describe('usaspending_get_award — assistance listings (#68)', () => {
   it('returns the single listing of a grant with its obligation', async () => {
     const { structured, text } = await run(fixture(GRANT));
@@ -569,6 +774,7 @@ describe('usaspending_get_award — recipient identity and location (#68)', () =
       country_code: 'USA',
       congressional_code: '90',
       county_name: 'STANISLAUS',
+      county_code: '099',
     });
     expect(structured.recipient).not.toHaveProperty('business_types');
     // Upstream nulls the parent identifiers on a standalone recipient.

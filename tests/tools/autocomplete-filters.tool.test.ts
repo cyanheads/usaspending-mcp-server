@@ -6,12 +6,13 @@
 import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { autocompleteFiltersTool } from '@/mcp-server/tools/definitions/autocomplete-filters.tool.js';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 import { spendingByCategoryTool } from '@/mcp-server/tools/definitions/spending-by-category.tool.js';
 import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending-by-geography.tool.js';
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
 import { markdownText } from '../helpers/markdown-text.js';
 
 const mockAutocompleteNaics = vi.fn();
@@ -19,6 +20,7 @@ const mockAutocompletePsc = vi.fn();
 const mockAutocompleteCfda = vi.fn();
 const mockAutocompleteAwardingAgency = vi.fn();
 const mockAutocompleteRecipient = vi.fn();
+const mockAutocompleteLocation = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
@@ -27,8 +29,122 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
     autocompleteCfda: mockAutocompleteCfda,
     autocompleteAwardingAgency: mockAutocompleteAwardingAgency,
     autocompleteRecipient: mockAutocompleteRecipient,
+    autocompleteLocation: mockAutocompleteLocation,
   }),
 }));
+
+/**
+ * Wiring of the shared count-limit mechanism, whose full table lives in
+ * tests/tools/count-limit.test.ts.
+ */
+describe('limit above the 500 cap (#99)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const mock of [mockAutocompleteNaics, mockAutocompletePsc, mockAutocompleteRecipient]) {
+      mock.mockReset();
+    }
+  });
+
+  const joined = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+  const clampSentence = 'limit 501 exceeds the per-call maximum of 500; this call used limit 500.';
+
+  it('reads limit 501 as 500, keeping the clamp sentence beside the upstream-maximum notice on both surfaces', async () => {
+    mockAutocompletePsc.mockResolvedValueOnce({
+      results: Array.from({ length: 500 }, (_, i) => ({
+        product_or_service_code: `W${i}`,
+        psc_description: `Water ${i}`,
+      })),
+    });
+
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'psc',
+      search_text: 'water',
+      limit: 501,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockAutocompletePsc).toHaveBeenLastCalledWith('water', 500, expect.anything());
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc).toMatchObject({
+      total: 500,
+      result_count: 500,
+      limitClamp: { field: 'limit', requested: 501, applied: 500 },
+    });
+    expect(sc.truncated).toBeUndefined();
+    expect(sc.notice).toBe(
+      `${clampSentence} Returned the upstream maximum of 500 matches, so more may exist. Use a more specific search term.`,
+    );
+    expect(joined(result)).toContain('**Limit clamp:** `limit` requested 501, applied 500');
+    const text = markdownText(joined(result));
+    expect(text).toContain(clampSentence);
+    expect(text).toContain('upstream maximum of 500');
+  });
+
+  it('keeps the clamp sentence beside truncation guidance, judged against the applied limit', async () => {
+    // Recipient buckets are capped per match type, so 500 requested can return more.
+    mockAutocompleteRecipient.mockResolvedValueOnce({
+      results: Array.from({ length: 501 }, (_, i) => ({ recipient_name: `NAME ${i}` })),
+    });
+
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'recipient',
+      search_text: 'a',
+      limit: 501,
+    });
+
+    expect(mockAutocompleteRecipient).toHaveBeenLastCalledWith('a', 500, expect.anything());
+    const sc = result.structuredContent as Record<string, unknown>;
+    expect(sc).toMatchObject({ total: 500, truncated: true, shown: 500, cap: 500 });
+    expect(sc.notice).toContain(`${clampSentence} More matches exist beyond limit.`);
+    expect(sc.notice).toContain('search_text');
+    expect(markdownText(joined(result))).toContain(clampSentence);
+  });
+
+  it('reports no clamp at the cap', async () => {
+    mockAutocompleteNaics.mockResolvedValueOnce({
+      results: [{ naics: '221310', naics_description: 'Water Supply' }],
+    });
+
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'naics',
+      search_text: 'water',
+      limit: 500,
+    });
+
+    expect(result.structuredContent).not.toHaveProperty('limitClamp');
+    expect(result.structuredContent).not.toHaveProperty('notice');
+  });
+
+  it('advertises no maximum by default, and maximum 500 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(autocompleteFiltersTool.input, 'limit')).toMatchObject({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+    });
+    expect(advertisedProperty(autocompleteFiltersTool.input, 'limit')).not.toHaveProperty(
+      'maximum',
+    );
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/autocomplete-filters.tool.js'))
+          .autocompleteFiltersTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 500 });
+    mockAutocompleteNaics.mockClear();
+    const rejected = await runToolContract(strict, {
+      type: 'naics',
+      search_text: 'water',
+      limit: 501,
+    });
+    expect(rejected.isError).toBe(true);
+    expect(markdownText(joined(rejected))).toContain('Too big: expected number to be <=500');
+    expect(mockAutocompleteNaics).not.toHaveBeenCalled();
+  });
+});
 
 describe('autocompleteFiltersTool', () => {
   it('registers under the renamed tool identifier', () => {
@@ -522,16 +638,17 @@ describe('autocompleteFiltersTool', () => {
   });
 
   it('accepts limit up to the new max of 500 for every type', () => {
-    for (const type of ['naics', 'psc', 'cfda', 'awarding_agency', 'recipient'] as const) {
+    for (const type of [
+      'naics',
+      'psc',
+      'cfda',
+      'awarding_agency',
+      'recipient',
+      'location',
+    ] as const) {
       const input = autocompleteFiltersTool.input.parse({ type, search_text: 'x', limit: 500 });
       expect(input.limit).toBe(500);
     }
-  });
-
-  it('rejects a limit above the 500 ceiling', () => {
-    expect(() =>
-      autocompleteFiltersTool.input.parse({ type: 'recipient', search_text: 'x', limit: 501 }),
-    ).toThrow();
   });
 
   it('passes the raised limit through to the service', async () => {
@@ -698,5 +815,405 @@ describe('autocompleteFiltersTool', () => {
     expect(text).toContain('513210');
     expect(text).toContain('Software Publishers');
     expect(text).toContain('**Total:** 2');
+  });
+});
+
+/** `autocomplete/location/` responses below are verbatim live bodies unless named synthetic. */
+describe('type location (#108)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mockAutocompleteLocation.mockReset();
+  });
+
+  const US = 'UNITED STATES';
+  const KING_COUNTY = {
+    count: 4,
+    results: {
+      cities: [
+        { city_name: 'KING COUNTY', state_name: 'TEXAS', country_name: US },
+        { city_name: 'KING COUNTY', state_name: 'WASHINGTON', country_name: US },
+      ],
+      counties: [
+        { county_name: 'KING', county_fips: '48269', state_name: 'TEXAS', country_name: US },
+        { county_name: 'KING', county_fips: '53033', state_name: 'WASHINGTON', country_name: US },
+      ],
+    },
+    messages: [''],
+  };
+  const SANTA_FE = {
+    count: 11,
+    results: {
+      cities: ['CUBA', 'PERU', 'CHILE', 'SPAIN', 'BRAZIL', 'MEXICO', 'GUYANA', 'PANAMA'].map(
+        (country_name) => ({ city_name: 'SANTA FE', country_name }),
+      ),
+      counties: [
+        {
+          county_name: 'SANTA FE',
+          county_fips: '35049',
+          state_name: 'NEW MEXICO',
+          country_name: US,
+        },
+      ],
+    },
+    messages: [''],
+  };
+  const WA_07 = {
+    count: 2,
+    results: {
+      districts_original: [{ original_cd: 'WA-07', state_name: 'WASHINGTON', country_name: US }],
+      districts_current: [{ current_cd: 'WA-07', state_name: 'WASHINGTON', country_name: US }],
+    },
+    messages: [''],
+  };
+  const WASHINGTON = {
+    count: 11,
+    results: {
+      cities: [
+        { city_name: 'WASHINGTON', country_name: 'PERU' },
+        { city_name: 'WASHINGTON', country_name: 'CUBA' },
+      ],
+      states: [{ state_name: 'WASHINGTON', country_name: US }],
+      counties: [
+        { county_name: 'WASHINGTON', county_fips: '49053', state_name: 'UTAH', country_name: US },
+        { county_name: 'WASHINGTON', county_fips: '39167', state_name: 'OHIO', country_name: US },
+      ],
+    },
+    messages: [''],
+  };
+  const US_DOT = {
+    count: 1,
+    results: { states: [{ state_name: 'U.S. VIRGIN ISLANDS', country_name: US }] },
+    messages: [''],
+  };
+  const DENMARK = {
+    count: 6,
+    results: {
+      countries: [{ country_name: 'DENMARK' }],
+      cities: [
+        { city_name: 'DENMARK', country_name: 'CANADA' },
+        { city_name: 'DENMARK', state_name: 'OREGON', country_name: US },
+      ],
+    },
+    messages: [''],
+  };
+  const ZIP_98101 = {
+    count: 1,
+    results: { zip_codes: [{ zip_code: '98101', state_name: 'WASHINGTON', country_name: US }] },
+    messages: [''],
+  };
+
+  const run = (search_text: string, response: unknown, limit?: number) => {
+    mockAutocompleteLocation.mockResolvedValueOnce(response);
+    return runToolContract(autocompleteFiltersTool, {
+      type: 'location',
+      search_text,
+      ...(limit === undefined ? {} : { limit }),
+    });
+  };
+  const rowsOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    (result.structuredContent as { results: Record<string, unknown>[] }).results;
+  const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    markdownText(result.content.map((b) => ('text' in b ? b.text : '')).join('\n'));
+
+  it.each([
+    [
+      'King County',
+      KING_COUNTY,
+      [
+        { kind: 'county', code: '48269', name: 'KING', state: 'TX' },
+        { kind: 'county', code: '53033', name: 'KING', state: 'WA' },
+      ],
+    ],
+    ['Santa Fe', SANTA_FE, [{ kind: 'county', code: '35049', name: 'SANTA FE', state: 'NM' }]],
+    ['WA-07', WA_07, [{ kind: 'district', code: '5307', name: 'WA-07', state: 'WA' }]],
+    [
+      'Washington',
+      WASHINGTON,
+      [
+        { kind: 'state', code: 'WA', name: 'WASHINGTON' },
+        { kind: 'county', code: '49053', name: 'WASHINGTON', state: 'UT' },
+        { kind: 'county', code: '39167', name: 'WASHINGTON', state: 'OH' },
+      ],
+    ],
+    ['U.S.', US_DOT, [{ kind: 'state', code: 'VI', name: 'U.S. VIRGIN ISLANDS' }]],
+  ])('resolves "%s" to the codes its filters take, on both surfaces', async (text, body, rows) => {
+    const result = await run(text, body);
+
+    expect(result.isError).toBeFalsy();
+    expect(mockAutocompleteLocation).toHaveBeenLastCalledWith(text, 11, expect.anything());
+    expect(rowsOf(result)).toEqual(rows);
+    expect(result.structuredContent).toMatchObject({
+      type: 'location',
+      total: rows.length,
+      lookup_type: 'location',
+      result_count: rows.length,
+    });
+    expect(result.structuredContent).not.toHaveProperty('truncated');
+    const content = textOf(result);
+    for (const row of rows) {
+      for (const value of Object.values(row)) expect(content).toContain(value);
+    }
+    expect(content).not.toMatch(/PERU|CUBA|COUNTRY|original/i);
+  });
+
+  it('maps districts as state FIPS + district number, at-large and DC included', async () => {
+    const result = await run('D', {
+      results: {
+        districts_current: [
+          { current_cd: 'WY-00', state_name: 'WYOMING', country_name: US },
+          { current_cd: 'DC-98', state_name: 'DISTRICT OF COLUMBIA', country_name: US },
+          // Upstream lists codes no district carries; the code is still the shape_code form.
+          { current_cd: 'DC-14', state_name: 'DISTRICT OF COLUMBIA', country_name: US },
+          { current_cd: 'PR-98', state_name: 'PUERTO RICO', country_name: US },
+        ],
+      },
+    });
+
+    expect(rowsOf(result).map((r) => [r.code, r.name, r.state])).toEqual([
+      ['5600', 'WY-00', 'WY'],
+      ['1198', 'DC-98', 'DC'],
+      ['1114', 'DC-14', 'DC'],
+      ['7298', 'PR-98', 'PR'],
+    ]);
+  });
+
+  it('produces no row for an unmapped state name, a stateless district, or an unusable county, guessing no code (synthetic)', async () => {
+    const result = await run('X', {
+      results: {
+        states: [
+          { state_name: 'FEDERATED STATES OF MICRONESIA', country_name: US },
+          { state_name: 'VIRGIN ISLANDS', country_name: US },
+          { state_name: 'Washington', country_name: US },
+          { state_name: null, country_name: US },
+          { state_name: 'GUAM', country_name: US },
+        ],
+        counties: [
+          { county_name: 'NOWHERE', county_fips: '99001', state_name: 'NOWHERE' },
+          { county_name: 'SHORT', county_fips: '5303', state_name: 'WASHINGTON' },
+          { county_name: 'MISSING', county_fips: null, state_name: 'WASHINGTON' },
+          { county_name: null, county_fips: '66010', state_name: 'GUAM' },
+        ],
+        districts_current: [
+          { current_cd: 'AE-01', state_name: 'ARMED FORCES EUROPE' },
+          { current_cd: 'WA07', state_name: 'WASHINGTON' },
+          { current_cd: 'WA-7', state_name: 'WASHINGTON' },
+          { current_cd: null, state_name: 'WASHINGTON' },
+          { current_cd: 'GU-98', state_name: 'GUAM' },
+        ],
+      },
+    });
+
+    expect(rowsOf(result)).toEqual([
+      { kind: 'state', code: 'GU', name: 'GUAM' },
+      { kind: 'county', code: '66010', state: 'GU' },
+      { kind: 'district', code: '6698', name: 'GU-98', state: 'GU' },
+    ]);
+  });
+
+  it.each([
+    ['countries and cities only', 'Denmark', DENMARK],
+    ['a ZIP code only', '98101', ZIP_98101],
+    ['nothing', 'Federated', { count: 0, results: {}, messages: [''] }],
+    [
+      'only rows no code is mapped for (synthetic)',
+      'Federated',
+      { results: { states: [{ state_name: 'FEDERATED STATES OF MICRONESIA', country_name: US }] } },
+    ],
+  ])(
+    'fails as no_match naming the three kinds when the search matches %s',
+    async (_, text, body) => {
+      const result = await run(text, body);
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.NotFound,
+          data: {
+            reason: 'no_match',
+            recovery: { hint: expect.stringContaining('countries, cities, or ZIP codes') },
+          },
+        },
+      });
+      const content = textOf(result);
+      expect(content).toContain(`No US state, county, or congressional district matched "${text}"`);
+      expect(content).toContain('not countries, cities, or ZIP codes');
+    },
+  );
+
+  it.each([
+    [1, 2],
+    [10, 11],
+    [99, 100],
+    [100, 100],
+    [500, 100],
+    [501, 100],
+  ])('asks upstream for at most 100 rows per kind at limit %i (sends %i)', async (limit, sent) => {
+    await run('King County', KING_COUNTY, limit);
+
+    expect(mockAutocompleteLocation).toHaveBeenLastCalledWith(
+      'King County',
+      sent,
+      expect.anything(),
+    );
+  });
+
+  it('combines states, counties, then districts under limit and discloses the rows left out', async () => {
+    const result = await run(
+      'W',
+      {
+        results: {
+          states: [
+            { state_name: 'WASHINGTON', country_name: US },
+            { state_name: 'WYOMING', country_name: US },
+          ],
+          counties: [
+            { county_name: 'KING', county_fips: '53033', state_name: 'WASHINGTON' },
+            { county_name: 'TETON', county_fips: '56039', state_name: 'WYOMING' },
+          ],
+          districts_current: [{ current_cd: 'WY-00', state_name: 'WYOMING' }],
+        },
+      },
+      3,
+    );
+
+    expect(rowsOf(result).map((r) => [r.kind, r.code])).toEqual([
+      ['state', 'WA'],
+      ['state', 'WY'],
+      ['county', '53033'],
+    ]);
+    expect(result.structuredContent).toMatchObject({
+      total: 3,
+      truncated: true,
+      shown: 3,
+      cap: 3,
+      notice:
+        'More matches exist beyond limit. Raise limit (max 500) or use a more specific search term.',
+    });
+    expect(textOf(result)).toContain('More matches exist beyond limit.');
+  });
+
+  it('leaves a page that exactly fills limit from unfilled buckets untruncated', async () => {
+    const result = await run('King County', KING_COUNTY, 2);
+
+    expect(rowsOf(result)).toHaveLength(2);
+    expect(result.structuredContent).not.toHaveProperty('truncated');
+    expect(result.structuredContent).not.toHaveProperty('notice');
+  });
+
+  it('discloses truncation when a bucket holds the probe row although dropped rows leave the page short (synthetic)', async () => {
+    // limit 2 asks for 3 per kind; all 3 states came back, but only one maps.
+    const result = await run(
+      'X',
+      {
+        results: {
+          states: [
+            { state_name: 'GUAM', country_name: US },
+            { state_name: 'ATLANTIS', country_name: US },
+            { state_name: 'LEMURIA', country_name: US },
+          ],
+        },
+      },
+      2,
+    );
+
+    expect(rowsOf(result)).toEqual([{ kind: 'state', code: 'GU', name: 'GUAM' }]);
+    expect(result.structuredContent).toMatchObject({ truncated: true, shown: 1, cap: 2 });
+  });
+
+  describe('the 100-per-kind upstream ceiling', () => {
+    const counties = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        county_name: `COUNTY ${i}`,
+        county_fips: `53${String(i).padStart(3, '0')}`,
+        state_name: 'WASHINGTON',
+      }));
+    const districts = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        current_cd: `CA-${String(i % 100).padStart(2, '0')}`,
+        state_name: 'CALIFORNIA',
+      }));
+    const ceiling = (kinds: string) =>
+      `Upstream returns at most 100 location matches of each kind, and the ${kinds} matches reached it, so more may exist. Use a more specific search term.`;
+
+    it('says a kind reached the ceiling when its bucket filled 100 rows without a probe row', async () => {
+      const result = await run('C', { results: { counties: counties(100) } }, 100);
+
+      expect(rowsOf(result)).toHaveLength(100);
+      expect(result.structuredContent).not.toHaveProperty('truncated');
+      expect((result.structuredContent as { notice?: string }).notice).toBe(ceiling('county'));
+      expect(textOf(result)).toContain(ceiling('county'));
+    });
+
+    it('stays silent at limit 100 when no bucket filled', async () => {
+      const result = await run('C', { results: { counties: counties(99) } }, 100);
+
+      expect(rowsOf(result)).toHaveLength(99);
+      expect(result.structuredContent).not.toHaveProperty('notice');
+    });
+
+    it('treats a filled bucket at limit 99 as truncation, the probe row proving more', async () => {
+      const result = await run('C', { results: { counties: counties(100) } }, 99);
+
+      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 99, cap: 99 });
+      expect((result.structuredContent as { notice?: string }).notice).not.toContain('Upstream');
+    });
+
+    it('names every kind at the ceiling beside truncation guidance', async () => {
+      const result = await run(
+        'C',
+        { results: { counties: counties(100), districts_current: districts(100) } },
+        150,
+      );
+
+      expect(rowsOf(result)).toHaveLength(150);
+      expect(rowsOf(result)[100]).toMatchObject({ kind: 'district', code: '0600', state: 'CA' });
+      expect(result.structuredContent).toMatchObject({
+        truncated: true,
+        shown: 150,
+        cap: 150,
+        notice: `More matches exist beyond limit. Raise limit (max 500) or use a more specific search term. ${ceiling('county and district')}`,
+      });
+    });
+
+    it('keeps the clamp sentence beside the ceiling sentence at limit 501', async () => {
+      const result = await run('C', { results: { counties: counties(100) } }, 501);
+
+      expect(result.structuredContent).toMatchObject({
+        limitClamp: { field: 'limit', requested: 501, applied: 500 },
+        notice: `limit 501 exceeds the per-call maximum of 500; this call used limit 500. ${ceiling('county')}`,
+      });
+      expect(result.structuredContent).not.toHaveProperty('truncated');
+    });
+  });
+
+  it('formats location rows with kind, code, name, and state', () => {
+    const text = (
+      autocompleteFiltersTool.format!({
+        type: 'location',
+        search_text: 'King County',
+        results: [
+          { kind: 'state', code: 'VI', name: 'U.S. VIRGIN ISLANDS' },
+          { kind: 'county', code: '53033', name: 'KING', state: 'WA' },
+        ],
+        total: 2,
+      })[0] as { text: string }
+    ).text;
+
+    expect(text).toContain('**Kind:** state | **Code:** VI | **Name:** U.S. VIRGIN ISLANDS');
+    expect(text).toContain('**Kind:** county | **Code:** 53033 | **Name:** KING | **State:** WA');
+  });
+
+  it('leaves the other lookup types off the location route', async () => {
+    mockAutocompleteNaics.mockResolvedValueOnce({
+      results: [{ naics: '221310', naics_description: 'Water Supply' }],
+    });
+
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'naics',
+      search_text: 'water',
+    });
+
+    expect(mockAutocompleteLocation).not.toHaveBeenCalled();
+    expect(rowsOf(result)).toEqual([{ code: '221310', name: 'Water Supply' }]);
   });
 });

@@ -3,9 +3,10 @@
  * @module tests/tools/get-award-federal-accounts.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAwardFederalAccountsTool } from '@/mcp-server/tools/definitions/get-award-federal-accounts.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
 import { markdownText } from '../helpers/markdown-text.js';
 
 const mockGetAwardFederalAccounts = vi.fn();
@@ -13,6 +14,81 @@ const mockGetAwardFederalAccounts = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ getAwardFederalAccounts: mockGetAwardFederalAccounts }),
 }));
+
+/** Wiring of the shared count-limit mechanism (full table in tests/tools/count-limit.test.ts). */
+describe('limit above the 100 cap (#99)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mockGetAwardFederalAccounts.mockReset();
+  });
+
+  const raw = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+
+  it('reads limit 101 as 100: the request, page_metadata.limit, limitClamp, and the notice on both surfaces', async () => {
+    mockGetAwardFederalAccounts.mockResolvedValueOnce({
+      results: [{ federal_account: '080-0120' }],
+      page_metadata: { page: 1, count: 1, hasNext: false, hasPrevious: false },
+    });
+
+    const result = await runToolContract(getAwardFederalAccountsTool, {
+      award_id: 'CONT_AWD_X',
+      limit: 101,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockGetAwardFederalAccounts.mock.calls[0]?.[0]).toMatchObject({ limit: 100, page: 1 });
+    expect(result.structuredContent).toMatchObject({
+      page_metadata: { limit: 100 },
+      limitClamp: { field: 'limit', requested: 101, applied: 100 },
+      notice: 'limit 101 exceeds the per-call maximum of 100; this call used limit 100.',
+    });
+    expect(raw(result)).toContain('**Per page:** 100');
+    expect(raw(result)).toContain('**Limit clamp:** `limit` requested 101, applied 100');
+    expect(markdownText(raw(result))).toContain('limit 101 exceeds the per-call maximum of 100');
+  });
+
+  it('places an empty page against the applied limit, the clamp sentence beside that notice', async () => {
+    // Page 2 of 101 accounts: at limit 100 it is not past the end; at 101 it would be.
+    mockGetAwardFederalAccounts.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { page: 2, count: 101, hasNext: false, hasPrevious: true },
+    });
+
+    const result = await runToolContract(getAwardFederalAccountsTool, {
+      award_id: 'CONT_AWD_X',
+      limit: 101,
+      page: 2,
+    });
+
+    const notice = (result.structuredContent as { notice?: string }).notice;
+    expect(notice).toBe(
+      'limit 101 exceeds the per-call maximum of 100; this call used limit 100. Page 2 returned no results. The API reports 101 matching results across all pages.',
+    );
+  });
+
+  it('advertises no maximum by default, and maximum 100 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(getAwardFederalAccountsTool.input, 'limit')).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+      description: 'Funding accounts per page. Default 10, at most 100 per call.',
+    });
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/get-award-federal-accounts.tool.js'))
+          .getAwardFederalAccountsTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 100 });
+    const rejected = await runToolContract(strict, { award_id: 'X', limit: 101 });
+    expect(rejected.isError).toBe(true);
+    expect(raw(rejected)).toContain('Too big: expected number to be <=100');
+    expect(mockGetAwardFederalAccounts).not.toHaveBeenCalled();
+  });
+});
 
 describe('getAwardFederalAccountsTool', () => {
   it('returns funding accounts with every field the upstream row carries', async () => {

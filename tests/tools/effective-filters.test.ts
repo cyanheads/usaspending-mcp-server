@@ -20,10 +20,19 @@ vi.mock('@/services/usaspending/usaspending-service.js', async (original) => ({
 const http = createFetchMock();
 beforeEach(() => {
   http.reset();
-  http.route({
-    match: () => true,
-    respond: () => Response.json({ results: [], page_metadata: { page: 3, hasNext: false } }),
-  });
+  http.route(
+    {
+      match: 'https://api.usaspending.gov/api/v2/search/spending_by_award_count/',
+      respond: () =>
+        Response.json({
+          results: { contracts: 0, idvs: 0, grants: 0, direct_payments: 0, loans: 0, other: 0 },
+        }),
+    },
+    {
+      match: () => true,
+      respond: () => Response.json({ results: [], page_metadata: { page: 3, hasNext: false } }),
+    },
+  );
   http.install();
   upstream.service = new USASpendingService({} as AppConfig, {} as StorageService, {
     baseUrl: 'https://api.usaspending.gov/api/v2/',

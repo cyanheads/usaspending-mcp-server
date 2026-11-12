@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countInput } from './count-limit.js';
 import {
   ANALYTICS_DATE_FIELDS,
   filledBoundNotice,
@@ -16,11 +17,16 @@ import {
 } from './dates.js';
 import {
   analyticsTypeMismatch,
+  applyLocationFilters,
   buildFilters,
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
+  describeLocationFilters,
+  LOCATION_FILTER_FIELDS,
+  locationFilterEcho,
   normalizeEffectiveFilters,
+  resolveLocationFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
 
@@ -58,6 +64,7 @@ const SpendingFiltersSchema = z
         'NAICS codes: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize whitespace, plus, leading zeros and digit underscores; unclassified spellings remain provider-validated',
       ),
     ...CODE_FILTER_FIELDS,
+    ...LOCATION_FILTER_FIELDS,
     time_period_start: optionalIsoDate(
       'Start of time period (YYYY-MM-DD), 2007-10-01 or later. Given alone, the period runs through today (UTC).',
     ),
@@ -122,7 +129,7 @@ const SHAPE_CODE_FORM = {
 export const spendingByGeographyTool = tool('usaspending_spending_by_geography', {
   title: 'Spending by Geography',
   description:
-    'Aggregate federal spending by state, county, or congressional district. Useful for per-capita analysis, regional comparisons, and mapping federal investment patterns. Filter by keyword, award type, agency, recipient, NAICS code, Assistance Listing, PSC, DEF code, or date range. Areas are ranked by obligation and capped at limit; to retrieve specific areas, including ones ranked past the cap, list their codes in shape_codes — a 2-letter postal code for state, a 5-digit state + county FIPS code for county, or a 4-digit state FIPS + district number for district — NOT place names. Resolve place names to these codes using a geocoding server (Census or OpenStreetMap) first. Chain per-capita results with Census population data for meaningful comparisons.',
+    'Aggregate federal spending by state, county, or congressional district. Useful for per-capita analysis, regional comparisons, and mapping federal investment patterns. Filter by keyword, award type, agency, recipient, NAICS code, Assistance Listing, PSC, DEF code, place of performance or recipient location, or date range. scope picks the location results are grouped by, separately from the location filters: the counties of one state are geo_layer county with filters.place_of_performance_location set to that state and scope place_of_performance. Areas are ranked by obligation and capped at limit; to retrieve specific areas, including ones ranked past the cap, list their codes in shape_codes — a 2-letter postal code for state, a 5-digit state + county FIPS code for county, or a 4-digit state FIPS + district number for district — NOT place names. Resolve a state, county, or district name to its code with usaspending_autocomplete_filters type=location. Chain per-capita results with Census population data for meaningful comparisons.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -137,14 +144,10 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
         'Geographic granularity: state (states, DC, and territories), county (county-level), or district (congressional district)',
       ),
     filters: SpendingFiltersSchema,
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(500)
+    limit: countInput()
       .default(50)
       .describe(
-        'Maximum geographic areas to return, ranked by aggregated_amount descending (1–500). The upstream endpoint is not paginated — it returns every matching area in one response — so this caps client-side. A nationwide county query matches over 3,000 areas; use shape_codes to retrieve one ranked past the cap.',
+        'Maximum geographic areas to return, ranked by aggregated_amount descending. Default 50, no maximum. The upstream endpoint is not paginated — it returns every matching area in one response — so this caps client-side. A nationwide county query matches over 3,000 areas; raise limit to see them all, or use shape_codes to retrieve one ranked past the cap.',
       ),
     shape_codes: z
       .array(
@@ -159,7 +162,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       .max(500)
       .optional()
       .describe(
-        'Return only these areas (1–500 codes), in the shape_code form this tool returns for geo_layer: 2-letter postal code for state ("NY"), 5-digit state + county FIPS for county ("36117" is Wayne County, NY), or 4-digit state FIPS + 2-digit district number for district ("3623" is NY-23, "5600" is Wyoming\'s at-large seat). Selection runs over every area the filters matched, so it reaches areas ranked past limit; selected areas stay ranked by aggregated_amount and capped at limit. A code that matches no area is named in the notice.',
+        'Return only these areas (1–500 codes), in the shape_code form this tool returns for geo_layer: 2-letter postal code for state ("NY"), 5-digit state + county FIPS for county ("36117" is Wayne County, NY), or 4-digit state FIPS + 2-digit district number for district ("3623" is NY-23, "5600" is Wyoming\'s at-large seat). usaspending_autocomplete_filters type=location resolves a state, county, or district name to its code. Selection runs over every area the filters matched, so it reaches areas ranked past limit; selected areas stay ranked by aggregated_amount and capped at limit. A code that matches no area is named in the notice.',
       ),
     subawards: z
       .boolean()
@@ -246,6 +249,16 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       .string()
       .optional()
       .describe('DEF codes sent, uppercased (comma-separated)'),
+    applied_location: z
+      .string()
+      .optional()
+      .describe(
+        'Place of performance location sent, as normalized (e.g. country=USA, state=NM, county=049)',
+      ),
+    applied_recipient_location: z
+      .string()
+      .optional()
+      .describe('Recipient location sent, as normalized (e.g. country=USA, state=WA)'),
     applied_time_period_start: z
       .string()
       .optional()
@@ -273,7 +286,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       .string()
       .optional()
       .describe(
-        'How to reach areas omitted by limit, which shape_codes matched no area, which time-period bound was filled in when only the other was supplied, and — when the filters matched no area — any Assistance Listing, PSC, or DEF codes sent and how to broaden filters. Absent when none applies.',
+        'How to reach areas omitted by limit, which shape_codes matched no area, which time-period bound was filled in when only the other was supplied, and — when the filters matched no area — any Assistance Listing, PSC, or DEF codes, recipient_id, and locations sent and how to broaden filters. Absent when none applies.',
       ),
   },
 
@@ -304,6 +317,14 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       retryable: false,
       recovery:
         'Use recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash followed by uppercase -P, -C, or -R.',
+    },
+    {
+      reason: 'invalid_location',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'filters.place_of_performance_location or filters.recipient_location names an unknown US state, a county without a state or under an armed-forces code, a county or FIPS-number state under a non-USA country, or parts that place it in different states.',
+      retryable: false,
+      recovery:
+        "Under country USA (the default) or a US territory code, send state as a postal code (NM) or 2-digit FIPS code (35), and county as 3 digits with that state or as the 5-digit state + county code (35049). Under another country, send state as that country's own 2-letter subdivision code and no county.",
     },
     {
       reason: 'api_unavailable',
@@ -364,7 +385,11 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
 
     const effective = normalizeEffectiveFilters(input.filters ?? {});
     if ('reason' in effective) throw ctx.fail(effective.reason, effective.message);
+    const located = resolveLocationFilters(input.filters ?? {});
+    if (!located.ok) throw ctx.fail('invalid_location', located.message);
+    const { locations } = located;
     const { filters, timePeriod, codes } = buildFilters({ ...input.filters, ...effective });
+    applyLocationFilters(filters, locations);
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
     if (inverted) {
       throw ctx.fail('date_range_inverted', inverted);
@@ -439,6 +464,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
         ? { applied_naics_codes: effective.naics_codes.join(', ') }
         : {}),
       ...codeFilterEcho(codes),
+      ...locationFilterEcho(locations),
       ...(timePeriod
         ? {
             applied_time_period_start: timePeriod.start_date,
@@ -460,7 +486,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       const ceiling = results.at(-1)?.aggregated_amount;
       const guidance = wanted
         ? `Showing the ${results.length} highest-obligation of the ${selected.length} selected areas. Raise limit to ${selected.length} to see every selected area.`
-        : `Showing the ${results.length} highest-obligation areas of ${areas.length}. ${input.limit < 500 ? 'Raise limit (max 500), list' : 'List'} an omitted area's code in shape_codes, or narrow with agency_name, keywords, or a coarser geo_layer to reach the rest.`;
+        : `Showing the ${results.length} highest-obligation areas of ${areas.length}. Raise limit to ${areas.length} to see every area, list an omitted area's code in shape_codes, or narrow with agency_name, keywords, or a coarser geo_layer to reach the rest.`;
       ctx.enrich.truncated({
         shown: results.length,
         cap: input.limit,
@@ -478,6 +504,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
     if (areas.length === 0) {
       const codeParts = describeCodeFilters(codes);
       if (effective.recipient_id) codeParts.push(`recipient_id=${effective.recipient_id}`);
+      codeParts.push(...describeLocationFilters(locations));
       notices.push(
         `No spending data matched the filters${codeParts.length ? ` (${codeParts.join(', ')})` : ''} for the selected geography. ` +
           'Try broader filters, a different scope (place_of_performance vs recipient_location), or remove the time period constraint.',

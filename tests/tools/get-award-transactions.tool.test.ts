@@ -3,15 +3,113 @@
  * @module tests/tools/get-award-transactions.tool.test
  */
 
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAwardTransactionsTool } from '@/mcp-server/tools/definitions/get-award-transactions.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockGetAwardTransactions = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ getAwardTransactions: mockGetAwardTransactions }),
 }));
+
+/**
+ * Wiring of the shared count-limit mechanism (full table in
+ * tests/tools/count-limit.test.ts). The cap is 2,000, below the upstream's 5,000: a
+ * 5,000-row page measures about 2 MB per surface.
+ */
+describe('limit above the 2,000 cap (#99)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    mockGetAwardTransactions.mockReset();
+  });
+
+  const raw = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+
+  it('reads limit 5000 as 2000: the request, page_metadata.limit, limitClamp, and the notice on both surfaces', async () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => ({ id: `CONT_TX_${i}` }));
+    mockGetAwardTransactions.mockResolvedValueOnce({
+      results: rows,
+      page_metadata: { hasNext: true, page: 1 },
+    });
+
+    const result = await runToolContract(getAwardTransactionsTool, {
+      award_id: 'CONT_AWD_TEST',
+      limit: 5000,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockGetAwardTransactions.mock.calls[0]?.[0]).toMatchObject({ limit: 2000, page: 1 });
+    const structured = result.structuredContent as { results: unknown[] };
+    expect(structured.results).toHaveLength(2000);
+    expect(result.structuredContent).toMatchObject({
+      page_metadata: { limit: 2000, has_next: true },
+      limitClamp: { field: 'limit', requested: 5000, applied: 2000 },
+      notice: 'limit 5000 exceeds the per-call maximum of 2000; this call used limit 2000.',
+    });
+    expect(raw(result)).toContain('**Per page:** 2000');
+    expect(raw(result)).toContain('**Limit clamp:** `limit` requested 5000, applied 2000');
+    expect(markdownText(raw(result))).toContain(
+      'limit 5000 exceeds the per-call maximum of 2000; this call used limit 2000.',
+    );
+  });
+
+  it('accepts limits the previous 100 maximum refused, up to 2000, with no clamp', async () => {
+    for (const limit of [101, 2000]) {
+      mockGetAwardTransactions.mockResolvedValueOnce({
+        results: [{ id: 'CONT_TX_1' }],
+        page_metadata: { hasNext: false, page: 1 },
+      });
+
+      const result = await runToolContract(getAwardTransactionsTool, { award_id: 'X', limit });
+
+      expect(result.isError, `limit ${limit}`).toBeFalsy();
+      expect(mockGetAwardTransactions.mock.lastCall?.[0]).toMatchObject({ limit });
+      expect(result.structuredContent).not.toHaveProperty('limitClamp');
+    }
+  });
+
+  it('keeps the clamp sentence beside the empty-page notice', async () => {
+    mockGetAwardTransactions.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { hasNext: false, page: 1 },
+    });
+
+    const result = await runToolContract(getAwardTransactionsTool, {
+      award_id: 'CONT_AWD_EMPTY',
+      limit: 2001,
+    });
+
+    const notice = (result.structuredContent as { notice?: string }).notice;
+    expect(notice).toContain('limit 2001 exceeds the per-call maximum of 2000');
+    expect(notice).toContain('generated_internal_id');
+  });
+
+  it('advertises no maximum by default, and maximum 2000 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(getAwardTransactionsTool.input, 'limit')).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+      description: 'Transactions per page. Default 10, at most 2,000 per call.',
+    });
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/get-award-transactions.tool.js'))
+          .getAwardTransactionsTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 2000 });
+    const rejected = await runToolContract(strict, { award_id: 'X', limit: 2001 });
+    expect(rejected.isError).toBe(true);
+    expect(raw(rejected)).toContain('Too big: expected number to be <=2000');
+    expect(mockGetAwardTransactions).not.toHaveBeenCalled();
+  });
+});
 
 describe('getAwardTransactionsTool', () => {
   it('returns transactions for a valid award ID', async () => {

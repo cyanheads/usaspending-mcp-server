@@ -27,6 +27,18 @@ const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
   result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
 const fetchMock = vi.fn<typeof fetch>();
 const reply = (body: unknown) => fetchMock.mockResolvedValueOnce(Response.json(body));
+/**
+ * Replies to an award search and then to its count, which leaves second: `total`
+ * contracts, or an HTTP 500 that leaves the total unknown.
+ */
+const replySearch = (body: unknown, total: number | 'unavailable' = 1) => {
+  reply(body);
+  if (total === 'unavailable') fetchMock.mockResolvedValueOnce(new Response('{}', { status: 500 }));
+  else
+    reply({
+      results: { contracts: total, idvs: 0, grants: total, direct_payments: 0, loans: 0, other: 0 },
+    });
+};
 const bodyOf = () => JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
 const noticeOf = (result: Awaited<ReturnType<typeof runToolContract>>) => {
   expect(result.isError).toBeFalsy();
@@ -225,11 +237,12 @@ describe('search/account regressions', () => {
   it.each([{}, { last_record_sort_value: '100', last_record_unique_id: 1 }])(
     'retains valid cursor boundary %j',
     async (input) => {
-      reply({ results: [{ 'Award ID': 'A' }], page_metadata: { hasNext: false } });
+      replySearch({ results: [{ 'Award ID': 'A' }], page_metadata: { hasNext: false } });
       const result = await runToolContract(searchAwardsTool, input);
       expect(result.isError).toBeFalsy();
       expect(bodyOf()).toMatchObject(input);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // The search and its count.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -253,7 +266,7 @@ describe('search/account regressions', () => {
       expected: {},
     })),
   ])('uses only the city name for $location', async ({ types, code, location, expected }) => {
-    reply({
+    replySearch({
       results: [
         {
           'Award ID': 'A',
@@ -277,7 +290,7 @@ describe('search/account regressions', () => {
   });
 
   it('keeps state and country from their existing fields', async () => {
-    reply({
+    replySearch({
       results: [
         {
           'Primary Place of Performance': {
@@ -331,10 +344,10 @@ describe('search/account regressions', () => {
   );
 
   it.each([1, 2])('keeps unknown award totals page-scoped on page %i', async (page) => {
-    reply({ results: [], page_metadata: { page, hasNext: false } });
+    replySearch({ results: [], page_metadata: { page, hasNext: false } }, 'unavailable');
     const result = await runToolContract(searchAwardsTool, { keyword: 'test', page });
     expect(noticeOf(result)).toContain(`Page ${page}`);
-    expect(noticeOf(result)).not.toContain('No awards matched');
+    expect(noticeOf(result)).not.toContain('No awards match');
     expect(result.structuredContent).not.toHaveProperty('totalCount');
     expect(result.structuredContent).not.toHaveProperty('page_metadata.total');
   });

@@ -7,8 +7,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
+
+/** The `recipient/` page maximum; a full 1,000-row page measures about 170–200 KB per surface. */
+const LIMIT = countLimit({ tool: 'usaspending_search_recipients', default: 10, cap: 1000 });
 
 export const searchRecipientsTool = tool('usaspending_search_recipients', {
   title: 'Search Award Recipients',
@@ -27,13 +31,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       .enum(['contracts', 'grants', 'direct_payments', 'loans', 'other_financial_assistance'])
       .optional()
       .describe('Filter by award type category to scope the total amounts returned'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum results per page (1–100)'),
+    limit: LIMIT.schema.describe('Recipients per page. Default 10, at most 1,000 per call.'),
     page: z
       .number()
       .int()
@@ -91,15 +89,17 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     totalCount: z.number().optional().describe('Total matching recipients across all pages'),
     page: z.number().describe('Current page number returned'),
     has_next: z.boolean().describe('Whether there are more pages of results'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Blank-keyword disclosure and pagination recovery. An empty page is distinguished from a known zero total; absent when no notice applies.',
+        'A reduced limit, blank-keyword disclosure, and pagination recovery. An empty page is distinguished from a known zero total; absent when no notice applies.',
       ),
   },
 
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -128,13 +128,14 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       page: input.page,
       limit: input.limit,
     });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
     const keyword = input.keyword.trim();
     const data = await svc.searchRecipients(
       {
         ...(keyword ? { keyword } : {}),
         ...(input.award_type !== undefined ? { award_type: input.award_type } : {}),
-        limit: input.limit,
+        limit: limit.applied,
         page: input.page,
       },
       ctx,
@@ -163,7 +164,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     ctx.enrich({ recipient_count: results.length, page: currentPage, has_next: hasNext });
     if (total !== undefined) ctx.enrich.total(total);
 
-    const notices: string[] = [];
+    const notices = limit.notice ? [limit.notice] : [];
     if (!keyword)
       notices.push(
         'No keyword filter was applied because keyword was blank after trimming; any award_type filter still applies.',
@@ -172,7 +173,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       notices.push(
         emptyPageNotice(
           currentPage,
-          input.limit,
+          limit.applied,
           total,
           `No recipients matched${keyword ? ` "${keyword}"` : ' the selected filters'}. Try a partial name, different spelling, or a UEI number directly.`,
         ),
@@ -191,7 +192,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
         ...(total !== undefined ? { total } : {}),
         page: currentPage,
         has_next: hasNext,
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

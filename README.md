@@ -36,18 +36,18 @@ Where federal money goes, from USAspending.gov: awards, recipients, agencies, an
 | Tool | Description |
 |:---|:---|
 | `usaspending_list_agencies` | List top-tier federal agencies with codes, slugs, and budget totals labelled by reporting year and quarter |
-| `usaspending_autocomplete_filters` | Look up NAICS, PSC, CFDA, agency, or recipient codes from a free-text description |
+| `usaspending_autocomplete_filters` | Look up NAICS, PSC, CFDA, agency, recipient, or state, county, and district location codes from a free-text description |
 | `usaspending_search_awards` | Search awards by keyword, recipient, agency, award type, NAICS code, assistance listing, PSC, DEF code, location, or date range |
-| `usaspending_get_award` | Fetch one award's full record: amounts, recipient, agencies, codes, parent IDV, DEF-code funding |
+| `usaspending_get_award` | Fetch one award's full record: amounts, recipient, agencies, codes, competition, parent IDV, DEF-code funding |
 | `usaspending_get_award_transactions` | List the transactions (modifications, amendments) on an award |
 | `usaspending_get_award_subawards` | List the subcontracts or subgrants under a prime award |
 | `usaspending_get_award_federal_accounts` | List the Treasury federal accounts that funded an award, with the amount from each |
 | `usaspending_get_idv_awards` | List the child orders and sub-IDVs placed under an IDV |
 | `usaspending_search_recipients` | Search recipients by name, UEI, or DUNS |
-| `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parent, and award totals |
-| `usaspending_get_agency` | Fetch an agency's mission, latest-year budget totals, sub-agencies, and DEF codes |
+| `usaspending_get_recipient` | Fetch a recipient's profile: address, business types, parents, child recipients, and award totals |
+| `usaspending_get_agency` | Fetch an agency's mission, latest-year budget totals, budget history by fiscal year, sub-agencies, and DEF codes |
 | `usaspending_spending_by_geography` | Aggregate spending by state, county, or congressional district |
-| `usaspending_spending_by_category` | Aggregate spending by NAICS, PSC, agency, CFDA program, or recipient |
+| `usaspending_spending_by_category` | Aggregate spending by NAICS, PSC, agency, CFDA program, recipient, federal account, or DEF code |
 | `usaspending_spending_over_time` | Aggregate spending by fiscal year, quarter, or month |
 | `usaspending_disaster_spending` | Break down disaster and emergency supplemental spending by agency, program, recipient, or geography |
 | `usaspending_search_federal_accounts` | Search federal accounts by title keyword or agency identifier |
@@ -69,10 +69,11 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 ### `usaspending_autocomplete_filters` <sub>tool</sub>
 
-- `type` (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`) plus `search_text`; `limit` 1–500, default 10
+- `type` (`naics`, `psc`, `cfda`, `awarding_agency`, `recipient`, `location`) plus `search_text`; `limit` default 10, at most 500 per call
 - Rows carry `code` and `name`, and `uei` / `duns` for recipients; no match fails as `no_match`. A `cfda` code goes in `assistance_listings` and a `psc` code in `psc_codes` on `usaspending_search_awards` and the three spending analytics tools
 - Agency rows carry the matched agency's own `name`, `abbreviation`, and `tier` (`toptier` or `subtier`), its parent's `toptier_name` and `toptier_code`, and `subtier_code` when supplied. Pass `name` to `agency_name` on award search or spending analytics to match that agency; pass `toptier_name` for the whole department. Agency results combine top-tier then sub-tier matches under one `limit`; office matches are excluded
 - `naics` matches official NAICS title text: "software" resolves, "cybersecurity" does not, so search with the industry term a title would use
+- `location` matches US states, then counties, then congressional districts by name. Rows carry `kind` (`state`, `county`, or `district`), the upstream's uppercase `name`, and `code`: a postal code for a state, the 5-digit state + county FIPS code for a county, the state FIPS + district number (e.g. `5307`) for a district; county and district rows add the `state` postal code. Upstream returns at most 100 rows of each kind, and a notice says when one hits it. Countries, cities, and ZIP codes are not returned; `no_match` names the three kinds. A territory with no upstream state row (`FM`, `MH`, `PW`, `UM`) gets no code. Pass a code to `usaspending_search_awards` and the spending analytics location filters, or to `shape_codes` on `usaspending_spending_by_geography`
 
 ---
 
@@ -84,10 +85,10 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
   - `psc_codes`: 1–4 characters, where a prefix such as `Y1` covers the codes under it; contracts and IDVs only
   - `def_codes`: Disaster Emergency Fund Codes such as `Z` (PSC and DEF codes are sent uppercased)
   - `time_period`: `YYYY-MM-DD` from 2007-10-01 on; either end may be given alone
-  - `location_filter`: `country` (default `USA`; a territory code such as `PRI` becomes `USA` plus its state), `state` (a postal or 2-digit FIPS code, `FM`/`MH`/`PW`/`UM` and armed-forces `AA`/`AE`/`AP` included, or under another country its own 2-letter subdivision code such as `ON` with `CAN`), and `county` (3 digits with `state`, or the 5-digit FIPS code alone); echoed as `applied_location`
+  - `location_filter` (place of performance; `filters.place_of_performance_location` overrides it) and `filters.recipient_location` (where the recipient is based), each taking: `country` (default `USA`; a territory code such as `PRI` becomes `USA` plus its state), `state` (a postal or 2-digit FIPS code, `FM`/`MH`/`PW`/`UM` and armed-forces `AA`/`AE`/`AP` included, or under another country its own 2-letter subdivision code such as `ON` with `CAN`), and `county` (3 digits with `state`, or the 5-digit FIPS code alone); echoed as `applied_location` and `applied_recipient_location`
   - `award_type_codes`: defaults to contracts (`A`–`D`) and must stay in one group — IDVs `IDV_A`–`IDV_E`; grants `02`–`05`/`F001`/`F002`; direct payments `06`/`10`/`F006`/`F007`; loans `07`/`08`/`F003`/`F004`; other assistance `09`/`11`/`-1`/`F005`/`F008`/`F009`/`F010`
-  - `limit`: up to 100
-- Rows carry `generated_internal_id` for `usaspending_get_award` and `agency_slug` for `usaspending_get_agency`; loan rows carry `loan_value`, `subsidy_cost`, and `issued_date` in place of amounts and dates. There is no total, and `page_metadata.has_next` is true on any full page. The nested `filters` object takes the analytics tools' `filters` keys, except `recipient_id`, and wins per field over the flat ones. Failures are `assistance_listings_type_mismatch` (listings with a non-assistance group), `psc_codes_type_mismatch` (PSC codes with an assistance group), `unsupported_sort`, `date_range_inverted`, `date_before_earliest`, and `invalid_location` (an unknown state, a 3-digit county without a state, a county under an armed-forces code (`AA`/`AE`/`AP`), a county or FIPS-number state under another country, or parts naming different states)
+  - `limit`: default 10, at most 100 per call
+- Rows carry `generated_internal_id` for `usaspending_get_award`, `recipient_id` for `usaspending_get_recipient` and `uei` when upstream has them, and `agency_slug` for `usaspending_get_agency`; loan rows carry `loan_value`, `subsidy_cost`, and `issued_date` in place of amounts and dates. `page_metadata.total` (also `totalCount`) counts every match in the selected award-type group, from a best-effort count request; when it fails the total is omitted, `unavailable_sections` names `total`, and `has_next` is true on any full page. With a known total `has_next` is exact. The nested `filters` object takes the analytics tools' `filters` keys, except `recipient_id`, and wins per field over the flat ones. Failures are `assistance_listings_type_mismatch` (listings with a non-assistance group), `psc_codes_type_mismatch` (PSC codes with an assistance group), `unsupported_sort`, `date_range_inverted`, `date_before_earliest`, and `invalid_location` (an unknown state, a 3-digit county without a state, a county under an armed-forces code (`AA`/`AE`/`AP`), a county or FIPS-number state under another country, or parts naming different states)
 - `sort` depends on the group: loans take `Loan Value` (default), `Subsidy Cost`, `Issued Date`, `Recipient Name`, or `Awarding Agency`; the others `Award Amount` (default), `Total Outlays`, `Start Date`, `End Date` (not IDVs), `Recipient Name`, or `Awarding Agency`. Page numbers stop at a 50,000-result offset (`pagination_limit_exceeded`); past it, page with the `last_record_sort_value` + `last_record_unique_id` cursor, returned below a 10,000-result offset
 - Effective keywords need at least three characters, with whitespace preserved. NAICS codes use 2, 4, or 6 digits; recognized numeric aliases such as `054`, `+54`, and `54_15_12` are normalized and echoed. Validation runs after nested-filter precedence, so an overridden flat value does not reject the call; active invalid values fail as `invalid_keyword` or `invalid_naics_code`
 
@@ -98,35 +99,36 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 - `award_id` is a `generated_unique_award_id`, the `generated_internal_id` from search; an unknown ID fails as `award_not_found`
 - Returns `category`, `total_obligation`, `total_outlays`, `total_account_obligation`, `total_account_outlay`, `base_exercised_options`, `subaward_count`, NAICS / PSC codes, `account_obligations_by_defc`, `account_outlays_by_defc`, and, on loans, `total_loan_value` and `total_subsidy_cost`, where supplied
 - `assistance_listings` lists every Assistance Listing on an assistance award, in upstream order, as `number`, `title`, and `obligation`; a `number` goes in `usaspending_search_awards` `assistance_listings`
-- `recipient` carries `uei`, `parent_uei`, `business_categories` (category names, not the `business_types` codes of `usaspending_get_recipient`), and a three-letter `country_code`, `county_name`, `congressional_code`, and `zip5` on its `location`. `place_of_performance` also carries a country code, county name, and congressional code; a location with no fields upstream is omitted
+- Contracts and IDVs also return a `competition` block (`extent_competed`, `solicitation_procedures`, `type_set_aside`, `other_than_full_and_open`, `fair_opportunity_limited`, each a `{code, description}`, plus `number_of_offers_received`) and `contract_pricing`; `total_subaward_amount` sits beside `subaward_count`
+- `recipient` carries `uei`, `parent_uei`, `business_categories` (category names, not the `business_types` codes of `usaspending_get_recipient`), and a three-letter `country_code`, `county_name`, `county_code`, `congressional_code`, and `zip5` on its `location`. `place_of_performance` also carries a country code, county name, `county_code`, and congressional code; a location with no fields upstream is omitted
 - `recipient.recipient_id` and `recipient.parent_recipient_id` chain to `usaspending_get_recipient` and `parent_award.generated_unique_award_id` to the parent IDV; `category: "idv"` awards list their children via `usaspending_get_idv_awards`
 
 ---
 
 ### `usaspending_get_award_transactions` <sub>tool</sub>
 
-- `award_id` plus `sort` (`action_date`, `federal_action_obligation`, `modification_number`); `limit` up to 100
+- `award_id` plus `sort` (`action_date`, `federal_action_obligation`, `modification_number`); `limit` default 10, at most 2,000 per call
 - Rows carry a string `id` (`ASST_TX` or `CONT_TX`), `action_date`, `modification_number`, `action_type`, and a signed `federal_action_obligation` (negative is a deobligation). Loan transactions also carry `face_value_loan_guarantee` and `original_loan_subsidy_cost`; assistance transactions carry `cfda_number` when supplied
 
 ---
 
 ### `usaspending_get_award_subawards` <sub>tool</sub>
 
-- `award_id` plus `sort` (`subaward_number`, `description`, `action_date`, `amount`, `recipient_name`); `limit` up to 100
+- `award_id` plus `sort` (`subaward_number`, `description`, `action_date`, `amount`, `recipient_name`); `limit` at most 100 per call
 - Rows carry `id`, `subaward_number`, `description`, `amount`, `action_date`, and `recipient_name`; the upstream listing supplies no recipient UEI or location. `subaward_count` on `usaspending_get_award` says whether any exist
 
 ---
 
 ### `usaspending_get_award_federal_accounts` <sub>tool</sub>
 
-- `award_id` is a `generated_unique_award_id`; `limit` up to 100, with `page_metadata.count` as the total
+- `award_id` is a `generated_unique_award_id`; `limit` at most 100 per call, with `page_metadata.count` as the total
 - Rows carry `federal_account` (AGENCY-MAIN, e.g. `080-0120`) for `usaspending_get_federal_account`, `total_transaction_obligated_amount`, and the funding agency with its `funding_agency_slug`
 
 ---
 
 ### `usaspending_get_idv_awards` <sub>tool</sub>
 
-- Parent IDV `award_id`; `type` is `child_awards` (task and delivery orders, the default), `child_idvs`, or `grandchild_awards`; `limit` up to 100
+- Parent IDV `award_id`; `type` is `child_awards` (task and delivery orders, the default), `child_idvs`, or `grandchild_awards`; `limit` at most 100 per call
 - `sort` is `obligated_amount` (default), `award_type`, `description`, `funding_agency`, `awarding_agency`, `last_date_to_order`, `period_of_performance_current_end_date`, `period_of_performance_start_date`, or `piid`
 - Rows carry `generated_unique_award_id` for `usaspending_get_award`, `obligated_amount`, and performance dates; there is no total, and `has_next` is true on any full page
 
@@ -134,7 +136,7 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 ### `usaspending_search_recipients` <sub>tool</sub>
 
-- `keyword` matches names, UEI, or DUNS, partial matches included; surrounding whitespace is trimmed, and blank text applies no keyword filter with a notice. Optional `award_type` still scopes the totals; `limit` up to 100
+- `keyword` matches names, UEI, or DUNS, partial matches included; surrounding whitespace is trimmed, and blank text applies no keyword filter with a notice. Optional `award_type` still scopes the totals; `limit` at most 1,000 per call
 - Rows carry `id` (a hash suffixed `-P` parent, `-C` child, or `-R` standalone) for `usaspending_get_recipient`, plus `uei`, `duns`, `recipient_level`, and `amount`; `page_metadata.total` is the full match count
 
 ---
@@ -142,7 +144,8 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 ### `usaspending_get_recipient` <sub>tool</sub>
 
 - `recipient_id` from `usaspending_search_recipients` or `usaspending_get_award`; optional `fiscal_year` (2001–2030) scopes the totals to that fiscal year, which otherwise cover the trailing 12 months; an unknown ID fails as `recipient_not_found`
-- Returns address, `business_types`, `parent_name` / `parent_uei`, `alternate_names`, `total_transaction_amount`, `total_transactions`, and loan face-value totals, with `period` naming the window (`FY2020` or `trailing 12 months`). Totals span every award type; for totals by type, use `usaspending_spending_over_time` with `filters.recipient_id` and `award_type_codes`
+- Returns address, `business_types`, `parent_id`, `parents` (`parent_id`, `parent_name`, `parent_uei`, `parent_duns` for each; `parent_name` / `parent_uei` describe the first), `alternate_names`, `total_transaction_amount`, `total_transactions`, and loan face-value totals, with `period` naming the window (`FY2020` or `trailing 12 months`). Totals span every award type; for totals by type, use `usaspending_spending_over_time` with `filters.recipient_id` and `award_type_codes`
+- A `-P` parent also returns `children` (`recipient_id`, `name`, `uei`, `duns`, `amount`, `state_province`) over the same period, highest amount first, with `children_total`; `children_limit` defaults to 50, at most 500 per call. Children come from a best-effort second request: if it fails the profile still returns and `unavailable_sections` names `children`
 
 ---
 
@@ -150,13 +153,14 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 - One of directory `toptier_code` (e.g. `097` or `1601`) or `agency_slug` (e.g. `department-of-defense`); one- and two-digit numeric codes are padded (`80` becomes `080`), while three- and four-digit codes are preserved. `page` walks the sub-agency list 10 at a time. Failures are `missing_input`, `conflicting_input` (both identifiers sent), and `agency_not_found`
 - Returns `mission`, plus `budgetary_resources_amount`, `obligated_amount`, and `outlay_amount` for the most recent `fiscal_year` with reported budget data (a newly opened year with no amounts yet is skipped), `sub_agencies` with obligations and transaction and new-award counts for that same year (`sub_agency_fiscal_year` names it; without a budget year within 5 seconds the breakdown covers the current fiscal year), and `def_codes`
+- `budget_by_fiscal_year` lists `budgetary_resources_amount`, `obligated_amount`, `outlay_amount`, and `reported_through_period` for every fiscal year with reported data since FY2017, newest first; a `reported_through_period` below 12 is a year to date
 - A failed budget or sub-agency request still returns the overview: the missing fields are omitted and `unavailable_sections` names each section with its `reason` (`api_unavailable`, `api_timeout`, or `upstream_error`) and whether a retry may load it
 
 ---
 
 ### `usaspending_spending_by_geography` <sub>tool</sub>
 
-- `scope` (`place_of_performance`, `recipient_location`) and `geo_layer` (`state`, `county`, `district`) are required; `filters` takes `keywords`, `award_type_codes`, `agency_name`, `recipient_id`, `naics_codes`, `assistance_listings`, `psc_codes`, `def_codes` (the same code filters as `usaspending_search_awards`, echoed as `applied_*`), and `time_period_start` / `time_period_end` (`YYYY-MM-DD`; either alone fills the other, as in `usaspending_search_awards`, `applied_time_period_*` echoes the range sent, a start after the end fails as `date_range_inverted`, and a range starting before 2007-10-01 fails as `date_before_earliest`); `limit` 1–500, default 50
+- `scope` (`place_of_performance`, `recipient_location`) and `geo_layer` (`state`, `county`, `district`) are required; `filters` takes `keywords`, `award_type_codes`, `agency_name`, `recipient_id`, `naics_codes`, `assistance_listings`, `psc_codes`, `def_codes` (the same code filters as `usaspending_search_awards`, echoed as `applied_*`), `place_of_performance_location` and `recipient_location` (the location filters of award search, echoed as `applied_location` and `applied_recipient_location`), and `time_period_start` / `time_period_end` (`YYYY-MM-DD`; either alone fills the other, as in `usaspending_search_awards`, `applied_time_period_*` echoes the range sent, a start after the end fails as `date_range_inverted`, and a range starting before 2007-10-01 fails as `date_before_earliest`); `limit` default 50, no maximum
 - Award types may mix groups. When every one named is a contract or IDV, `assistance_listings` fails as `assistance_listings_type_mismatch`; when every one is assistance, `psc_codes` fails as `psc_codes_type_mismatch`. Code-filtered amounts cover whole matching awards, and DEF-filtered totals can be negative
 - All three analytics tools apply the same keyword and NAICS rules as award search. `recipient_id` is a hexadecimal 8-4-4-4-12 hash with uppercase `-P`, `-C`, or `-R`; malformed active IDs fail as `invalid_recipient_id`, blank IDs remain unset, and hexadecimal case is normalized in `applied_recipient_id`. A well-formed unknown ID returns an empty result
 - Rows carry `shape_code`, `display_name`, `aggregated_amount`, `population`, and `per_capita`, ranked by amount; `total_areas_available` counts every match before the cap
@@ -167,8 +171,9 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 ### `usaspending_spending_by_category` <sub>tool</sub>
 
-- `category` is `naics`, `psc`, `awarding_agency`, `awarding_subagency`, `funding_agency`, `funding_subagency`, `cfda`, or `recipient_duns`; takes the same `filters` object as `usaspending_spending_by_geography`; `limit` up to 100
-- Rows carry `id`, `code`, `name`, and `amount`, ranked by obligation; `recipient_duns` rows carry the DUNS as `code` plus `recipient_id` and `uei` when upstream has them, and `recipient_id` chains to `usaspending_get_recipient`
+- `category` is `naics`, `psc`, `awarding_agency`, `awarding_subagency`, `funding_agency`, `funding_subagency`, `cfda`, `recipient_duns`, `federal_account`, or `defc`; takes the same `filters` object as `usaspending_spending_by_geography`; `limit` at most 100 per call
+- Rows carry `id`, `code`, `name`, and `amount`, ranked by obligation, with ranks continuing across pages; `recipient_duns` rows carry the DUNS as `code` plus `recipient_id` and `uei` when upstream has them, and `recipient_id` chains to `usaspending_get_recipient`. The four agency categories add `agency_slug` for `usaspending_get_agency` (a subagency row carries its parent department's slug)
+- `federal_account` rows carry the AGENCY-MAIN account code as `code`, which opens `usaspending_get_federal_account`; `defc` rows carry the DEF code as `code` and no `id`. Both count whole obligations under every account or DEF code an award carries, so rows overlap and never sum to a total, and on `defc` `def_codes` selects awards while rows still list every code those awards carry
 
 ---
 
@@ -182,7 +187,7 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 ### `usaspending_disaster_spending` <sub>tool</sub>
 
-- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; `filters.def_codes` is optional for `overview` and required for every other dimension (`missing_def_codes` when absent/empty). Codes such as `["L", "M", "N", "O", "P"]` isolate COVID-19 funding and are echoed as `applied_def_codes`. `limit` is up to 100 on every dimension but `overview`; `spending_type` (`award`, the default, or `total`) applies to agency only, and geography takes `filters.geo_layer` (`state`, `county`)
+- `dimension` is `overview`, `agency`, `cfda`, `recipient`, or `geography`; `filters.def_codes` is optional for `overview` and required for every other dimension (`missing_def_codes` when absent/empty). Codes such as `["L", "M", "N", "O", "P"]` isolate COVID-19 funding and are echoed as `applied_def_codes`. `limit` is at most 100 per call on every dimension but `overview`, which ignores it; `spending_type` (`award`, the default, or `total`) applies to agency only, and geography takes `filters.geo_layer` (`state`, `county`)
 - Rows carry `obligation`, `outlay`, and `award_count`, plus `total_budgetary_resources` on agency rows under `spending_type: total`; `overview` returns totals and `funding_by_def_code`. A recipient row's `id` chains to `usaspending_get_recipient`. Recipient `filters.query` narrows by search text; it is trimmed and echoed as `applied_query`, with blanks applying no query. A recipient total of 10,000 is a reachable ceiling and a lower bound on possible matches, flagged `truncated`; narrow with `filters.query` to reach the tail. Geography areas are ranked by `aggregated_amount` and paged with `limit` and `page`, with the full area count as `total`; a page with areas below it is flagged `truncated`, and `truncationCeiling` is the lowest amount shown. Spending with no recorded place of performance ranks as one unattributed area
 - Agency, cfda, and recipient also return `totals` across every matching row: `obligation`, `outlay`, and either `total_budgetary_resources` (agency, `total`) or `award_count`. Overview can still time out with codes supplied: narrow `filters.def_codes`, retry later, or use the agency breakdown with `spending_type: total` for obligations, outlays, and budgetary resources
 - `amount_coverage.status` is `complete`, `partial`, `unavailable`, or `unknown`, with requested `supported_def_codes` and `unsupported_def_codes` when known. Award breakdowns and geography use the provider's COVID-19 grouping for amounts; matching rows and counts may cover other codes. Overview and agency `spending_type: total` cover all requested codes. Retained zeros outside monetary coverage do not mean zero actual spending; an unavailable reference leaves coverage `unknown` without discarding the primary data
@@ -193,7 +198,7 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 ### `usaspending_search_federal_accounts` <sub>tool</sub>
 
-- Optional `keyword` and `agency_identifier`, using the directory `toptier_code` from `usaspending_list_agencies` (e.g. `1601` for Labor). This input differs from the account-prefix `agency_identifier` in returned rows (`016` for Labor). `sort_field` is `account_name`, `account_number`, `budgetary_resources` (default), or `managing_agency`; `limit` up to 100
+- Optional `keyword` and `agency_identifier`, using the directory `toptier_code` from `usaspending_list_agencies` (e.g. `1601` for Labor). This input differs from the account-prefix `agency_identifier` in returned rows (`016` for Labor). `sort_field` is `account_name`, `account_number`, `budgetary_resources` (default), or `managing_agency`; `limit` at most 100 per call
 - Rows carry `account_number` (e.g. `097-8097`) for the federal-account tools, `managing_agency`, and `budgetary_resources`; `page_metadata.count` is the total. Optional `fiscal_year` selects the reporting year; otherwise the provider uses its latest submission year. The returned `fiscal_year` identifies that period
 
 ---
@@ -207,7 +212,7 @@ The [usaspending-guide](./skills/usaspending-guide/SKILL.md) covers recipient re
 
 ### `usaspending_get_federal_account_breakdown` <sub>tool</sub>
 
-- `account_code` plus `dimension` (`program_activity` or `object_class`); `limit` up to 100, with `page_metadata.total` as the row count
+- `account_code` plus `dimension` (`program_activity` or `object_class`); `limit` at most 100 per call, with `page_metadata.total` as the row count
 - Rows carry `code`, `name`, and `obligations`; `program_activity` rows add `type`, either `PAC/PAN` or `PARK`
 - Optional `fiscal_year` scopes financial reporting periods to October 1 through September 30, echoed in `time_period` and `period`. Omission covers `all available periods`
 
@@ -221,14 +226,15 @@ USAspending-specific:
 
 - USAspending.gov API v2, keyless: the data is public under the DATA Act
 - Award search and the spending analytics tools cover action dates from 2007-10-01 on (an earlier start date fails as `date_before_earliest`), and DoD contract data lags publication by 90 days
-- `usaspending_spending_by_category` puts eight category sub-routes behind one `category` enum, and `usaspending_disaster_spending` puts five disaster endpoints behind `dimension`
+- `usaspending_spending_by_category` puts ten category sub-routes behind one `category` enum, and `usaspending_disaster_spending` puts five disaster endpoints behind `dimension`
 - Each request runs under one wall-clock budget (45 s by default); a slow answer gets the whole budget in one attempt, and only fast failures are retried. Failures surface as `api_timeout` or `api_unavailable` with each tool's recovery hint, and a rejected request carries USAspending's own explanation in the error message
 
 Agent-friendly output:
 
-- Chaining IDs as explicit fields: `generated_internal_id`, `agency_slug`, `recipient.recipient_id`, `federal_account`, and `account_number`, so agents follow the money without parsing display strings
+- Count limits clamp instead of failing: a `limit` above a tool's per-call cap is reduced to the cap and disclosed as `limitClamp` plus a notice (`USASPENDING_CLAMP_LIMITS`)
+- Chaining IDs as explicit fields: `generated_internal_id`, `agency_slug`, `recipient_id` (on award search rows and `recipient.recipient_id`), `federal_account`, and `account_number`, so agents follow the money without parsing display strings
 - Honest pagination: `page_metadata.has_next` on every list, a `total` or `count` where the upstream publishes one, and `truncated` / `shown` / `cap` only when rows are known to exist beyond those returned. A full page with no such evidence keeps `has_next` without claiming truncation
-- Empty results are notices, not errors: account funding, account breakdown, and recipient search distinguish a known zero total from an empty page past the total, which directs callers to an earlier page with the same filters. Without a total, notices describe only the page; award search never supplies a total. The ID-keyed list tools (transactions, subawards, funding accounts, IDV children, account breakdown) return an empty list for an unknown ID rather than failing
+- Empty results are notices, not errors: account funding, account breakdown, and recipient search distinguish a known zero total from an empty page past the total, which directs callers to an earlier page with the same filters. Without a total, notices describe only the page; award search supplies one through a best-effort count request and discloses a failed count in `unavailable_sections`. The ID-keyed list tools (transactions, subawards, funding accounts, IDV children, account breakdown) return an empty list for an unknown ID rather than failing
 - Typed failures with recovery hints: `award_not_found`, `recipient_not_found`, `agency_not_found`, `account_not_found`, `no_match`, `conflicting_input`, `date_before_earliest`, `date_range_inverted`, `unsupported_sort`, `assistance_listings_type_mismatch`, `psc_codes_type_mismatch`, `invalid_location`, `pagination_limit_exceeded`, `incomplete_cursor`, `missing_def_codes`
 
 ## Getting started
@@ -269,6 +275,7 @@ No variable is required; the defaults work out of the box.
 | `USASPENDING_BASE_URL` | USAspending.gov API v2 base URL. | `https://api.usaspending.gov/api/v2/` |
 | `USASPENDING_TIMEOUT_MS` | Per-attempt HTTP timeout, in ms (1000–120000). Each attempt is cut at this or at the time left in the request budget, whichever is smaller; a timed-out attempt is not retried. | `45000` |
 | `USASPENDING_RETRY_BUDGET_MS` | Wall-clock budget for one request, every attempt and backoff included, in ms (1000–300000). Fast failures such as a 503 retry inside it. | `45000`, or `USASPENDING_TIMEOUT_MS` when higher |
+| `USASPENDING_CLAMP_LIMITS` | A result-count `limit` above a tool's per-call cap is reduced to the cap and disclosed (`limitClamp` plus a notice). `false` advertises each cap as the schema `maximum` and rejects a larger value. | `true` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port. | `3010` |
 | `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. | `stateless` |
@@ -286,7 +293,7 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ### Local development
 
-Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+). No API key or account is required.
+Requires [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+). No API key or account is required.
 
 ```sh
 git clone https://github.com/cyanheads/usaspending-mcp-server.git

@@ -4,8 +4,9 @@
  */
 
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { listAgenciesTool } from '@/mcp-server/tools/definitions/list-agencies.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
 import { markdownText } from '../helpers/markdown-text.js';
 
 const mockListAgencies = vi.fn();
@@ -13,6 +14,31 @@ const mockListAgencies = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ listAgencies: mockListAgencies }),
 }));
+
+describe('limit has no cap (#99)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  // Exact: a bare `.int()` advertises `maximum: 9007199254740991` beside "No maximum".
+  const expected = {
+    type: 'integer',
+    minimum: 1,
+    description: 'Agencies per page; omitted returns the full directory. No maximum.',
+  };
+
+  it('advertises no maximum with USASPENDING_CLAMP_LIMITS at its default', () => {
+    expect(advertisedProperty(listAgenciesTool.input, 'limit')).toEqual(expected);
+  });
+
+  it('advertises no maximum under USASPENDING_CLAMP_LIMITS=false either', async () => {
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/list-agencies.tool.js')).listAgenciesTool,
+    );
+    expect(advertisedProperty(strict.input, 'limit')).toEqual(expected);
+    expect(strict.input.safeParse({ limit: 100_000 }).success).toBe(true);
+  });
+});
 
 describe('listAgenciesTool', () => {
   it('keeps the complete provider order and missing periods when limit is omitted', async () => {

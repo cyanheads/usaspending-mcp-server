@@ -4,16 +4,49 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import {
+  createMockContext,
+  getEnrichment,
+  type MockContextLogger,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
+import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
+import { markdownText } from '../helpers/markdown-text.js';
 
 const mockSearchAwards = vi.fn();
+const mockCountAwards = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
-  getUSASpendingService: () => ({ searchAwards: mockSearchAwards }),
+  getUSASpendingService: () => ({ searchAwards: mockSearchAwards, countAwards: mockCountAwards }),
 }));
+
+/** Count buckets with `n` awards in the contracts group. */
+const contractCount = (n: number) => ({
+  contracts: n,
+  idvs: 0,
+  grants: 0,
+  direct_payments: 0,
+  loans: 0,
+  other: 0,
+});
+
+/**
+ * Unless a test answers the count, the count request fails as the service
+ * classifies an unreachable upstream, so the total stays unknown and paging keeps
+ * the page-fullness rule the #37, #44, and #76 cases pin.
+ */
+beforeEach(() => {
+  mockCountAwards.mockReset();
+  mockCountAwards.mockRejectedValue(
+    serviceUnavailable('USAspending API is unavailable.', {
+      reason: 'api_unavailable',
+      retryable: true,
+    }),
+  );
+});
 
 describe('searchAwardsTool', () => {
   it.each([
@@ -551,6 +584,22 @@ describe('searchAwardsTool', () => {
     const input = searchAwardsTool.input.parse({ page: 25001, limit: 2 });
     await expect(searchAwardsTool.handler(input, ctx)).rejects.toThrow();
     expect(mockSearchAwards).not.toHaveBeenCalled();
+    expect(mockCountAwards).not.toHaveBeenCalled();
+  });
+
+  it('names the page, the limit, and the window when refusing a page past it (#37)', async () => {
+    const result = await runToolContract(searchAwardsTool, { page: 25001, limit: 2 });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        message:
+          "Requested page 25001 at limit 2 exceeds this endpoint's 50,000-result page-number window.",
+        data: { reason: 'pagination_limit_exceeded' },
+      },
+    });
+    expect(mockSearchAwards).not.toHaveBeenCalled();
   });
 
   it('allows the boundary page where offset equals exactly 50,000 (#37)', async () => {
@@ -634,7 +683,19 @@ describe('searchAwardsTool', () => {
     expect(mockSearchAwards).not.toHaveBeenCalled();
   });
 
-  it('does not surface a total count — this endpoint never returns one (#37)', async () => {
+  it('reports the count as page_metadata.total and totalCount — spending_by_award sends none (#114)', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(4_079_943));
+    mockSearchAwards.mockResolvedValueOnce({
+      results: [{ generated_internal_id: 'AWD_T' }],
+      page_metadata: { hasNext: true, page: 1, limit: 10 },
+    });
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+    const result = await searchAwardsTool.handler(searchAwardsTool.input.parse({ limit: 10 }), ctx);
+    expect(result.page_metadata.total).toBe(4_079_943);
+    expect(getEnrichment(ctx).totalCount).toBe(4_079_943);
+  });
+
+  it('reports no total when the count fails (#114)', async () => {
     mockSearchAwards.mockResolvedValueOnce({
       results: [{ generated_internal_id: 'AWD_T' }],
       page_metadata: { hasNext: true, page: 1, limit: 10 },
@@ -1106,7 +1167,8 @@ describe('searchAwardsTool location_filter (#70)', () => {
     expect(error.data.reason).toBe('invalid_location');
     expect(error.message).toContain(names);
     expect(error.message).not.toContain('undefined');
-    expect(error.data.recovery.hint).toContain('location_filter.county');
+    // The message names the path; the recovery serves all three location inputs (#109).
+    expect(error.data.recovery.hint).toContain('5-digit state + county code (35049)');
     const text = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
     expect(text).toContain(names);
     expect(text).toContain('Recovery:');
@@ -1187,5 +1249,697 @@ describe('searchAwardsTool location_filter (#70)', () => {
 
     expect(result.structuredContent).not.toHaveProperty('applied_location');
     expect(sentLocations()).toBeUndefined();
+  });
+});
+
+// --- #109: filters.place_of_performance_location and filters.recipient_location ---
+
+/**
+ * Wiring of the shared location filters, whose normalization is tabled once in
+ * tests/utils/filters.test.ts: both nested keys reach the one `filters` object the
+ * search and the count share, the nested place of performance wins over the flat
+ * location_filter, both are echoed and named in the empty-result notice, and a
+ * rejected nested location names its own path.
+ */
+describe('searchAwardsTool nested location filters (#109)', () => {
+  type Result = Awaited<ReturnType<typeof runToolContract>>;
+  const run = (args: Record<string, unknown>) =>
+    runToolContract(searchAwardsTool, { limit: 2, ...args });
+  const sentFilters = () =>
+    mockSearchAwards.mock.calls.at(-1)?.[0].filters as Record<string, unknown>;
+  const textOf = (result: Result) =>
+    markdownText(result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+
+  beforeEach(() => {
+    mockSearchAwards.mockReset();
+    mockSearchAwards.mockResolvedValue({
+      results: [{ 'Award ID': 'A1', generated_internal_id: 'CONT_AWD_A1' }],
+      page_metadata: { hasNext: false, page: 1 },
+    });
+    mockCountAwards.mockResolvedValue(contractCount(1));
+  });
+
+  it('sends the request it sent before the nested keys existed, when neither is given', async () => {
+    const result = await run({
+      keyword: 'bridge',
+      location_filter: { state: 'WA', county: '033' },
+      filters: {
+        naics_codes: ['237310'],
+        time_period_start: '2024-10-01',
+        time_period_end: '2025-09-30',
+      },
+      page: 2,
+    });
+
+    expect(result.isError).toBeFalsy();
+    const filters = {
+      keywords: ['bridge'],
+      award_type_codes: ['A', 'B', 'C', 'D'],
+      naics_codes: { require: ['237310'] },
+      time_period: [{ start_date: '2024-10-01', end_date: '2025-09-30' }],
+      place_of_performance_locations: [{ country: 'USA', state: 'WA', county: '033' }],
+    };
+    expect(mockSearchAwards.mock.calls[0]![0]).toEqual({
+      filters,
+      fields: expect.any(Array),
+      sort: 'Award Amount',
+      order: 'desc',
+      limit: 2,
+      page: 2,
+    });
+    expect(mockCountAwards.mock.calls[0]![0]).toEqual(filters);
+    expect(result.structuredContent).toMatchObject({
+      applied_location: 'country=USA, state=WA, county=033',
+    });
+    expect(result.structuredContent).not.toHaveProperty('applied_recipient_location');
+  });
+
+  it('sends filters.place_of_performance_location to the search and the count, echoed as applied_location', async () => {
+    const result = await run({ filters: { place_of_performance_location: { county: '35049' } } });
+
+    expect(result.isError).toBeFalsy();
+    const filters = sentFilters();
+    expect(filters.place_of_performance_locations).toEqual([
+      { country: 'USA', state: 'NM', county: '049' },
+    ]);
+    expect(filters).not.toHaveProperty('place_of_performance_location');
+    expect(filters).not.toHaveProperty('recipient_locations');
+    expect(mockCountAwards.mock.calls[0]![0]).toBe(filters);
+    expect(result.structuredContent).toMatchObject({
+      applied_location: 'country=USA, state=NM, county=049',
+    });
+    expect(result.structuredContent).not.toHaveProperty('applied_recipient_location');
+    expect(textOf(result)).toContain('country=USA, state=NM, county=049');
+  });
+
+  it('sends filters.recipient_location as recipient_locations beside a flat location_filter, echoing each', async () => {
+    const result = await run({
+      location_filter: { state: 'NM' },
+      filters: { recipient_location: { country: 'PRI' } },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const filters = sentFilters();
+    expect(filters.place_of_performance_locations).toEqual([{ country: 'USA', state: 'NM' }]);
+    expect(filters.recipient_locations).toEqual([{ country: 'USA', state: 'PR' }]);
+    expect(filters).not.toHaveProperty('recipient_location');
+    expect(mockCountAwards.mock.calls[0]![0]).toBe(filters);
+    expect(result.structuredContent).toMatchObject({
+      applied_location: 'country=USA, state=NM',
+      applied_recipient_location: 'country=USA, state=PR',
+    });
+    const text = textOf(result);
+    expect(text).toContain('country=USA, state=NM');
+    expect(text).toContain('country=USA, state=PR');
+  });
+
+  it('lets a nested place of performance override the flat location_filter', async () => {
+    const result = await run({
+      location_filter: { state: 'NM', county: '049' },
+      filters: { place_of_performance_location: { state: 'WA' } },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentFilters().place_of_performance_locations).toEqual([{ country: 'USA', state: 'WA' }]);
+    expect(result.structuredContent).toMatchObject({ applied_location: 'country=USA, state=WA' });
+  });
+
+  it('neither sends nor rejects a flat location_filter the nested place of performance overrides', async () => {
+    // A 3-digit county without a state fails on its own (#70), but this one is never sent.
+    const result = await run({
+      location_filter: { county: '049' },
+      filters: { place_of_performance_location: { state: 'WA' } },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentFilters().place_of_performance_locations).toEqual([{ country: 'USA', state: 'WA' }]);
+  });
+
+  it('falls back to the flat location_filter when the nested place of performance is all blank', async () => {
+    const result = await run({
+      location_filter: { state: 'NM' },
+      filters: {
+        place_of_performance_location: { country: '', state: '', county: '', city: '' },
+        recipient_location: { country: '', state: '', county: '', city: '' },
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(sentFilters().place_of_performance_locations).toEqual([{ country: 'USA', state: 'NM' }]);
+    expect(sentFilters()).not.toHaveProperty('recipient_locations');
+    expect(result.structuredContent).not.toHaveProperty('applied_recipient_location');
+  });
+
+  it('names both locations sent in the empty-result notice', async () => {
+    mockSearchAwards.mockResolvedValue({ results: [], page_metadata: { hasNext: false, page: 1 } });
+    mockCountAwards.mockResolvedValue(contractCount(0));
+
+    const result = await run({
+      filters: {
+        place_of_performance_location: { state: 'WA' },
+        recipient_location: { state: 'NM', county: '049' },
+      },
+    });
+
+    const notice =
+      'No awards match place_of_performance_location="country=USA, state=WA", recipient_location="country=USA, state=NM, county=049", types=A,B,C,D.';
+    expect(result.structuredContent).toMatchObject({ notice });
+    expect(textOf(result)).toContain(notice);
+  });
+
+  it.each(['place_of_performance_location', 'recipient_location'] as const)(
+    'rejects a contradictory filters.%s as invalid_location naming its path, before any request',
+    async (key) => {
+      const result = await run({
+        location_filter: { state: 'WA' },
+        filters: { [key]: { state: 'NM', county: '06037' } },
+      });
+
+      expect(result.isError).toBe(true);
+      const error = (
+        result.structuredContent as {
+          error: {
+            code: number;
+            message: string;
+            data: { reason: string; recovery: { hint: string } };
+          };
+        }
+      ).error;
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(error.data.reason).toBe('invalid_location');
+      expect(error.message).toContain(`filters.${key}.county "06037"`);
+      expect(error.message).not.toContain('location_filter');
+      expect(error.data.recovery.hint).not.toContain('location_filter');
+      expect(textOf(result)).toContain(`filters.${key}.county "06037"`);
+      expect(mockSearchAwards).not.toHaveBeenCalled();
+      expect(mockCountAwards).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// --- #114: recipient IDs on rows, and the total from the count request ---
+
+describe('searchAwardsTool total count and recipient IDs (#114)', () => {
+  type Result = Awaited<ReturnType<typeof runToolContract>>;
+  type Content = Record<string, unknown> & { page_metadata: Record<string, unknown> };
+  const textOf = (result: Result) =>
+    result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+  const contentOf = (result: Result) => result.structuredContent as Content;
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ generated_internal_id: `CONT_AWD_${i}` }));
+  /** The page_metadata upstream sends on a page it marks as last, or past a 10,000 offset. */
+  const lastPageMeta = (page: number) => ({
+    page,
+    hasNext: false,
+    last_record_unique_id: null,
+    last_record_sort_value: 'None',
+  });
+  const answer = (results: unknown[], page_metadata: Record<string, unknown>) =>
+    mockSearchAwards.mockResolvedValueOnce({ results, page_metadata });
+
+  beforeEach(() => {
+    mockSearchAwards.mockReset();
+  });
+
+  it('requests the recipient fields and returns them on both surfaces, omitting nulls', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(2));
+    answer(
+      [
+        {
+          'Award ID': '36C10B18N0006',
+          generated_internal_id: 'CONT_AWD_36C10B18N0006_3600_36C10B18D5000_3600',
+          'Recipient Name': 'Acme Corp',
+          recipient_id: '9232b26d-789d-bdd2-5a6d-28714f1dfa2c-C',
+          'Recipient UEI': 'DT2KS3HH5FP5',
+        },
+        {
+          'Award ID': 'AGGREGATE',
+          generated_internal_id: 'ASST_AGG_1',
+          'Recipient Name': 'MULTIPLE RECIPIENTS',
+          recipient_id: null,
+          'Recipient UEI': null,
+        },
+      ],
+      lastPageMeta(1),
+    );
+
+    const result = await runToolContract(searchAwardsTool, { limit: 5 });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockSearchAwards.mock.calls[0]![0].fields).toEqual(
+      expect.arrayContaining(['recipient_id', 'Recipient UEI']),
+    );
+    const [first, aggregate] = contentOf(result).results as Record<string, unknown>[];
+    expect(first).toMatchObject({
+      recipient_id: '9232b26d-789d-bdd2-5a6d-28714f1dfa2c-C',
+      uei: 'DT2KS3HH5FP5',
+    });
+    expect(aggregate).not.toHaveProperty('recipient_id');
+    expect(aggregate).not.toHaveProperty('uei');
+    const text = textOf(result);
+    expect(text).toContain(
+      '**Recipient ID (for get_recipient):** 9232b26d-789d-bdd2-5a6d-28714f1dfa2c-C',
+    );
+    expect(text).toContain('**UEI:** DT2KS3HH5FP5');
+    expect(text.match(/\*\*UEI:\*\*/g)).toHaveLength(1);
+  });
+
+  it('sends the count the very filters object the search sends, beside it, with a 10 s deadline', async () => {
+    let releaseSearch: (value: unknown) => void = () => undefined;
+    mockSearchAwards.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseSearch = resolve;
+      }),
+    );
+    mockCountAwards.mockResolvedValue(contractCount(1));
+    const before = Date.now();
+
+    const pending = searchAwardsTool.handler(
+      searchAwardsTool.input.parse({ keyword: 'hydrographic', location_filter: { state: 'WA' } }),
+      createMockContext({ errors: searchAwardsTool.errors }),
+    );
+    // The count left while the search was still in flight.
+    expect(mockCountAwards).toHaveBeenCalledTimes(1);
+    const after = Date.now();
+    releaseSearch({ results: rows(1), page_metadata: lastPageMeta(1) });
+    await pending;
+
+    const [countFilters, , deadlineAt] = mockCountAwards.mock.calls[0]!;
+    expect(countFilters).toBe(mockSearchAwards.mock.calls[0]![0].filters);
+    expect(countFilters).toMatchObject({
+      keywords: ['hydrographic'],
+      place_of_performance_locations: [{ country: 'USA', state: 'WA' }],
+    });
+    expect(deadlineAt).toBeGreaterThanOrEqual(before + 10_000);
+    expect(deadlineAt).toBeLessThanOrEqual(after + 10_000);
+  });
+
+  it.each([
+    {
+      label: 'an exactly-full last page',
+      page: 2,
+      limit: 5,
+      shown: 5,
+      upstreamHasNext: false,
+      total: 10,
+      hasNext: false,
+    },
+    {
+      label: 'a full interior page past a 10,000-result offset',
+      page: 101,
+      limit: 100,
+      shown: 100,
+      upstreamHasNext: false,
+      total: 20_000,
+      hasNext: true,
+    },
+    {
+      label: 'a short last page',
+      page: 3,
+      limit: 5,
+      shown: 2,
+      upstreamHasNext: false,
+      total: 12,
+      hasNext: false,
+    },
+    {
+      label: 'an interior page the upstream also flags',
+      page: 1,
+      limit: 5,
+      shown: 5,
+      upstreamHasNext: true,
+      total: 12,
+      hasNext: true,
+    },
+  ])('decides has_next and truncated from the total on $label', async (c) => {
+    mockCountAwards.mockResolvedValue(contractCount(c.total));
+    answer(rows(c.shown), { ...lastPageMeta(c.page), hasNext: c.upstreamHasNext });
+
+    const result = await runToolContract(searchAwardsTool, {
+      keyword: 'defense',
+      page: c.page,
+      limit: c.limit,
+    });
+
+    const sc = contentOf(result);
+    expect(sc.page_metadata).toMatchObject({ has_next: c.hasNext, total: c.total });
+    expect(sc).toMatchObject({ has_next: c.hasNext, totalCount: c.total });
+    if (c.hasNext) {
+      expect(sc).toMatchObject({ truncated: true, shown: c.shown, cap: c.limit });
+      expect(sc.notice).toContain(`Request page ${c.page + 1}`);
+    } else {
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc).not.toHaveProperty('notice');
+    }
+    const text = textOf(result);
+    expect(text).toContain(`**Has next:** ${c.hasNext ? 'Yes' : 'No'}`);
+    expect(text).toContain(`**Total matches:** ${c.total.toLocaleString()}`);
+    if (!c.hasNext) expect(text).not.toContain('Next page');
+  });
+
+  it('drops the cursor-capture guidance when page numbers reach every match', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(30_000));
+    answer(rows(100), {
+      page: 1,
+      hasNext: true,
+      last_record_sort_value: '5',
+      last_record_unique_id: 7,
+    });
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'defense', limit: 100 });
+
+    const notice = contentOf(result).notice as string;
+    expect(notice).toContain('30,000 awards match; this page ends at result 100.');
+    expect(notice).toContain('Request page 2');
+    expect(notice).not.toContain('last_record_sort_value');
+    expect(notice).not.toContain('may remain');
+    expect(markdownText(textOf(result))).toContain(notice);
+  });
+
+  it('counts the matches past the 50,000-result window and keeps the cursor guidance', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(4_079_943));
+    answer(rows(100), {
+      page: 1,
+      hasNext: true,
+      last_record_sort_value: '5',
+      last_record_unique_id: 7,
+    });
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'defense', limit: 100 });
+
+    const notice = contentOf(result).notice as string;
+    expect(notice).toContain('4,079,943 awards match');
+    expect(notice).toContain('4,029,943 of them lie past the 50,000-result page-number window');
+    expect(notice).toContain('last_record_sort_value + last_record_unique_id');
+    expect(notice).toContain('10,000');
+  });
+
+  it.each([
+    {
+      label: 'past a positive total',
+      page: 3,
+      total: 10,
+      fragment:
+        'Page 3 is past the end of the 10 matching results. Request an earlier page with the same filters.',
+    },
+    {
+      label: 'under a zero total',
+      page: 1,
+      total: 0,
+      fragment: 'No awards match keyword="defense", types=A,B,C,D.',
+    },
+  ])('describes an empty page $label from the total', async ({ page, total, fragment }) => {
+    mockCountAwards.mockResolvedValue(contractCount(total));
+    answer([], lastPageMeta(page));
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'defense', page, limit: 5 });
+
+    const sc = contentOf(result);
+    expect(sc.page_metadata).toMatchObject({ has_next: false, total });
+    expect(sc.notice).toBe(fragment);
+    expect(markdownText(textOf(result))).toContain(fragment);
+  });
+
+  it('reports the total on a cursor page but keeps the page-fullness rule there', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(7));
+    answer(rows(5), lastPageMeta(1));
+
+    const result = await runToolContract(searchAwardsTool, {
+      limit: 5,
+      last_record_sort_value: '9',
+      last_record_unique_id: 3,
+    });
+
+    const sc = contentOf(result);
+    // The cursor hides the page's absolute offset, so the total cannot say where it ends.
+    expect(sc.page_metadata).toMatchObject({ has_next: true, total: 7 });
+    expect(sc).toMatchObject({ totalCount: 7 });
+    expect(sc).not.toHaveProperty('truncated');
+    expect(sc.notice).toContain('More results may remain');
+  });
+
+  it('answers with the rows and the page-fullness rule when the count fails, naming the section', async () => {
+    answer(rows(5), lastPageMeta(1));
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'defense', limit: 5 });
+
+    expect(result.isError).toBeFalsy();
+    const sc = contentOf(result);
+    expect(sc.results).toHaveLength(5);
+    expect(sc.page_metadata).not.toHaveProperty('total');
+    expect(sc).not.toHaveProperty('totalCount');
+    expect(sc).toMatchObject({ has_next: true, page_metadata: { has_next: true } });
+    expect(sc).not.toHaveProperty('truncated');
+    expect(sc.unavailable_sections).toEqual([
+      {
+        section: 'total',
+        reason: 'api_unavailable',
+        retryable: true,
+        message: 'USAspending API is unavailable.',
+      },
+    ]);
+    expect(sc.notice).toContain('More results may remain');
+    expect(sc.notice).toContain('Partial result: total (api_unavailable) could not be fetched');
+    const text = markdownText(textOf(result));
+    expect(text).toContain('Unavailable sections:');
+    expect(text).toContain('total: api_unavailable (retryable) — USAspending API is unavailable.');
+    expect(text).not.toContain('Total matches');
+  });
+
+  it('keeps an empty page page-scoped when the count fails', async () => {
+    answer([], lastPageMeta(2));
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'defense', page: 2 });
+
+    const notice = contentOf(result).notice as string;
+    expect(notice).toContain('Page 2 returned no awards for keyword="defense", types=A,B,C,D.');
+    expect(notice).toContain('does not establish zero matches');
+    expect(notice).not.toContain('No awards match');
+  });
+
+  it('rethrows a caller abort that lands while the count is in flight', async () => {
+    const caller = new AbortController();
+    answer(rows(1), lastPageMeta(1));
+    mockCountAwards.mockImplementation(
+      (_filters: unknown, ctx: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason));
+        }),
+    );
+
+    const pending = searchAwardsTool.handler(
+      searchAwardsTool.input.parse({ keyword: 'defense' }),
+      createMockContext({ errors: searchAwardsTool.errors, signal: caller.signal }),
+    );
+    await Promise.resolve();
+    caller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('surfaces a search failure at once, without waiting on the count', async () => {
+    mockSearchAwards.mockRejectedValueOnce(
+      serviceUnavailable('USAspending search is down.', { reason: 'api_unavailable' }),
+    );
+    mockCountAwards.mockReturnValue(new Promise(() => undefined));
+
+    await expect(
+      searchAwardsTool.handler(
+        searchAwardsTool.input.parse({ keyword: 'defense' }),
+        createMockContext({ errors: searchAwardsTool.errors }),
+      ),
+    ).rejects.toMatchObject({ message: 'USAspending search is down.' });
+  });
+
+  it('names the matches past the cap in format when no page is reachable', () => {
+    const text = (
+      searchAwardsTool.format!({
+        results: [{ generated_internal_id: 'CONT_AWD_CAP' }],
+        page_metadata: { has_next: true, page: 500, limit: 100, total: 60_000 },
+      })[0] as { text: string }
+    ).text;
+
+    expect(text).toContain('**No further pages reachable:**');
+    expect(text).toContain('10,000 matching awards lie past it');
+    expect(text).toContain('**Total matches:** 60,000');
+  });
+});
+
+// --- #99: limit above the 100 cap ---
+
+/**
+ * Wiring of the shared count-limit mechanism, whose full table lives in
+ * tests/tools/count-limit.test.ts: every read after the clamp — the request, the
+ * 50,000-result window guard, has_next on both branches, page_metadata.limit, the
+ * paging guidance, truncation `cap`, the empty-page notice, the log record — uses
+ * the applied value.
+ */
+describe('searchAwardsTool limit above the 100 cap (#99)', () => {
+  type Result = Awaited<ReturnType<typeof runToolContract>>;
+  type Content = Record<string, unknown> & { page_metadata: Record<string, unknown> };
+  const contentOf = (result: Result) => result.structuredContent as Content;
+  const raw = (result: Result) =>
+    result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ generated_internal_id: `CONT_AWD_${i}` }));
+  /** Upstream page_metadata past a 10,000-result offset: hasNext false on full pages too. */
+  const pastCursorWindow = (page: number) => ({
+    page,
+    hasNext: false,
+    last_record_unique_id: null,
+    last_record_sort_value: 'None',
+  });
+  const CLAMP_101 = 'limit 101 exceeds the per-call maximum of 100; this call used limit 100.';
+  const search = (args: Record<string, unknown>) =>
+    runToolContract(searchAwardsTool, { keyword: 'defense', ...args });
+  const answer = (results: unknown[], page_metadata: Record<string, unknown>) =>
+    mockSearchAwards.mockResolvedValue({ results, page_metadata });
+
+  beforeEach(() => {
+    mockSearchAwards.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('answers {limit:101, page:2} with the request, rows, and paging {limit:100, page:2} gets, disclosing the clamp beside the paging guidance', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(250));
+    answer(rows(100), { page: 2, hasNext: true });
+
+    const at100 = await search({ limit: 100, page: 2 });
+    const at101 = await search({ limit: 101, page: 2 });
+
+    expect(at101.isError).toBeFalsy();
+    const [sent100, sent101] = mockSearchAwards.mock.calls.map(([body]) => body);
+    expect(sent101).toEqual(sent100);
+    expect(sent101).toMatchObject({ limit: 100, page: 2 });
+    expect(contentOf(at101).results).toEqual(contentOf(at100).results);
+    expect(contentOf(at101).page_metadata).toEqual(contentOf(at100).page_metadata);
+    expect(contentOf(at100).page_metadata).toMatchObject({
+      limit: 100,
+      page: 2,
+      has_next: true,
+      total: 250,
+    });
+    const guidance = '250 awards match; this page ends at result 200. Request page 3 for more.';
+    expect(contentOf(at100)).not.toHaveProperty('limitClamp');
+    expect(contentOf(at100).notice).toBe(guidance);
+    expect(contentOf(at101)).toMatchObject({
+      limitClamp: { field: 'limit', requested: 101, applied: 100 },
+      truncated: true,
+      cap: 100,
+      notice: `${CLAMP_101} ${guidance}`,
+    });
+    expect(raw(at100)).toContain('**Per page:** 100');
+    expect(raw(at101)).toContain('**Per page:** 100');
+    expect(raw(at101)).toContain('**Limit clamp:** `limit` requested 101, applied 100');
+    expect(markdownText(raw(at101))).toContain(`${CLAMP_101} ${guidance}`);
+  });
+
+  it('answers {limit:101, page:496} like {limit:100, page:496}: inside the 50,000-result window', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(60_000));
+    answer(rows(100), pastCursorWindow(496));
+
+    const result = await search({ limit: 101, page: 496 });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockSearchAwards.mock.calls[0]![0]).toMatchObject({ limit: 100, page: 496 });
+    expect(contentOf(result)).toMatchObject({
+      page_metadata: { limit: 100, page: 496, has_next: true, total: 60_000 },
+      limitClamp: { field: 'limit', requested: 101, applied: 100 },
+    });
+    const notice = contentOf(result).notice as string;
+    expect(notice.startsWith(CLAMP_101)).toBe(true);
+    expect(notice).toContain('this page ends at result 49,600. Request page 497 for more.');
+  });
+
+  it('refuses a page past the window at the applied limit, naming the clamp in the message', async () => {
+    const result = await search({ limit: 101, page: 501 });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ValidationError,
+        message: `${CLAMP_101} Requested page 501 at limit 100 exceeds this endpoint's 50,000-result page-number window.`,
+        data: { reason: 'pagination_limit_exceeded' },
+      },
+    });
+    expect(mockSearchAwards).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'without a total (the count failed)', total: undefined },
+    { label: 'with a total of 10,101, one row past this page', total: 10_101 },
+  ])(
+    'reports has_next true on a full 100-row page at limit 101 wherever limit 100 does, $label',
+    async ({ total }) => {
+      if (total !== undefined) mockCountAwards.mockResolvedValue(contractCount(total));
+      answer(rows(100), pastCursorWindow(101));
+
+      const at100 = await search({ limit: 100, page: 101 });
+      const at101 = await search({ limit: 101, page: 101 });
+
+      for (const result of [at100, at101]) {
+        expect(contentOf(result).page_metadata).toMatchObject({ has_next: true, limit: 100 });
+        expect(contentOf(result)).toMatchObject({ has_next: true });
+        expect(raw(result)).toContain('**Has next:** Yes');
+      }
+      expect(contentOf(at101).notice).toBe(`${CLAMP_101} ${contentOf(at100).notice}`);
+    },
+  );
+
+  it('keeps the clamp sentence beside the empty-page notice', async () => {
+    mockCountAwards.mockResolvedValue(contractCount(10));
+    answer([], pastCursorWindow(3));
+
+    const result = await search({ limit: 150, page: 3 });
+
+    const notice =
+      'limit 150 exceeds the per-call maximum of 100; this call used limit 100. Page 3 is past the end of the 10 matching results. Request an earlier page with the same filters.';
+    expect(contentOf(result)).toMatchObject({
+      page_metadata: { limit: 100, page: 3, has_next: false, total: 10 },
+      limitClamp: { field: 'limit', requested: 150, applied: 100 },
+      notice,
+    });
+    expect(markdownText(raw(result))).toContain(notice);
+  });
+
+  it('logs the applied limit and one clamp record', async () => {
+    answer(rows(1), pastCursorWindow(1));
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+    const input = searchAwardsTool.input.parse({ keyword: 'defense', limit: 101 });
+
+    await searchAwardsTool.handler(input, ctx);
+
+    const calls = (ctx.log as MockContextLogger).calls;
+    expect(calls).toContainEqual({
+      level: 'info',
+      msg: 'usaspending_search_awards',
+      data: { keyword: 'defense', limit: 100, page: 1 },
+    });
+    const clampRecords = calls.filter((c) => c.msg === 'Clamped a count input to its per-call cap');
+    expect(clampRecords).toHaveLength(1);
+  });
+
+  it('advertises no maximum by default, and maximum 100 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {
+    expect(advertisedProperty(searchAwardsTool.input, 'limit')).toEqual({
+      type: 'integer',
+      minimum: 1,
+      default: 10,
+      description: 'Awards per page. Default 10, at most 100 per call.',
+    });
+
+    const strict = await loadWithClampLimits(
+      'false',
+      async () =>
+        (await import('@/mcp-server/tools/definitions/search-awards.tool.js')).searchAwardsTool,
+    );
+
+    expect(advertisedProperty(strict.input, 'limit')).toMatchObject({ maximum: 100 });
+    const rejected = await runToolContract(strict, { limit: 101 });
+    expect(rejected.isError).toBe(true);
+    expect(markdownText(raw(rejected))).toContain('Too big: expected number to be <=100');
+    expect(mockSearchAwards).not.toHaveBeenCalled();
   });
 });

@@ -18,11 +18,16 @@ import {
 import {
   AWARD_TYPE_CODES,
   analyticsTypeMismatch,
+  applyLocationFilters,
   buildFilters,
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
+  describeLocationFilters,
+  LOCATION_FILTER_FIELDS,
+  locationFilterEcho,
   normalizeEffectiveFilters,
+  resolveLocationFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
 
@@ -32,7 +37,7 @@ const DEFAULT_AWARD_TYPE_CODES = AWARD_TYPE_CODES.contracts;
 export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
   title: 'Spending Over Time',
   description:
-    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, NAICS code, Assistance Listing, PSC, or DEF code to trace spending trends in a specific area; award types default to contracts. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, IDVs, loans, other).',
+    'Fetch aggregated federal obligation amounts grouped by fiscal year, fiscal quarter, or fiscal month. All grouping is relative to the US government fiscal year (Oct–Sep), so fiscal month 1 is October, not January. Filter by award type, agency, recipient, keyword, NAICS code, Assistance Listing, PSC, DEF code, or location (place of performance or recipient) to trace spending trends in a specific area; award types default to contracts. Returns per-period totals and optional breakdowns by award category (contracts, grants, direct payments, IDVs, loans, other).',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -74,6 +79,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
             'NAICS codes: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize whitespace, plus, leading zeros and digit underscores; unclassified spellings remain provider-validated',
           ),
         ...CODE_FILTER_FIELDS,
+        ...LOCATION_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
           'Start of the time window (YYYY-MM-DD), 2007-10-01 or later. Given alone, the window runs through today (UTC).',
         ),
@@ -183,6 +189,16 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       .string()
       .optional()
       .describe('DEF codes sent, uppercased (comma-separated)'),
+    applied_location: z
+      .string()
+      .optional()
+      .describe(
+        'Place of performance location sent, as normalized (e.g. country=USA, state=NM, county=049)',
+      ),
+    applied_recipient_location: z
+      .string()
+      .optional()
+      .describe('Recipient location sent, as normalized (e.g. country=USA, state=WA)'),
     applied_time_period_start: z
       .string()
       .optional()
@@ -195,7 +211,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       .string()
       .optional()
       .describe(
-        'Discloses effective award-type scope, composes any filled time-window bound, and names active code/recipient filters when no periods are returned.',
+        'Discloses effective award-type scope, composes any filled time-window bound, and names active code, recipient, and location filters when no periods are returned.',
       ),
   },
 
@@ -226,6 +242,14 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
       retryable: false,
       recovery:
         'Use recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash followed by uppercase -P, -C, or -R.',
+    },
+    {
+      reason: 'invalid_location',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'filters.place_of_performance_location or filters.recipient_location names an unknown US state, a county without a state or under an armed-forces code, a county or FIPS-number state under a non-USA country, or parts that place it in different states.',
+      retryable: false,
+      recovery:
+        "Under country USA (the default) or a US territory code, send state as a postal code (NM) or 2-digit FIPS code (35), and county as 3 digits with that state or as the 5-digit state + county code (35049). Under another country, send state as that country's own 2-letter subdivision code and no county.",
     },
     {
       reason: 'api_unavailable',
@@ -285,11 +309,15 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     const awardTypeCodes = supplied?.length ? supplied : DEFAULT_AWARD_TYPE_CODES;
     const effective = normalizeEffectiveFilters(input.filters ?? {});
     if ('reason' in effective) throw ctx.fail(effective.reason, effective.message);
+    const located = resolveLocationFilters(input.filters ?? {});
+    if (!located.ok) throw ctx.fail('invalid_location', located.message);
+    const { locations } = located;
     const { filters, timePeriod, codes } = buildFilters({
       ...input.filters,
       ...effective,
       award_type_codes: awardTypeCodes,
     });
+    applyLocationFilters(filters, locations);
     const inverted = invertedRangeMessage(timePeriod, ANALYTICS_DATE_FIELDS);
     if (inverted) {
       throw ctx.fail('date_range_inverted', inverted);
@@ -356,6 +384,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
         ? { applied_naics_codes: effective.naics_codes.join(', ') }
         : {}),
       ...codeFilterEcho(codes),
+      ...locationFilterEcho(locations),
       ...(timePeriod
         ? {
             applied_time_period_start: timePeriod.start_date,
@@ -372,6 +401,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
     if (results.length === 0) {
       const codeParts = describeCodeFilters(codes);
       if (effective.recipient_id) codeParts.push(`recipient_id=${effective.recipient_id}`);
+      codeParts.push(...describeLocationFilters(locations));
       notices.push(
         `No spending data periods returned${codeParts.length ? ` for ${codeParts.join(', ')}` : ''}. Try a broader time period or remove keyword/agency filters to get more data points.`,
       );

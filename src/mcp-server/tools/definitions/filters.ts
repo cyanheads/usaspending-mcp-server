@@ -1,12 +1,19 @@
 /**
  * @fileoverview Shared filter builder for USAspending analytics endpoints, and the
- * program, product/service, and emergency-funding code filters shared by
+ * program, product/service, and emergency-funding code filters and the
+ * place-of-performance and recipient location filters shared by
  * `usaspending_search_awards` and the three spending analytics tools.
  * @module mcp-server/tools/definitions/filters
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
 import { type DateRange, resolveDateRange } from './dates.js';
+import {
+  describeLocation,
+  LocationFilterSchema,
+  resolveLocation,
+  type SentLocation,
+} from './locations.js';
 
 /** Values selected after merge precedence, before an upstream request. */
 interface EffectiveFilters {
@@ -238,6 +245,86 @@ export function describeCodeFilters(codes: CodeFilters): string[] {
     ...(codes.psc_codes ? [`psc_codes=${codes.psc_codes.join(',')}`] : []),
     ...(codes.def_codes ? [`def_codes=${codes.def_codes.join(',')}`] : []),
   ];
+}
+
+/**
+ * The two location filters, keyed as every `filters` object that takes them
+ * declares them. One instance per key, spread into each tool's `filters`, so
+ * `tools/list` describes them identically everywhere.
+ */
+export const LOCATION_FILTER_FIELDS = {
+  place_of_performance_location: LocationFilterSchema.describe(
+    'Filter by place of performance — where the work is done. Takes codes, not place names — resolve a state or county name to its code with usaspending_autocomplete_filters type=location. Blank fields are ignored, and an all-blank object is no location filter. The location sent is echoed as applied_location.',
+  ),
+  recipient_location: LocationFilterSchema.describe(
+    'Filter by recipient location — where the recipient is based, which can differ from where the work is done. Takes codes, not place names — resolve a state or county name to its code with usaspending_autocomplete_filters type=location. Blank fields are ignored, and an all-blank object is no location filter. The location sent is echoed as applied_recipient_location.',
+  ),
+};
+
+type LocationFilterKey = keyof typeof LOCATION_FILTER_FIELDS;
+
+/** The location filters as a call supplied them. */
+export type LocationFilterInput = {
+  [K in LocationFilterKey]?: z.infer<typeof LocationFilterSchema>;
+};
+
+/** The locations sent, normalized; a key whose object was all blank is absent. */
+export type LocationFilters = { [K in LocationFilterKey]?: SentLocation };
+
+/** The upstream `filters` key each location filter is sent under, as a one-element list. */
+const UPSTREAM_LOCATION_KEYS = {
+  place_of_performance_location: 'place_of_performance_locations',
+  recipient_location: 'recipient_locations',
+} as const satisfies Record<LocationFilterKey, string>;
+
+const LOCATION_KEYS = Object.keys(UPSTREAM_LOCATION_KEYS) as LocationFilterKey[];
+
+/**
+ * Resolves both location filters per {@link resolveLocation}, naming the failing
+ * key's path (`filters.recipient_location.county "049" …`) in the message.
+ */
+export function resolveLocationFilters(
+  f: LocationFilterInput,
+): { locations: LocationFilters; ok: true } | { message: string; ok: false } {
+  const locations: LocationFilters = {};
+  for (const key of LOCATION_KEYS) {
+    const resolved = resolveLocation(f[key], `filters.${key}`);
+    if (!resolved.ok) return resolved;
+    if (resolved.location) locations[key] = resolved.location;
+  }
+  return { ok: true, locations };
+}
+
+/** Writes the locations into an upstream `filters` object under the endpoint's keys. */
+export function applyLocationFilters(
+  filters: Record<string, unknown>,
+  locations: LocationFilters,
+): void {
+  for (const key of LOCATION_KEYS) {
+    const location = locations[key];
+    if (location) filters[UPSTREAM_LOCATION_KEYS[key]] = [location];
+  }
+}
+
+/** The locations sent, as the `applied_*` echo every tool carries. */
+export function locationFilterEcho(locations: LocationFilters): {
+  applied_location?: string;
+  applied_recipient_location?: string;
+} {
+  const pop = locations.place_of_performance_location;
+  const recipient = locations.recipient_location;
+  return {
+    ...(pop ? { applied_location: describeLocation(pop) } : {}),
+    ...(recipient ? { applied_recipient_location: describeLocation(recipient) } : {}),
+  };
+}
+
+/** The locations sent, as `key="…"` parts an empty-result notice names. */
+export function describeLocationFilters(locations: LocationFilters): string[] {
+  return LOCATION_KEYS.flatMap((key) => {
+    const location = locations[key];
+    return location ? [`${key}="${describeLocation(location)}"`] : [];
+  });
 }
 
 /**

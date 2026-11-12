@@ -7,8 +7,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { formatCurrency } from './formatting.js';
 import { emptyPageNotice, formatPaginationLine } from './pagination.js';
+
+/** The `awards/accounts/` page maximum. */
+const LIMIT = countLimit({ tool: 'usaspending_get_award_federal_accounts', default: 10, cap: 100 });
 
 export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_accounts', {
   title: 'Get Award Federal Accounts',
@@ -23,13 +27,7 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       .describe(
         'Award generated_unique_award_id (e.g., CONT_AWD_GSFC0198106DNAS526555_8000_-NONE-_-NONE-) — use generated_internal_id from usaspending_search_awards or generated_unique_award_id from usaspending_get_award',
       ),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum results per page (1–100)'),
+    limit: LIMIT.schema.describe('Funding accounts per page. Default 10, at most 100 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -99,15 +97,17 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       .describe('Total number of funding accounts across all pages (when available)'),
     current_page: z.number().describe('Current page returned'),
     has_next_page: z.boolean().describe('Whether there are more pages of funding accounts'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery for an empty page, distinguished from a known zero total; absent when results are present.',
+        'A reduced limit, and recovery for an empty page, distinguished from a known zero total; absent when neither applies.',
       ),
   },
 
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -135,10 +135,11 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       award_id: input.award_id,
       page: input.page,
     });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
 
     const data = await svc.getAwardFederalAccounts(
-      { award_id: input.award_id, limit: input.limit, page: input.page },
+      { award_id: input.award_id, limit: limit.applied, page: input.page },
       ctx,
     );
 
@@ -179,16 +180,18 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
       has_next_page: hasNext,
     });
 
+    const notices = limit.notice ? [limit.notice] : [];
     if (results.length === 0) {
-      ctx.enrich.notice(
+      notices.push(
         emptyPageNotice(
           currentPage,
-          input.limit,
+          limit.applied,
           total,
           `No federal accounts fund award "${input.award_id}". Verify the award_id is a generated_unique_award_id from usaspending_search_awards (generated_internal_id field) — a nonexistent award_id returns this same empty result.`,
         ),
       );
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       award_id: input.award_id,
@@ -198,7 +201,7 @@ export const getAwardFederalAccountsTool = tool('usaspending_get_award_federal_a
         page: currentPage,
         has_next: hasNext,
         has_previous: hasPrevious,
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

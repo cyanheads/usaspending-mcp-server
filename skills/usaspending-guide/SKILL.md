@@ -4,7 +4,7 @@ description: Use with usaspending_* tools to trace federal awards through recipi
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## Scope
@@ -16,7 +16,7 @@ Use USAspending for federal award investigations and spending comparisons. Award
 Preserve identifiers returned at each hop rather than constructing them from display names:
 
 - Award search's `generated_internal_id` opens the award detail and award drill-down tools. The displayed award number is not the chain ID. An IDV child's `generated_unique_award_id` opens that child's detail.
-- Recipient search's `id`, award detail's `recipient.recipient_id`, and recipient-category rows' `recipient_id` identify recipient profiles. Preserve the hierarchy suffix; UEI and DUNS are separate identifiers.
+- Recipient search's `id`, award search rows' and award detail's `recipient_id`, and recipient-category rows' `recipient_id` identify recipient profiles. Preserve the hierarchy suffix; UEI and DUNS are separate identifiers.
 - Award funding rows' `federal_account` and account search's `account_number` open the federal-account tools. A detail's Treasury Account Symbol child code is not a federal-account code.
 
 ## Gates
@@ -33,7 +33,9 @@ Before attributing a matching award's amount to an Assistance Listing or DEF cod
 
 Resolve the organization with usaspending_search_recipients and inspect its profile before choosing a parent, child, or standalone entity. For exact-entity trends, carry that recipient hash into usaspending_spending_over_time and explicitly select award types. The profile covers every award type and defaults to the trailing 12 months; select a fiscal year when comparing annual results.
 
-Use usaspending_search_awards to discover individual awards by recipient name, then inspect their recipient identities. Name matching is partial and cannot substitute for the analytics tools' exact recipient hash when reconciling an entity's totals.
+Use usaspending_search_awards to discover individual awards by recipient name; each row's `recipient_id` opens usaspending_get_recipient, so inspect the identity there. Name matching is partial and cannot substitute for the analytics tools' exact recipient hash when reconciling an entity's totals.
+
+A recipient can have several parents; the profile's `parents` lists each. A `-P` parent lists its child recipients, but that list is a best-effort second request: when `unavailable_sections` names `children`, the profile stands and the child list is unknown, not empty.
 
 ### Trace an award's funding
 
@@ -45,7 +47,7 @@ Keep the award's funding contribution separate from the account's full budget.
 
 Choose recipient location or place of performance according to the question, and retain that distinction in the conclusion. Reuse the same award types and date range across geography, category, and time-series calls. Fiscal month 1 is October.
 
-For a named area absent from a ranked geography result, resolve its code and select it with usaspending_spending_by_geography rather than inferring zero spending. Returned county `shape_code` values can also be carried directly into award search's county location filter; award search normalizes the five-digit FIPS code and infers its state. External resolution is needed when the desired code is not already available from results.
+For a named area absent from a ranked geography result, resolve its code and select it with usaspending_spending_by_geography rather than inferring zero spending. Returned county `shape_code` values can also be carried directly into award search's county location filter; award search normalizes the five-digit FIPS code and infers its state. Scope any of these tools to a place with `filters.place_of_performance_location` (award search also takes the flat `location_filter`) or to where the recipient is based with `filters.recipient_location`; they answer different questions. Resolve a state, county, or congressional district name to its code with usaspending_autocomplete_filters `type: "location"`. Cities, ZIP codes, and countries are not covered there, so resolve those outside this server.
 
 ### Reconcile emergency funding
 

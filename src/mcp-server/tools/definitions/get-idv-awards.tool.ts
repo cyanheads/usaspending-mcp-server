@@ -8,8 +8,12 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { formatCurrency } from './formatting.js';
 import { resolveHasNext } from './pagination.js';
+
+/** The `idvs/awards/` page maximum. */
+const LIMIT = countLimit({ tool: 'usaspending_get_idv_awards', default: 10, cap: 100 });
 
 export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
   title: 'Get IDV Child Awards',
@@ -47,13 +51,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         'Field to sort child awards by (e.g., obligated_amount, period_of_performance_start_date)',
       ),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum results per page (1–100)'),
+    limit: LIMIT.schema.describe('Child awards per page. Default 10, at most 100 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -127,15 +125,17 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       .optional()
       .describe('Number of child awards returned on this page, when truncated.'),
     cap: z.number().optional().describe('The per-page limit that was applied, when truncated.'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'How to continue when truncated, or a recovery hint when results are empty — the award may have no children of the requested type. Absent otherwise.',
+        'A reduced limit; how to continue when truncated, or a recovery hint when results are empty — the award may have no children of the requested type. Absent otherwise.',
       ),
   },
 
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -164,6 +164,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       type: input.type,
       page: input.page,
     });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
 
     const data = await svc.getIdvAwards(
@@ -172,7 +173,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         type: input.type,
         sort: input.sort,
         order: input.order,
-        limit: input.limit,
+        limit: limit.applied,
         page: input.page,
       },
       ctx,
@@ -230,7 +231,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
      * guard: `truncated` means child awards are known to exist past this page, and a
      * full page the upstream marks as last carries no such evidence.
      */
-    const hasNext = resolveHasNext(rawHasNext, results.length, input.limit);
+    const hasNext = resolveHasNext(rawHasNext, results.length, limit.applied);
 
     ctx.enrich({
       parent_award_id: input.award_id,
@@ -238,19 +239,19 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
       has_next_page: hasNext,
     });
 
+    const notices = limit.notice ? [limit.notice] : [];
     if (results.length === 0) {
-      ctx.enrich.notice(
-        `No child awards of type "${input.type}" found for IDV "${input.award_id}". ` +
-          `Verify the award_id is a valid IDV and try type="child_idvs" if looking for sub-IDVs.`,
+      notices.push(
+        `No child awards of type "${input.type}" found for IDV "${input.award_id}". Verify the award_id is a valid IDV and try type="child_idvs" if looking for sub-IDVs.`,
       );
     } else if (rawHasNext) {
-      ctx.enrich.truncated({
-        shown: results.length,
-        cap: input.limit,
-        guidance:
-          'More child awards remain beyond this page. Request the next page to continue; an empty or short page marks the end. Raise limit up to 100 for fewer round-trips.',
-      });
+      notices.push(
+        `More child awards remain beyond this page. Request the next page to continue; an empty or short page marks the end.${limit.applied < LIMIT.cap ? ` Raise limit up to ${LIMIT.cap} for fewer round-trips.` : ''}`,
+      );
+      ctx.enrich.truncated({ shown: results.length, cap: limit.applied });
     }
+    // After truncated(), whose generated notice this replaces.
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       award_id: input.award_id,
@@ -259,7 +260,7 @@ export const getIdvAwardsTool = tool('usaspending_get_idv_awards', {
         has_next: hasNext,
         has_previous: hasPrevious,
         page: currentPage,
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

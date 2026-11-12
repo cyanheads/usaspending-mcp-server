@@ -7,9 +7,13 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import { accountFiscalYearSchema, normalizeAccountFiscalYear } from './fiscal-year.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
+
+/** The `federal_accounts/` page maximum. */
+const LIMIT = countLimit({ tool: 'usaspending_search_federal_accounts', default: 10, cap: 100 });
 
 export const searchFederalAccountsTool = tool('usaspending_search_federal_accounts', {
   title: 'Search Federal Accounts',
@@ -34,13 +38,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       .default('budgetary_resources')
       .describe('Field to sort results by'),
     sort_direction: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .default(10)
-      .describe('Maximum results per page (1–100)'),
+    limit: LIMIT.schema.describe('Accounts per page. Default 10, at most 100 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 
@@ -101,15 +99,17 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       .describe('Total number of matching accounts across all pages (when available)'),
     page: z.number().describe('Current page number returned'),
     has_next: z.boolean().describe('Whether there are more pages of results'),
+    limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — echoes applied filters and suggests how to broaden. Absent when results are present.',
+        'A reduced limit, and a recovery hint when results are empty — echoes applied filters and suggests how to broaden. Absent when neither applies.',
       ),
   },
 
   enrichmentTrailer: {
+    limitClamp: limitClampTrailer,
     notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
   },
 
@@ -138,12 +138,13 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       agency_identifier: input.agency_identifier,
       page: input.page,
     });
+    const limit = LIMIT.apply(ctx, 'limit', input.limit);
     const svc = getUSASpendingService();
 
     const body: Record<string, unknown> = {
       sort: { field: input.sort_field, direction: input.sort_direction },
       page: input.page,
-      limit: input.limit,
+      limit: limit.applied,
     };
     if (input.keyword) body.keyword = input.keyword;
     if (input.agency_identifier || typeof input.fiscal_year === 'number') {
@@ -187,17 +188,19 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
       has_next: hasNext,
     });
 
+    const notices = limit.notice ? [limit.notice] : [];
     if (results.length === 0) {
       const filterParts: string[] = [];
       if (input.keyword) filterParts.push(`keyword="${input.keyword}"`);
       if (input.agency_identifier)
         filterParts.push(`agency_identifier="${input.agency_identifier}"`);
-      const notice =
+      notices.push(
         filterParts.length > 0
           ? `No federal accounts matched: ${filterParts.join(', ')}. Try removing filters or using a broader keyword.`
-          : 'No federal accounts matched. Try a different keyword or agency identifier.';
-      ctx.enrich.notice(notice);
+          : 'No federal accounts matched. Try a different keyword or agency identifier.',
+      );
     }
+    if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
       ...(fiscalYear !== undefined ? { fiscal_year: fiscalYear } : {}),
@@ -206,7 +209,7 @@ export const searchFederalAccountsTool = tool('usaspending_search_federal_accoun
         ...(total !== undefined ? { count: total } : {}),
         page: currentPage,
         has_next: hasNext,
-        limit: input.limit,
+        limit: limit.applied,
       },
     };
   },

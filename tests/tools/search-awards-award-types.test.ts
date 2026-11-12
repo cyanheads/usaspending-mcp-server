@@ -1,22 +1,24 @@
 /**
  * @fileoverview `usaspending_search_awards` behavior keyed to the award-type
- * group: sort resolution and validation, the loan fields, and the
- * `assistance_listings` filter. Runs through the tool's public contract on a
- * real `USASpendingService` beneath a strict fetch fake, so every assertion
- * reads the request body that actually left the process — and a pre-request
- * rejection is proven by an empty call log.
+ * group: sort resolution and validation, the loan fields, the
+ * `assistance_listings` filter, and the count bucket that supplies the total.
+ * Runs through the tool's public contract on a real `USASpendingService`
+ * beneath a strict fetch fake, so every assertion reads the request body that
+ * actually left the process — and a pre-request rejection is proven by an empty
+ * call log.
  * @module tests/tools/search-awards-award-types.test
  */
 
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createFetchMock, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { searchAwardsTool } from '@/mcp-server/tools/definitions/search-awards.tool.js';
 import { initUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 
 const BASE = 'https://api.usaspending.gov/api/v2/';
 const ENDPOINT = `${BASE}search/spending_by_award/`;
+const COUNT_ENDPOINT = `${BASE}search/spending_by_award_count/`;
 
 /** Unrouted requests reject, so nothing in this file can reach the live API. */
 const http = createFetchMock();
@@ -28,9 +30,21 @@ const contractRow = {
   'Award Amount': 1_000_000,
 };
 
-/** Routes one spending_by_award answer carrying `rows`. */
-const answer = (rows: Record<string, unknown>[] = [contractRow]) =>
+/** Count buckets with no matches in any award-type group. */
+const NO_MATCHES = { contracts: 0, idvs: 0, grants: 0, direct_payments: 0, loans: 0, other: 0 };
+
+/** Routes the count endpoint's answer carrying `buckets`. */
+const answerCount = (buckets: Record<string, number>) =>
   http.route({
+    method: 'POST',
+    match: COUNT_ENDPOINT,
+    respond: Response.json({ results: buckets, spending_level: 'awards', messages: [] }),
+  });
+
+/** Routes one spending_by_award answer carrying `rows`, and a count matching them. */
+const answer = (rows: Record<string, unknown>[] = [contractRow]) => {
+  answerCount(Object.fromEntries(Object.keys(NO_MATCHES).map((key) => [key, rows.length])));
+  return http.route({
     method: 'POST',
     match: ENDPOINT,
     respond: Response.json({
@@ -39,10 +53,14 @@ const answer = (rows: Record<string, unknown>[] = [contractRow]) =>
       messages: [],
     }),
   });
+};
 
-/** The JSON body of the `n`th request sent upstream. */
+/** The calls sent to one endpoint, in order. */
+const callsTo = (url: string) => http.calls.filter((call) => call.request.url === url);
+
+/** The JSON body of the `n`th search request sent upstream. */
 const sentBody = async (n = 0) =>
-  JSON.parse(await http.calls[n]!.request.text()) as {
+  JSON.parse(await callsTo(ENDPOINT)[n]!.request.text()) as {
     sort: string;
     fields: string[];
     filters: Record<string, unknown>;
@@ -332,7 +350,8 @@ describe('usaspending_search_awards — award-type-aware sort (#60)', () => {
       'Subsidy Cost': 10,
       'Issued Date': '2024-06-01',
     }));
-    // Capped means the upstream reports a next page (#76); a full page alone is not enough.
+    // Capped means rows are known past the page (#76); a full page alone is not enough.
+    answerCount({ ...NO_MATCHES, loans: 12 });
     http.route({
       method: 'POST',
       match: ENDPOINT,
@@ -445,7 +464,8 @@ describe('usaspending_search_awards — assistance_listings filter (#61)', () =>
     expect(mixed.structuredContent).toMatchObject({
       error: { data: { reason: 'assistance_listings_type_mismatch' } },
     });
-    expect(http.calls).toHaveLength(1);
+    expect(callsTo(ENDPOINT)).toHaveLength(1);
+    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(1);
   });
 
   it('allows loans, which carry listings, and keeps the loan sort', async () => {
@@ -494,7 +514,124 @@ describe('usaspending_search_awards — assistance_listings filter (#61)', () =>
     const result = await run({ assistance_listings: ['99.999'], award_type_codes: ['02'] });
 
     const notice = (result.structuredContent as { notice?: string }).notice;
-    expect(notice).toContain('Page 1 returned no awards');
+    expect(notice).toContain('No awards match');
     expect(notice).toContain('assistance_listings=99.999');
+  });
+});
+
+/** The count bucket each group's award type codes select. */
+const BUCKETS = { contracts: 11, idvs: 22, grants: 33, direct_payments: 44, loans: 55, other: 66 };
+
+describe('usaspending_search_awards — the total from the count request (#114)', () => {
+  type Content = Record<string, unknown> & { page_metadata: Record<string, unknown> };
+  const contentOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.structuredContent as Content;
+  const countBody = async () =>
+    JSON.parse(await callsTo(COUNT_ENDPOINT)[0]!.request.text()) as Record<string, unknown>;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['contracts', ['A', 'B', 'C', 'D']],
+    ['contracts', ['A', 'B']],
+    ['idvs', ['IDV_A', 'IDV_B_C', 'IDV_E']],
+    ['grants', ['02', 'F002']],
+    ['direct_payments', ['06', '10', 'F006', 'F007']],
+    ['loans', ['07', 'F004']],
+    ['other', ['-1', 'F010']],
+  ] as const)('reads the %s bucket for codes %j', async (bucket, codes) => {
+    answerCount(BUCKETS);
+    http.route({
+      method: 'POST',
+      match: ENDPOINT,
+      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
+    });
+
+    const result = await run({ award_type_codes: [...codes], keyword: 'bridge' });
+
+    expect(result.isError).toBeFalsy();
+    expect(contentOf(result)).toMatchObject({
+      totalCount: BUCKETS[bucket],
+      page_metadata: { total: BUCKETS[bucket] },
+    });
+    // One count, carrying exactly the filters the search sent and nothing else.
+    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(1);
+    expect(await countBody()).toEqual({ filters: (await sentBody()).filters });
+  });
+
+  it.each([
+    {
+      label: 'a 4xx',
+      status: 422,
+      body: { detail: 'Field filters|keywords must be a list' },
+      reason: 'upstream_error',
+      retryable: false,
+    },
+    {
+      label: 'a 5xx',
+      status: 503,
+      body: { detail: 'Service Unavailable' },
+      reason: 'api_unavailable',
+      retryable: true,
+    },
+  ])('answers with the rows when the count fails with $label, sending it once', async (c) => {
+    http.route({
+      method: 'POST',
+      match: COUNT_ENDPOINT,
+      respond: Response.json(c.body, { status: c.status }),
+    });
+    http.route({
+      method: 'POST',
+      match: ENDPOINT,
+      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
+    });
+
+    const result = await run({ keyword: 'bridge' });
+
+    expect(result.isError).toBeFalsy();
+    const sc = contentOf(result);
+    expect(sc.results).toHaveLength(1);
+    expect(sc).not.toHaveProperty('totalCount');
+    expect(sc.page_metadata).not.toHaveProperty('total');
+    expect(sc.unavailable_sections).toEqual([
+      expect.objectContaining({ section: 'total', reason: c.reason, retryable: c.retryable }),
+    ]);
+    expect(sc.notice).toContain(`Partial result: total (${c.reason})`);
+    expect(textOf(result)).toContain('**Unavailable sections:**');
+    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(1);
+  });
+
+  it('aborts a count that outruns its 10 s deadline and answers by then', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    http.route({
+      method: 'POST',
+      match: COUNT_ENDPOINT,
+      respond: (request) =>
+        new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener('abort', () => reject(request.signal.reason));
+        }),
+    });
+    http.route({
+      method: 'POST',
+      match: ENDPOINT,
+      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
+    });
+
+    let settled = false;
+    const pending = run({ keyword: 'bridge' }).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(settled).toBe(true);
+    const sc = contentOf(await pending);
+    expect(sc.results).toHaveLength(1);
+    expect(sc).not.toHaveProperty('totalCount');
+    expect(sc.unavailable_sections).toEqual([
+      expect.objectContaining({ section: 'total', reason: 'api_timeout', retryable: true }),
+    ]);
+    expect(callsTo(COUNT_ENDPOINT)[0]!.request.signal.aborted).toBe(true);
   });
 });

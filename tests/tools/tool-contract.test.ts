@@ -97,6 +97,14 @@ vi.mock('@/services/usaspending/usaspending-service.js', async (importOriginal) 
     getAward: vi.fn(async (awardId: string) =>
       awardId === KNOWN_AWARD_ID ? awardFixture : undefined,
     ),
+    countAwards: vi.fn().mockResolvedValue({
+      contracts: 0,
+      idvs: 0,
+      grants: 0,
+      direct_payments: 0,
+      loans: 1,
+      other: 0,
+    }),
     searchAwards: vi.fn().mockResolvedValue({
       results: [
         {
@@ -320,6 +328,69 @@ describe('disasterSpendingTool through the real service', () => {
     const text = textOf(result);
     expect(text).toContain(`Recovery: ${recoveryOf('api_unavailable')}`);
     expect(text).toContain('(reason api_unavailable · retryable)');
+  });
+
+  /**
+   * The upstream's error body stays on the server. The service lifts a 4xx
+   * `detail` into the message and keeps a bounded copy of the body on the thrown
+   * error for the failure log, but neither surface a client reads carries the
+   * body itself — so a proxy's HTML error page never reaches a client as markup.
+   */
+  describe('upstream error bodies', () => {
+    const errorOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      (result.structuredContent as { error: { message: string; data: Record<string, unknown> } })
+        .error;
+
+    it('keeps a 4xx body off both surfaces while its detail reaches the message', async () => {
+      http.route({
+        method: 'GET',
+        match: `${BASE}disaster/overview/`,
+        respond: () =>
+          Response.json(
+            { detail: 'Disaster overview is unavailable', trace: 'UPSTREAM-BODY-SENTINEL' },
+            { status: 400 },
+          ),
+      });
+      build({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+      const result = await runToolContract(disasterSpendingTool, { dimension: 'overview' });
+
+      expect(result.isError).toBe(true);
+      const error = errorOf(result);
+      expect(error.message).toBe(
+        'USAspending rejected GET disaster/overview/ (HTTP 400): Disaster overview is unavailable',
+      );
+      expect(error.data).toMatchObject({ status: 400, errorSource: 'FetchHttpError' });
+      expect(error.data).not.toHaveProperty('body');
+      expect(error.data).not.toHaveProperty('responseBody');
+      expect(markdownText(textOf(result))).toContain('Disaster overview is unavailable');
+      expect(JSON.stringify(result)).not.toContain('UPSTREAM-BODY-SENTINEL');
+    });
+
+    it("keeps a proxy's HTML 5xx page off both surfaces", async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const page =
+        '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><h1>Bad Gateway</h1><p>PROXY-PAGE-SENTINEL</p></body></html>';
+      http.route({
+        method: 'GET',
+        match: `${BASE}disaster/overview/`,
+        respond: () => new Response(page, { status: 502 }),
+      });
+      build({ timeoutMs: 60_000, retryBudgetMs: 60_000 });
+
+      const pending = runToolContract(disasterSpendingTool, { dimension: 'overview' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+
+      expect(http.calls).toHaveLength(4);
+      const error = errorOf(result);
+      expect(error.data).toMatchObject({ reason: 'api_unavailable', status: 502 });
+      expect(error.data).not.toHaveProperty('body');
+      expect(error.data).not.toHaveProperty('responseBody');
+      const wire = JSON.stringify(result);
+      expect(wire).not.toContain('PROXY-PAGE-SENTINEL');
+      expect(wire).not.toContain('<html>');
+    });
   });
 
   it('carries breakdown totals on both surfaces (#63)', async () => {

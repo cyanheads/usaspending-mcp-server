@@ -756,7 +756,7 @@ describe('disaster filters and notices', () => {
             data: {
               reason: 'missing_def_codes',
               retryable: false,
-              recovery: { hint: expect.stringContaining('filters.def_codes') },
+              recovery: { hint: expect.stringContaining('usaspending_autocomplete_filters') },
             },
           },
         });

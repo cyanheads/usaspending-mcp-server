@@ -4,7 +4,7 @@ description: Use with usaspending_* tools to trace federal awards through recipi
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.2"
+  version: "1.3"
 ---
 
 ## Scope
@@ -25,13 +25,17 @@ Before comparing amounts across tools, fix the award types, period, recipient hi
 
 Before treating an empty ID-keyed listing as evidence of no activity, confirm the award or account with its detail tool. A nonexistent ID can also return an empty listing. Check pagination and response notices before describing any result as exhaustive.
 
+Before interpreting an agency-filtered zero, check whether the response verified the agency name. An unresolved-name notice means zero spending does not establish that the agency had no activity; use the agency lookup to confirm the intended name.
+
 Before attributing a matching award's amount to an Assistance Listing or DEF code, inspect the award's listing obligations or DEF funding breakdown. These filters select matching awards; the returned whole-award amount is not the requested listing's or code's share.
 
 ## Workflows
 
 ### Investigate a recipient
 
-Resolve the organization with usaspending_search_recipients and inspect its profile before choosing a parent, child, or standalone entity. For exact-entity trends, carry that recipient hash into usaspending_spending_over_time and explicitly select award types. The profile covers every award type and defaults to the trailing 12 months; select a fiscal year when comparing annual results.
+Resolve the organization with usaspending_search_recipients and inspect its profile before choosing a parent, child, or standalone entity. For the entity's own awards, carry the returned child (`-C`) or standalone (`-R`) ID into usaspending_spending_over_time and explicitly select award types. These roles depend on the parent recorded with each award; check both when search returns both, and never construct one ID by changing another's suffix. A parent (`-P`) ID covers awards attributed to that parent, whose historical attribution can change.
+
+Recipient search amounts are precomputed trailing-12-month obligations and can differ from the profile's live totals. The profile covers every award type and defaults to the trailing 12 months; select a fiscal year for annual comparisons or all fiscal years for USAspending's available recipient history.
 
 Use usaspending_search_awards to discover individual awards by recipient name; each row's `recipient_id` opens usaspending_get_recipient, so inspect the identity there. Name matching is partial and cannot substitute for the analytics tools' exact recipient hash when reconciling an entity's totals.
 
@@ -51,7 +55,7 @@ For a named area absent from a ranked geography result, resolve its code and sel
 
 ### Reconcile emergency funding
 
-Choose DEF codes for the appropriation being investigated, then keep them fixed across breakdowns. Use the agency breakdown's total-spending view when the question includes direct non-award spending. Recipient and program breakdowns do not gain that coverage by requesting total spending, and geography reports obligations; their sums cannot stand in for the agency total-spending view.
+Resolve the appropriation's title or public law to DEF codes with usaspending_autocomplete_filters, then keep those codes fixed across breakdowns. The reference lookup is independent of whether one agency reports spending under a code in a particular year. Use the agency breakdown's total-spending view when the question includes direct non-award spending. Recipient and program breakdowns do not gain that coverage by requesting total spending, and geography reports obligations; their sums cannot stand in for the agency total-spending view.
 
 Check amount_coverage before interpreting any monetary value. Award breakdowns and geography aggregate only the provider's COVID DEF grouping; other codes can still add matching rows and award counts. Partial coverage means the amounts exclude unsupported codes; unavailable coverage means retained zeros cannot establish zero spending. Unknown coverage means the reference could not be verified. Overview and agency total cover all requested codes. General category/geography DEF filters offer whole matching award amounts, not the DEF-funded share.
 

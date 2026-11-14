@@ -72,6 +72,7 @@ type ToolCase = (typeof TOOLS)[number];
 
 const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
   result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+const NO_DATE_FILTER = "USAspending's available coverage without a date filter.";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -132,6 +133,17 @@ describe.each(TOOLS)('$name — unchanged date behavior', (tool: ToolCase) => {
     expect(tool.sent()).not.toHaveProperty('time_period');
     expect(result.structuredContent).not.toHaveProperty('applied_time_period_start');
     expect(result.structuredContent).not.toHaveProperty('applied_time_period_end');
+    if (tool.name === 'usaspending_spending_over_time') {
+      expect(result.structuredContent).not.toMatchObject({
+        notice: expect.stringContaining(NO_DATE_FILTER),
+      });
+      expect(textOf(result)).not.toContain(NO_DATE_FILTER);
+    } else {
+      expect(result.structuredContent).toMatchObject({
+        notice: expect.stringContaining(NO_DATE_FILTER),
+      });
+      expect(textOf(result)).toContain(NO_DATE_FILTER);
+    }
   });
 
   it('treats blank date strings from form clients as no date filter', async () => {
@@ -144,6 +156,12 @@ describe.each(TOOLS)('$name — unchanged date behavior', (tool: ToolCase) => {
     expect(result.isError).toBeFalsy();
     expect(tool.sent()).not.toHaveProperty('time_period');
     expect(result.structuredContent).not.toHaveProperty('applied_time_period_start');
+    if (tool.name !== 'usaspending_spending_over_time') {
+      expect(result.structuredContent).toMatchObject({
+        notice: expect.stringContaining(NO_DATE_FILTER),
+      });
+      expect(textOf(result)).toContain(NO_DATE_FILTER);
+    }
   });
 
   it('treats a whitespace-only date as blank, not as a malformed date', async () => {
@@ -237,6 +255,26 @@ describe.each(TOOLS)('$name — date inputs (#58, #62)', (tool: ToolCase) => {
   });
 });
 
+it('discloses parent attribution on a zero-valued series alongside date and award-type scope', async () => {
+  svc.spendingOverTime.mockResolvedValue({
+    results: [{ time_period: { fiscal_year: '2022' }, aggregated_amount: 0 }],
+  });
+  const result = await runToolContract(spendingOverTimeTool, {
+    group: 'fiscal_year',
+    filters: {
+      recipient_id: 'ABCDEF12-1234-0000-0000-ABCDEF123456-P',
+      time_period_end: '2022-09-30',
+    },
+  });
+  expect(result.structuredContent).toMatchObject({
+    results: [{ aggregated_amount: 0 }],
+    notice: expect.stringContaining('awards USAspending attributes to that parent'),
+  });
+  expect(textOf(result)).toContain('awards USAspending attributes to that parent');
+  expect(textOf(result)).toContain('filters.time_period_start was not supplied');
+  expect(textOf(result)).toContain('contract default');
+});
+
 describe('usaspending_spending_by_geography — half range and defaults (#62)', () => {
   it('does not report the no-filter award-type default for a lone date', async () => {
     const result = await runToolContract(spendingByGeographyTool, {
@@ -300,7 +338,8 @@ describe('usaspending_search_awards — date specifics (#58, #62)', () => {
     expect(result.isError).toBeFalsy();
     expect(svc.searchAwards.mock.calls.at(-1)?.[0].filters).not.toHaveProperty('time_period');
     expect(result.structuredContent).not.toHaveProperty('applied_time_period_start');
-    expect(result.structuredContent).not.toHaveProperty('notice');
+    expect(result.structuredContent).toHaveProperty('notice', `Results use ${NO_DATE_FILTER}`);
+    expect(textOf(result)).toContain(NO_DATE_FILTER);
   });
 
   it('fills a half-blank flat pair as a lone end, naming time_period.start_date', async () => {

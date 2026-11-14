@@ -9,7 +9,7 @@
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAgencyTool } from '@/mcp-server/tools/definitions/get-agency.tool.js';
 import { initUSASpendingService } from '@/services/usaspending/usaspending-service.js';
@@ -17,14 +17,14 @@ import { initUSASpendingService } from '@/services/usaspending/usaspending-servi
 const BASE = 'https://api.usaspending.gov/api/v2/';
 
 /** Per-path responders; any request not listed fails the test instead of reaching the network. */
-type Routes = Record<string, (url: URL) => Response | Promise<Response>>;
+type Routes = Record<string, (url: URL, init?: RequestInit) => Response | Promise<Response>>;
 
 const stubRoutes = (routes: Routes) => {
-  const fetchMock = vi.fn(async (url: string) => {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const parsed = new URL(url);
     const responder = routes[parsed.pathname.replace('/api/v2/', '')];
     if (!responder) throw new Error(`Unmocked fetch in get-agency-upstream.test: ${url}`);
-    return responder(parsed);
+    return responder(parsed, init);
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -58,7 +58,163 @@ const settle = async (input: Parameters<typeof runToolContract<typeof getAgencyT
 
 const MISS_999 = { detail: "Agency with a toptier code of '999' does not exist" };
 
+const agencyDefRoutes = (supplemental: Routes[string]): Routes => ({
+  'agency/075/': (url, init) =>
+    url.searchParams.has('fiscal_year')
+      ? supplemental(url, init)
+      : Response.json({ name: 'Health and Human Services', fiscal_year: 2027, def_codes: [] }),
+  'agency/075/budgetary_resources/': json(200, {
+    agency_data_by_year: [{ fiscal_year: 2026, agency_total_obligated: 100 }],
+  }),
+  'agency/075/sub_agency/': json(200, {
+    fiscal_year: 2026,
+    results: [{ name: 'Administration for Children and Families' }],
+  }),
+});
+
+const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+  result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+
 describe('usaspending_get_agency against the real service', () => {
+  it('uses the eventual budget year for DEF codes after the sub-agency fallback', async () => {
+    const codes = [
+      { code: 'Z', title: 'Infrastructure Investment and Jobs Act', public_law: '117-58' },
+    ];
+    const fetchMock = stubRoutes({
+      'agency/075/': (url) =>
+        url.searchParams.has('fiscal_year')
+          ? json(200, { fiscal_year: 2026, def_codes: codes })()
+          : json(200, { name: 'Health and Human Services', fiscal_year: 2027, def_codes: [] })(),
+      'agency/075/budgetary_resources/': () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(
+            () =>
+              resolve(
+                Response.json({
+                  agency_data_by_year: [
+                    { fiscal_year: 2027, agency_total_obligated: null },
+                    { fiscal_year: 2026, agency_total_obligated: 0 },
+                  ],
+                }),
+              ),
+            6_000,
+          );
+        }),
+      'agency/075/sub_agency/': json(200, { fiscal_year: 2027, results: [] }),
+    });
+    const result = await settle({ toptier_code: '075', page: 50 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      fiscal_year: 2026,
+      obligated_amount: 0,
+      sub_agency_fiscal_year: 2027,
+      def_codes_fiscal_year: 2026,
+      def_codes: codes,
+    });
+    const text = textOf(result);
+    expect(text).toContain('**DEF Codes Fiscal Year:** 2026');
+    expect(text).toContain('**Z** — Infrastructure Investment and Jobs Act (117-58)');
+    const urls = fetchMock.mock.calls.map(([url]) => new URL(url));
+    const subIndex = urls.findIndex((url) => url.pathname.endsWith('/sub_agency/'));
+    const defIndex = urls.findIndex((url) => url.search === '?fiscal_year=2026');
+    expect(urls[subIndex]?.search).toBe('?page=50&limit=10');
+    expect(defIndex).toBeGreaterThan(subIndex);
+  });
+
+  it.each([undefined, 2027])('reuses the default year when the budget year is %s', async (year) => {
+    const fetchMock = stubRoutes({
+      ...agencyDefRoutes(() => {
+        throw new Error('Unexpected supplemental lookup');
+      }),
+      'agency/075/budgetary_resources/': json(200, {
+        agency_data_by_year:
+          year === undefined ? [] : [{ fiscal_year: year, agency_total_obligated: 0 }],
+      }),
+    });
+    const result = await settle({ toptier_code: '075' });
+    expect(result.structuredContent).toMatchObject({ def_codes_fiscal_year: 2027, def_codes: [] });
+    expect(textOf(result)).toContain('USAspending reported no DEF codes.');
+    expect(pathsCalled(fetchMock).filter((path) => path === 'agency/075/')).toHaveLength(1);
+  });
+
+  it('distinguishes an empty DEF list for the requested year from an unavailable list', async () => {
+    stubRoutes(agencyDefRoutes(json(200, { fiscal_year: 2026, def_codes: [] })));
+    const result = await settle({ toptier_code: '075' });
+    expect(result.structuredContent).toMatchObject({ def_codes_fiscal_year: 2026, def_codes: [] });
+    expect(result.structuredContent).not.toHaveProperty('unavailable_sections');
+    expect(textOf(result)).toContain('USAspending reported no DEF codes.');
+  });
+
+  it.each([
+    [503, {}, 'api_unavailable', true],
+    [404, {}, 'upstream_error', false],
+    [200, { fiscal_year: 2027, def_codes: [{ code: 'Z' }] }, 'api_unavailable', false],
+    [200, { fiscal_year: 2026 }, 'api_unavailable', false],
+  ] as const)(
+    'keeps other results when the DEF lookup returns %i %j',
+    async (status, body, reason, retryable) => {
+      const fetchMock = stubRoutes(agencyDefRoutes(json(status, body)));
+      const result = await settle({ toptier_code: '075' });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        name: 'Health and Human Services',
+        fiscal_year: 2026,
+        obligated_amount: 100,
+        sub_agency_fiscal_year: 2026,
+        unavailable_sections: [
+          expect.objectContaining({ section: 'def_codes', reason, retryable }),
+        ],
+      });
+      expect(result.structuredContent).not.toHaveProperty('def_codes');
+      expect(result.structuredContent).not.toHaveProperty('def_codes_fiscal_year');
+      expect(textOf(result)).toContain(`- def_codes: ${reason}`);
+      expect(pathsCalled(fetchMock).filter((path) => path === 'agency/075/')).toHaveLength(2);
+    },
+  );
+
+  it('returns the rest of the agency within the supplemental deadline if the DEF body stalls', async () => {
+    stubRoutes(
+      agencyDefRoutes(
+        (_url, init) =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                init?.signal?.addEventListener('abort', () =>
+                  controller.error(init.signal?.reason),
+                );
+              },
+            }),
+          ),
+      ),
+    );
+    let result: Awaited<ReturnType<typeof runToolContract>> | undefined;
+    const pending = runToolContract(getAgencyTool, { toptier_code: '075' }).then((value) => {
+      result = value;
+    });
+    await vi.advanceTimersByTimeAsync(3_001);
+    expect(result?.structuredContent).toMatchObject({
+      name: 'Health and Human Services',
+      unavailable_sections: [
+        expect.objectContaining({ section: 'def_codes', reason: 'api_timeout', retryable: true }),
+      ],
+    });
+    await pending;
+  });
+
+  it('propagates caller cancellation while the supplemental request is in flight', async () => {
+    const abort = new AbortController();
+    const reason = new DOMException('Cancelled agency lookup', 'AbortError');
+    stubRoutes(
+      agencyDefRoutes(() => {
+        abort.abort(reason);
+        return Response.json({ fiscal_year: 2026, def_codes: [] });
+      }),
+    );
+    const ctx = createMockContext({ signal: abort.signal, errors: getAgencyTool.errors });
+    const input = getAgencyTool.input.parse({ toptier_code: '075' });
+    await expect(getAgencyTool.handler(input, ctx)).rejects.toBe(reason);
+  });
+
   it('fails a nonexistent agency as agency_not_found even though its sub-resources also 404', async () => {
     const fetchMock = stubRoutes({
       'agency/999/': json(404, MISS_999),
@@ -86,6 +242,7 @@ describe('usaspending_get_agency against the real service', () => {
         name: '400 Years of African-American History Commission',
         abbreviation: 'AAHC',
         agency_id: 1525,
+        fiscal_year: 2025,
         subtier_agency_count: 0,
         def_codes: [],
       }),

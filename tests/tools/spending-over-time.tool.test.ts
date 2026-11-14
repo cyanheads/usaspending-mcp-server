@@ -10,7 +10,10 @@ import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-ov
 const mockSpendingOverTime = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
-  getUSASpendingService: () => ({ spendingOverTime: mockSpendingOverTime }),
+  getUSASpendingService: () => ({
+    spendingOverTime: mockSpendingOverTime,
+    autocompleteAwardingAgency: async () => ({ results: {} }),
+  }),
 }));
 
 describe('spendingOverTimeTool', () => {

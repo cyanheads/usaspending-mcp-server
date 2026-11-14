@@ -19,6 +19,7 @@ import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 
 const svc = vi.hoisted(() => ({
+  autocompleteAwardingAgency: vi.fn(async () => ({ results: {} })),
   searchAwards: vi.fn(),
   countAwards: vi.fn(),
   spendingByCategory: vi.fn(),
@@ -39,6 +40,7 @@ const BLANK_ANALYTICS_FILTERS = {
   keywords: [],
   award_type_codes: [],
   agency_name: '',
+  funding_agency_name: '',
   recipient_id: '',
   naics_codes: [],
   assistance_listings: [],

@@ -12,7 +12,10 @@ import { markdownText } from '../helpers/markdown-text.js';
 const mockSpendingByCategory = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
-  getUSASpendingService: () => ({ spendingByCategory: mockSpendingByCategory }),
+  getUSASpendingService: () => ({
+    spendingByCategory: mockSpendingByCategory,
+    autocompleteAwardingAgency: async () => ({ results: {} }),
+  }),
 }));
 
 // A case that fails before its call would leave its queued answer for the next case.
@@ -427,7 +430,10 @@ describe('spendingByCategoryTool limit above the 100 cap (#99)', () => {
 
     expect(mockSpendingByCategory.mock.lastCall?.[1]).toMatchObject({ limit: 100 });
     expect(result.structuredContent).not.toHaveProperty('limitClamp');
-    expect(result.structuredContent).not.toHaveProperty('notice');
+    expect(result.structuredContent).toHaveProperty(
+      'notice',
+      "Results use USAspending's available coverage without a date filter.",
+    );
   });
 
   it('advertises no maximum by default, and maximum 100 with rejection under USASPENDING_CLAMP_LIMITS=false', async () => {

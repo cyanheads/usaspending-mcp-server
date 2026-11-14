@@ -39,9 +39,11 @@ describe('limit above the 1,000 cap (#99)', () => {
     expect(result.isError).toBeFalsy();
     expect(mockSearchRecipients.mock.calls[0]?.[0]).toMatchObject({ limit: 1000 });
     expect(result.structuredContent).toMatchObject({
+      period: 'trailing 12 months',
       page_metadata: { limit: 1000 },
       recipient_count: 1000,
     });
+    expect(raw(result)).toContain('**Period:** trailing 12 months');
     expect(result.structuredContent).not.toHaveProperty('limitClamp');
   });
 
@@ -108,6 +110,60 @@ describe('limit above the 1,000 cap (#99)', () => {
 });
 
 describe('searchRecipientsTool', () => {
+  it('labels amounts with the snapshot period on both surfaces', async () => {
+    mockSearchRecipients.mockResolvedValueOnce({
+      results: [{ id: 'acme-R', amount: 42 }],
+      page_metadata: { page: 1, total: 1, hasNext: false },
+    });
+
+    const result = await runToolContract(searchRecipientsTool, { keyword: 'Acme' });
+
+    expect(result.structuredContent).toMatchObject({
+      period: 'trailing 12 months',
+      results: [{ id: 'acme-R', amount: 42 }],
+    });
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('**Period:** trailing 12 months'),
+    });
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('**Obligations:** $42'),
+    });
+    expect(mockSearchRecipients).toHaveBeenLastCalledWith(
+      { keyword: 'Acme', limit: 10, page: 1 },
+      expect.anything(),
+    );
+  });
+
+  it('keeps the period on a filtered page past the end', async () => {
+    mockSearchRecipients.mockResolvedValueOnce({
+      results: [],
+      page_metadata: { page: 3, total: 2, hasNext: false },
+    });
+
+    const result = await runToolContract(searchRecipientsTool, {
+      keyword: 'Acme',
+      award_type: 'grants',
+      limit: 1,
+      page: 3,
+    });
+
+    expect(mockSearchRecipients).toHaveBeenLastCalledWith(
+      { keyword: 'Acme', award_type: 'grants', limit: 1, page: 3 },
+      expect.anything(),
+    );
+    expect(result.structuredContent).toMatchObject({
+      period: 'trailing 12 months',
+      results: [],
+      page_metadata: { page: 3, total: 2, has_next: false },
+    });
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('**Period:** trailing 12 months'),
+    });
+  });
+
   it('returns recipients for a name keyword', async () => {
     mockSearchRecipients.mockResolvedValueOnce({
       results: [
@@ -249,6 +305,7 @@ describe('searchRecipientsTool', () => {
 
   it('formats output with recipient IDs, amounts, and pagination', () => {
     const output = {
+      period: 'trailing 12 months' as const,
       results: [
         {
           id: 'abc123-P',
@@ -274,6 +331,7 @@ describe('searchRecipientsTool', () => {
   it('renders the item total as a labeled count, not a page count (issue #34)', () => {
     // total=200 is the item total; it must be labeled, not interpolated after "Page:" as a page count.
     const output = {
+      period: 'trailing 12 months' as const,
       results: [{ id: 'abc123-P', name: 'Acme Corporation', amount: 1_234 }],
       page_metadata: { total: 200, page: 1, has_next: true, limit: 2 },
     };

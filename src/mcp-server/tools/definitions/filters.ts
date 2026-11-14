@@ -7,6 +7,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
+import { type AgencyFilters, applyAgencyFilters } from './agency-filters.js';
 import { type DateRange, resolveDateRange } from './dates.js';
 import {
   describeLocation,
@@ -14,6 +15,17 @@ import {
   resolveLocation,
   type SentLocation,
 } from './locations.js';
+
+const PARENT_RECIPIENT_SCOPE =
+  'A -P recipient ID covers awards USAspending attributes to that parent. Historical parent attribution can vary. For the entity’s own awards, use the returned -C ID for awards recorded with a parent or the returned -R ID for awards recorded without one. Check both when usaspending_search_recipients returns both. Use returned IDs directly.';
+
+/** Describe the recipient hash and the attribution role it selects. */
+export const RECIPIENT_FILTER_DESCRIPTION = `recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash plus uppercase -P, -C, or -R; hash letters normalize to lowercase; empty is unset. ${PARENT_RECIPIENT_SCOPE}`;
+
+/** Disclose the attribution scope of an effective, normalized parent ID. */
+export function parentRecipientNotice(recipientId: string | undefined): string | undefined {
+  return recipientId?.endsWith('-P') ? PARENT_RECIPIENT_SCOPE : undefined;
+}
 
 /** Values selected after merge precedence, before an upstream request. */
 interface EffectiveFilters {
@@ -95,14 +107,6 @@ export function normalizeEffectiveFilters(
   };
 }
 
-/** Matches an awarding name at either tier; shared sub-tier names match every parent. */
-export function awardingAgencyFilters(name: string) {
-  return [
-    { type: 'awarding', tier: 'toptier', name },
-    { type: 'awarding', tier: 'subtier', name },
-  ];
-}
-
 /** Assistance Listing (CFDA) number: two digits, a dot, three digits or capitals (`11.67A`). */
 const ASSISTANCE_LISTING_PATTERN = /^\d{2}\.[0-9A-Z]{3}$/;
 
@@ -182,7 +186,7 @@ export const CODE_FILTER_FIELDS = {
     )
     .optional()
     .describe(
-      'Filter by Disaster Emergency Fund Codes (DEF), e.g. ["Z"], or ["L", "M", "N", "O", "P"] for COVID-19: 1–3 letters or digits, sent uppercased — the codes usaspending_disaster_spending takes and usaspending_get_agency lists. Matches awards of any type funded under any of these codes. Amounts cover the whole matching award, not the share funded by the code, and DEF-filtered totals can be negative. An unknown code is rejected with the list of codes USAspending accepts.',
+      'Filter by Disaster Emergency Fund Codes (DEF), e.g. ["Z"], or ["L", "M", "N", "O", "P"] for COVID-19: 1–3 letters or digits, sent uppercased. Discover codes with usaspending_autocomplete_filters type=def_code. Matches awards of any type funded under any of these codes. Amounts cover the whole matching award, not the share funded by the code, and DEF-filtered totals can be negative. An unknown code is rejected with the list of codes USAspending accepts.',
     ),
 };
 
@@ -371,21 +375,23 @@ export function buildFilters(
     | ({
         keywords?: string[] | undefined;
         award_type_codes?: string[] | undefined;
-        agency_name?: string | undefined;
         recipient_id?: string | undefined;
         naics_codes?: string[] | undefined;
         time_period_start?: string | undefined;
         time_period_end?: string | undefined;
-      } & CodeFilterInput)
+      } & CodeFilterInput &
+        AgencyFilters)
     | null,
-): { filters: Record<string, unknown>; timePeriod: DateRange | undefined; codes: CodeFilters } {
-  const filters: Record<string, unknown> = {};
+): {
+  filters: Record<string, unknown> & { award_type_codes?: readonly string[] };
+  timePeriod: DateRange | undefined;
+  codes: CodeFilters;
+} {
+  const filters: Record<string, unknown> & { award_type_codes?: readonly string[] } = {};
   if (!f) return { filters, timePeriod: undefined, codes: {} };
   if (f.keywords?.length) filters.keywords = f.keywords;
   if (f.award_type_codes?.length) filters.award_type_codes = f.award_type_codes;
-  if (f.agency_name) {
-    filters.agencies = awardingAgencyFilters(f.agency_name);
-  }
+  applyAgencyFilters(filters, f);
   if (f.recipient_id) filters.recipient_id = f.recipient_id;
   if (f.naics_codes?.length) filters.naics_codes = { require: f.naics_codes };
   const codes = normalizeCodeFilters(f);

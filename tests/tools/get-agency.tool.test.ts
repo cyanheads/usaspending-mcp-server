@@ -10,6 +10,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAgencyTool } from '@/mcp-server/tools/definitions/get-agency.tool.js';
 
 const mockGetAgency = vi.fn();
+const mockGetAgencyDefCodes = vi.fn(async (_code: string, fiscal_year: number) => ({
+  fiscal_year,
+  def_codes: [],
+}));
 const mockGetAgencySubAgencies = vi.fn();
 const mockGetAgencyBudgetaryResources = vi.fn();
 const mockListAgencies = vi.fn();
@@ -17,6 +21,8 @@ const mockListAgencies = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
     getAgency: mockGetAgency,
+    getAgencyDefCodes: mockGetAgencyDefCodes,
+    requestDeadline: () => Date.now() + 45_000,
     getAgencySubAgencies: mockGetAgencySubAgencies,
     getAgencyBudgetaryResources: mockGetAgencyBudgetaryResources,
     listAgencies: mockListAgencies,
@@ -28,6 +34,7 @@ const agencyFixture = {
   name: 'Department of Defense',
   abbreviation: 'DOD',
   agency_id: 517,
+  fiscal_year: 2026,
   mission: 'Provide the military forces needed to deter war and ensure national security.',
   sub_agency_count: 12,
   website: 'https://www.defense.gov',
@@ -566,7 +573,7 @@ describe('getAgencyTool', () => {
     it('omits fiscal_year too when no row carries data', async () => {
       const { sc, text } = await run([emptyYear(2027), emptyYear(2026)]);
       expect(sc).not.toHaveProperty('fiscal_year');
-      expect(text).not.toContain('Fiscal Year');
+      expect(text).not.toContain('**Fiscal Year:**');
     });
 
     it('skips an all-null newest year and reports the latest year with data', async () => {

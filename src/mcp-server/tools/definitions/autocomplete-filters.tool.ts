@@ -1,5 +1,5 @@
 /**
- * @fileoverview Tool to look up valid code values for filter fields: NAICS, PSC, CFDA,
+ * @fileoverview Tool to look up valid code values for filter fields: NAICS, PSC, CFDA, DEF,
  * agency names, recipient names, and US state, county, and congressional district codes.
  * @module mcp-server/tools/definitions/autocomplete-filters.tool
  */
@@ -73,20 +73,20 @@ function mapLocationBuckets(resp: RawLocationAutocompleteResponse, requested: nu
 export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', {
   title: 'Autocomplete Codes and Names',
   description:
-    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), awarding_agency (agency and sub-agency names, each with its tier and top-tier parent — agency_name filters take the matched name; a sub-tier name shared by several parents matches under all parents), recipient (recipient names with UEI/DUNS), or location (US state, county, and congressional district names, resolved to the codes the location filters and usaspending_spending_by_geography shape_codes take). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
+    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), def_code (Disaster/Emergency Funding codes by code, appropriation title, or public law), awarding_agency (agency and sub-agency names, each with its tier and top-tier parent — agency_name and funding_agency_name filters take the matched name; a sub-tier name shared by several parents matches under all parents), recipient (recipient names with UEI/DUNS), or location (US state, county, and congressional district names, resolved to the codes the location filters and usaspending_spending_by_geography shape_codes take). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     type: z
-      .enum(['naics', 'psc', 'cfda', 'awarding_agency', 'recipient', 'location'])
+      .enum(['naics', 'psc', 'cfda', 'awarding_agency', 'recipient', 'location', 'def_code'])
       .describe(
-        'Lookup table to search: naics (industry codes), psc (product/service codes, for the psc_codes filter), cfda (Assistance Listing program numbers, for the assistance_listings filter), awarding_agency (agency and sub-agency names), recipient (recipient names), location (US states with DC and the territories, counties, and current congressional districts, matched from the start of their name: "King County", "Santa Fe", "WA-07"; countries, cities, and ZIP codes are not returned). The psc_codes and assistance_listings filters are taken by usaspending_search_awards and by the filters object of usaspending_spending_by_category, usaspending_spending_by_geography, and usaspending_spending_over_time.',
+        'Lookup table to search: naics (industry codes), psc (product/service codes, for psc_codes), cfda (Assistance Listing program numbers, for assistance_listings), def_code (Disaster/Emergency Funding codes, for def_codes), awarding_agency (agency and sub-agency names), recipient (recipient names), location (US states with DC and the territories, counties, and current congressional districts, matched from the start of their name: "King County", "Santa Fe", "WA-07"; countries, cities, and ZIP codes are not returned). The psc_codes, assistance_listings, and def_codes filters are taken by usaspending_search_awards and the spending analytics tools.',
       ),
     search_text: z
       .string()
       .min(1)
       .describe(
-        'Free-text search string — use a description, keyword, or partial code to find matches',
+        'Free-text search string. For def_code, use an exact code or part of an appropriation title or public law. For other lookups, use a description, keyword, or partial code.',
       ),
     limit: LIMIT.schema.describe(
       'Maximum number of results to return. Default 10, at most 500 per call. Agency matches combine independently capped top-tier then sub-tier buckets, preserving their order without deduplicating names; offices are excluded. Location matches combine state, then county, then district rows, and upstream returns at most 100 of each kind. The recipient lookup unions three upstream match buckets (name, UEI, DUNS) and can return up to 3x this value, so its results are capped to this limit before returning — the cap keeps them in bucket order, so name matches fill the page first and identifier matches appear only in whatever room is left. To resolve a specific UEI or DUNS, pass the identifier itself as search_text. Every lookup returns at most limit rows.',
@@ -110,7 +110,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                "Code value (NAICS code, PSC code, Assistance Listing/CFDA number, or location code); use this in filter parameters — an Assistance Listing number goes in usaspending_search_awards assistance_listings. A location row's code by kind: state, the 2-letter postal code for a location filter's state and state shape_codes; county, the 5-digit state + county FIPS code for a location filter's county and county shape_codes; district, the 4-digit state FIPS + district number for district shape_codes on usaspending_spending_by_geography. Agency rows carry toptier_code instead.",
+                "Code value (NAICS, PSC, Assistance Listing/CFDA, DEF, or location code); use this in filter parameters — an Assistance Listing number goes in assistance_listings and a DEF code in def_codes. A location row's code by kind: state, the 2-letter postal code for a location filter's state and state shape_codes; county, the 5-digit state + county FIPS code for a location filter's county and county shape_codes; district, the 4-digit state FIPS + district number for district shape_codes on usaspending_spending_by_geography. Agency rows carry toptier_code instead.",
               ),
             name: z
               .string()
@@ -118,6 +118,14 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .describe(
                 "Human-readable name or description; for awarding_agency, the matched agency's own name, which for a sub-agency differs from toptier_name; for location, upstream's uppercase name (WASHINGTON, KING, WA-07)",
               ),
+            public_law: z
+              .string()
+              .optional()
+              .describe('def_code only: public law for the funding code, when supplied'),
+            disaster_group: z
+              .string()
+              .optional()
+              .describe('def_code only: USAspending disaster grouping, when supplied'),
             state: z
               .string()
               .optional()
@@ -140,13 +148,13 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                'awarding_agency only: the top-tier parent name. Use the matched name in agency_name on usaspending_search_awards and spending analytics to select the sub-agency; use toptier_name intentionally to select its whole parent department.',
+                'awarding_agency only: the top-tier parent name. Use the matched name in agency_name or funding_agency_name on usaspending_search_awards and spending analytics to select the sub-agency; use toptier_name intentionally to select its whole parent department.',
               ),
             toptier_code: z
               .string()
               .optional()
               .describe(
-                'awarding_agency only: the 3-digit top-tier agency code, accepted by usaspending_get_agency',
+                'awarding_agency only: the directory top-tier agency code, accepted by usaspending_get_agency',
               ),
             subtier_code: z
               .string()
@@ -178,7 +186,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
   // discloses truncation only when that row (or a recipient bucket overflow) came back.
   enrichment: {
     lookup_type: z.string().describe('Lookup table that was searched'),
-    query: z.string().describe('Search text sent to the autocomplete API'),
+    query: z.string().describe('Lookup search text'),
     result_count: z.number().describe('Number of matching results returned'),
     truncated: z
       .boolean()
@@ -240,6 +248,8 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       kind?: LocationKind;
       code?: string;
       name?: string;
+      public_law?: string;
+      disaster_group?: string;
       state?: string;
       abbreviation?: string;
       tier?: 'toptier' | 'subtier';
@@ -268,6 +278,27 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       const mapped = mapLocationBuckets(resp, requested);
       rawResults = mapped.rows;
       fullLocationKinds = mapped.full;
+    } else if (input.type === 'def_code') {
+      const codes = await svc.getDefCodesReference(ctx);
+      const query = input.search_text.trim().toLowerCase();
+      const exact: ResultItem[] = [];
+      const byText: ResultItem[] = [];
+      for (const entry of codes) {
+        const codeMatch = entry.code.toLowerCase() === query;
+        const textMatch =
+          query !== '' &&
+          (entry.title?.toLowerCase().includes(query) ||
+            entry.public_law?.toLowerCase().includes(query));
+        if (!codeMatch && !textMatch) continue;
+        const row = {
+          code: entry.code,
+          ...(entry.title ? { name: entry.title } : {}),
+          ...(entry.public_law ? { public_law: entry.public_law } : {}),
+          ...(entry.disaster ? { disaster_group: entry.disaster } : {}),
+        };
+        (codeMatch ? exact : byText).push(row);
+      }
+      rawResults = [...exact, ...byText];
     } else if (input.type === 'naics') {
       const resp = await svc.autocompleteNaics(input.search_text, requested, ctx);
       rawResults = (resp.results ?? []).map((r) => ({
@@ -378,6 +409,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       );
     } else if (
       input.type !== 'location' &&
+      input.type !== 'def_code' &&
       requested === limit.applied &&
       received === limit.applied
     ) {
@@ -430,6 +462,9 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
       if (r.uei) parts.push(`**UEI:** ${escapeMarkdownInline(r.uei)}`);
       if (r.subtier_code) parts.push(`**Sub-tier code:** ${escapeMarkdownInline(r.subtier_code)}`);
       if (r.duns) parts.push(`**DUNS:** ${escapeMarkdownInline(r.duns)}`);
+      if (r.public_law) parts.push(`**Public Law:** ${escapeMarkdownInline(r.public_law)}`);
+      if (r.disaster_group)
+        parts.push(`**Disaster Group:** ${escapeMarkdownInline(r.disaster_group)}`);
       lines.push(`- ${parts.join(' | ')}`);
     }
     lines.push(`\n**Total:** ${result.total}`);

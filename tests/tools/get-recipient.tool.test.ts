@@ -170,6 +170,33 @@ describe('getRecipientTool', () => {
       expect(textOf(result)).toContain('**Period:** trailing 12 months');
     });
 
+    it.each(['2024', ' 2024 '])(
+      'repairs quoted fiscal year %j on the MCP call path',
+      async (fiscal_year) => {
+        mockGetRecipient.mockResolvedValueOnce({ name: 'Acme' });
+
+        const result = await runToolContract(getRecipientTool, {
+          recipient_id: 'abc123-R',
+          fiscal_year,
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({ period: 'FY2024' });
+        expect(textOf(result)).toContain('**Period:** FY2024');
+        expect(mockGetRecipient).toHaveBeenLastCalledWith(
+          'abc123-R',
+          { fiscal_year: 2024 },
+          expect.anything(),
+        );
+      },
+    );
+
+    it('advertises the existing fiscal-year bounds and the all-years selector', () => {
+      expect(advertisedProperty(getRecipientTool.input, 'fiscal_year')).toMatchObject({
+        anyOf: [{ type: 'integer', minimum: 2001, maximum: 2030 }, { const: 'all' }],
+      });
+    });
+
     it('states the period even when the upstream returns no totals', async () => {
       mockGetRecipient.mockResolvedValueOnce({ name: 'Minimal Corp' });
 
@@ -188,6 +215,8 @@ describe('getRecipientTool', () => {
       ['award_type', { award_type: 'loans' }, /Unrecognized key: "award_type"/],
       ['a fractional fiscal_year', { fiscal_year: 2020.5 }, /fiscal_year: Invalid input/],
       ['a non-numeric fiscal_year', { fiscal_year: 'abc' }, /fiscal_year: Invalid input/],
+      ['the upstream-only latest token', { fiscal_year: 'latest' }, /fiscal_year: Invalid input/],
+      ['a leading-zero year', { fiscal_year: '02024' }, /fiscal_year: Invalid input/],
       ['a fiscal_year past the range', { fiscal_year: 2031 }, /fiscal_year: Too big/],
     ])('rejects %s before any upstream request', async (_label, extra, field) => {
       mockGetRecipient.mockClear();
@@ -460,6 +489,40 @@ describe('parents and children (#110)', () => {
 
     expect(structured(result)).toMatchObject({ children: [], children_total: 0 });
     expect(textOf(result)).toContain('**Children:** 0 of 0');
+  });
+
+  it('uses the all-years period for parent totals and ranked children on both surfaces', async () => {
+    mockGetRecipientChildren.mockResolvedValueOnce([child(1, 50), child(2, 300)]);
+
+    const result = await run(
+      { ...oracleParent, total_transaction_amount: 350 },
+      { fiscal_year: 'all', children_limit: 1 },
+    );
+
+    expect(mockGetRecipient).toHaveBeenLastCalledWith(
+      ORACLE_P,
+      { fiscal_year: 'all' },
+      expect.anything(),
+    );
+    expect(mockGetRecipientChildren).toHaveBeenCalledWith(
+      'ZFKQZW16QPU3',
+      { fiscal_year: 'all' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      CALL_DEADLINE,
+    );
+    expect(structured(result)).toMatchObject({
+      period: 'all fiscal years',
+      total_transaction_amount: 350,
+      children: [{ name: 'CHILD 002', amount: 300 }],
+      children_total: 2,
+      truncated: true,
+    });
+    const text = textOf(result);
+    expect(text).toContain('**Period:** all fiscal years');
+    expect(text).toContain('**Total Transaction Amount:** $350');
+    expect(text).toContain('**Children:** 1 of 2');
+    expect(text).toContain('| CHILD 002 |');
+    expect(text).not.toContain('| CHILD 001 |');
   });
 
   it('returns no parent_id, parents, or children for a -R recipient and requests no children', async () => {

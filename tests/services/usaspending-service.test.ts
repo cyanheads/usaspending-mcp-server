@@ -54,6 +54,146 @@ const newService = () =>
 const newServiceWith = (overrides: Partial<ServerConfig>) =>
   new USASpendingService({} as AppConfig, {} as StorageService, { ...serverConfig, ...overrides });
 
+describe('DEF autocomplete against the real service', () => {
+  it.each(['infrastructure', '117-58'])('finds codes by %s', async (search_text) => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        codes: [
+          {
+            code: '1',
+            title: 'Infrastructure Investment and Jobs Act',
+            public_law: 'P.L. 117-58',
+            disaster: 'infrastructure',
+          },
+          {
+            code: 'Z',
+            title: 'Infrastructure Investment and Jobs Act',
+            public_law: 'Emergency P.L. 117-58',
+            disaster: 'infrastructure',
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'def_code',
+      search_text,
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        {
+          code: '1',
+          name: 'Infrastructure Investment and Jobs Act',
+          public_law: 'P.L. 117-58',
+          disaster_group: 'infrastructure',
+        },
+        {
+          code: 'Z',
+          name: 'Infrastructure Investment and Jobs Act',
+          public_law: 'Emergency P.L. 117-58',
+          disaster_group: 'infrastructure',
+        },
+      ],
+      total: 2,
+    });
+    expect(result.content).toContainEqual(
+      expect.objectContaining({
+        text: expect.stringContaining(
+          '**Public Law:** Emergency P.L. 117-58 | **Disaster Group:** infrastructure',
+        ),
+      }),
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `${serverConfig.baseUrl}references/def_codes/`,
+    );
+  });
+
+  it.each(['Z', 'z'])('ranks the exact %s code ahead of text at the limit', async (search_text) => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+    vi.stubGlobal('fetch', async () =>
+      Response.json({
+        codes: [
+          { code: '1', title: 'Zone funding', disaster: 'infrastructure' },
+          { code: 'Z', public_law: 'P.L. 117-58', disaster: null },
+        ],
+      }),
+    );
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'def_code',
+      search_text,
+      limit: 1,
+    });
+    expect(result.structuredContent).toMatchObject({
+      results: [{ code: 'Z', public_law: 'P.L. 117-58' }],
+      truncated: true,
+      shown: 1,
+      cap: 1,
+    });
+    expect(result.structuredContent).not.toHaveProperty('results.0.name');
+    expect(result.structuredContent).not.toHaveProperty('results.0.disaster_group');
+    expect(result.content).toContainEqual(
+      expect.objectContaining({
+        text: expect.stringContaining('**Code:** Z | **Public Law:** P.L. 117-58'),
+      }),
+    );
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining('More matches exist beyond limit') }),
+    );
+  });
+
+  it.each([{ codes: [] }, { codes: [{ code: 'ZZ', disaster: null }] }])(
+    'reports no_match for an empty match set in %j',
+    async ({ codes }) => {
+      initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+      vi.stubGlobal('fetch', async () => Response.json({ codes }));
+      const result = await runToolContract(autocompleteFiltersTool, {
+        type: 'def_code',
+        search_text: 'z',
+      });
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.NotFound, data: { reason: 'no_match' } },
+      });
+      expect(result.content).toContainEqual(
+        expect.objectContaining({
+          text: expect.stringContaining('No def_code results matched "z"'),
+        }),
+      );
+    },
+  );
+
+  it('surfaces an invalid DEF catalog as the declared upstream failure', async () => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ codes: [{ code: 1 }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'def_code',
+      search_text: '1',
+    });
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'api_unavailable', retryable: false },
+      },
+    });
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining('unexpected shape') }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an empty DEF search before reading the reference', async () => {
+    initUSASpendingService({} as AppConfig, {} as StorageService, serverConfig);
+    const result = await runToolContract(autocompleteFiltersTool, {
+      type: 'def_code',
+      search_text: '',
+    });
+    expect(result.isError).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 /** Stubs the next fetch with a verbatim upstream response body and status. */
 const stubFetch = (status: number, body: string) => {
   const fetchMock = vi.fn<typeof fetch>(async () => new Response(body, { status }));
@@ -211,15 +351,18 @@ describe('USASpendingService entity lookups', () => {
       ],
     ] as const;
     for (const [endpoint, run] of cases) {
-      const fetchMock = stubFetch(
-        200,
-        JSON.stringify({ results: [], page_metadata: { hasNext: false } }),
+      const spendingUrl = `${serverConfig.baseUrl}${endpoint}`;
+      const fetchMock = vi.fn<typeof fetch>(async (url) =>
+        String(url) === `${serverConfig.baseUrl}autocomplete/awarding_agency_office/`
+          ? Response.json({ results: { toptier_agency: [], subtier_agency: [] } })
+          : Response.json({ results: [], page_metadata: { hasNext: false } }),
       );
+      vi.stubGlobal('fetch', fetchMock);
       const response = await run();
       expect(response.isError).toBeFalsy();
-      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(url).toBe(`https://api.usaspending.gov/api/v2/${endpoint}`);
-      expect(JSON.parse(init.body as string).filters.agencies).toEqual([
+      const spendingCall = fetchMock.mock.calls.find(([url]) => String(url) === spendingUrl);
+      expect(spendingCall?.[0]).toBe(spendingUrl);
+      expect(JSON.parse(String(spendingCall?.[1]?.body)).filters.agencies).toEqual([
         { type: 'awarding', tier: 'toptier', name: agency_name },
         { type: 'awarding', tier: 'subtier', name: agency_name },
       ]);
@@ -307,6 +450,49 @@ describe('USASpendingService entity lookups', () => {
     expect(sent).toBe(
       'https://api.usaspending.gov/api/v2/recipient/3885d3e7-520b-bb82-7faa-5bb319ec94e2-P/',
     );
+  });
+
+  it('getRecipient sends year=all for cumulative amounts', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ name: 'Acme' }));
+    await newService().getRecipient(
+      '3885d3e7-520b-bb82-7faa-5bb319ec94e2-P',
+      { fiscal_year: 'all' },
+      ctx,
+    );
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).search).toBe('?year=all');
+  });
+
+  it('does not start optional awarding-agency autocomplete after its deadline', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify({ results: {} }));
+    await expect(
+      newService().autocompleteAwardingAgency('Interior', 25, ctx, Date.now() - 1),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.Timeout });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('skips retries only for awarding-agency autocomplete with a caller deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const fetchMock = stubFetch(503, JSON.stringify({ detail: 'Service Unavailable' }));
+      const svc = newService();
+      const assertUnavailable = {
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'api_unavailable', retryable: true },
+      };
+      await expect(
+        svc.autocompleteAwardingAgency('Interior', 25, ctx, Date.now() + 10_000),
+      ).rejects.toMatchObject(assertUnavailable);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const primary = expect(
+        svc.autocompleteAwardingAgency('Interior', 25, ctx),
+      ).rejects.toMatchObject(assertUnavailable);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await primary;
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([undefined, 2024, 2025])(
@@ -1644,6 +1830,19 @@ describe('USASpendingService getRecipientChildren (#110)', () => {
       'https://api.usaspending.gov/api/v2/recipient/children/ZFKQZW16QPU3/?year=2025',
       'https://api.usaspending.gov/api/v2/recipient/children/ZFKQZW16QPU3/',
     ]);
+  });
+
+  it('requests cumulative child amounts with year=all', async () => {
+    const fetchMock = stubFetch(200, JSON.stringify([ORACLE_HEALTH_CHILD]));
+    await expect(
+      newService().getRecipientChildren(
+        'ZFKQZW16QPU3',
+        { fiscal_year: 'all' },
+        ctx,
+        callDeadline(),
+      ),
+    ).resolves.toEqual([ORACLE_HEALTH_CHILD]);
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).search).toBe('?year=all');
   });
 
   it('makes one attempt on a 503, where the profile request would retry', async () => {

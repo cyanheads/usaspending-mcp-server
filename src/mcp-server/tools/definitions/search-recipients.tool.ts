@@ -17,7 +17,7 @@ const LIMIT = countLimit({ tool: 'usaspending_search_recipients', default: 10, c
 export const searchRecipientsTool = tool('usaspending_search_recipients', {
   title: 'Search Award Recipients',
   description:
-    'Search for organizations or individuals receiving federal funds by name, UEI (Unique Entity Identifier), or DUNS. Returns recipient hash IDs, UEI/DUNS identifiers, total award amounts, and hierarchy level. Results are paginated — use page to retrieve matches beyond the first page; page_metadata.total reports the full match count. Recipient hash IDs from this tool can be passed to usaspending_get_recipient for full profiles. Recipient level: P = parent organization, C = child entity, R = standalone.',
+    "Search for organizations or individuals receiving federal funds by name, UEI (Unique Entity Identifier), or DUNS. Returns recipient hash IDs, UEI/DUNS identifiers, trailing-12-month obligations, and hierarchy level. Amounts come from USAspending's precomputed snapshot and may differ from trailing-12-month profile totals. Results are paginated — use page to retrieve matches beyond the first page; page_metadata.total reports the full match count. Recipient hash IDs from this tool can be passed to usaspending_get_recipient for full profiles. Recipient level: P = parent organization, C = child entity, R = standalone.",
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -30,7 +30,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     award_type: z
       .enum(['contracts', 'grants', 'direct_payments', 'loans', 'other_financial_assistance'])
       .optional()
-      .describe('Filter by award type category to scope the total amounts returned'),
+      .describe('Filter by award type category to scope the trailing-12-month obligations'),
     limit: LIMIT.schema.describe('Recipients per page. Default 10, at most 1,000 per call.'),
     page: z
       .number()
@@ -43,6 +43,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
   }),
 
   output: z.object({
+    period: z.literal('trailing 12 months').describe('Window the obligation snapshot covers'),
     results: z
       .array(
         z
@@ -63,7 +64,9 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
             amount: z
               .number()
               .optional()
-              .describe('Total award amount in USD for the selected award type'),
+              .describe(
+                'Precomputed trailing-12-month obligations in USD for the selected award type, or across all types when omitted',
+              ),
           })
           .describe('Recipient entry with ID, name, and award totals'),
       )
@@ -187,6 +190,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
     if (notices.length) ctx.enrich.notice(notices.join(' '));
 
     return {
+      period: 'trailing 12 months' as const,
       results,
       page_metadata: {
         ...(total !== undefined ? { total } : {}),
@@ -198,7 +202,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
   },
 
   format: (result) => {
-    const lines: string[] = ['## Recipient Search Results'];
+    const lines: string[] = ['## Recipient Search Results', `**Period:** ${result.period}`];
     lines.push(
       `\n**Results:** ${result.results.length} | ${formatPaginationLine(result.page_metadata)}`,
     );
@@ -209,7 +213,7 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       if (r.uei) lines.push(`**UEI:** ${escapeMarkdownInline(r.uei)}`);
       if (r.duns) lines.push(`**DUNS:** ${escapeMarkdownInline(r.duns)}`);
       if (r.recipient_level) lines.push(`**Level:** ${escapeMarkdownInline(r.recipient_level)}`);
-      if (typeof r.amount === 'number') lines.push(`**Award Amount:** ${formatCurrency(r.amount)}`);
+      if (typeof r.amount === 'number') lines.push(`**Obligations:** ${formatCurrency(r.amount)}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

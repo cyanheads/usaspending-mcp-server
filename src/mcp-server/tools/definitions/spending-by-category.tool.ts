@@ -7,12 +7,21 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import {
+  AGENCY_FILTER_ENRICHMENT,
+  AGENCY_FILTER_FIELDS,
+  agencyFilterEcho,
+  applyAgencyFilters,
+  describeAgencyFilters,
+  resolveAgencyFilters,
+} from './agency-filters.js';
 import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import {
   ANALYTICS_DATE_FIELDS,
   filledBoundNotice,
   floorViolationMessage,
   invertedRangeMessage,
+  NO_DATE_FILTER_NOTICE,
   optionalIsoDate,
 } from './dates.js';
 import {
@@ -26,6 +35,8 @@ import {
   LOCATION_FILTER_FIELDS,
   locationFilterEcho,
   normalizeEffectiveFilters,
+  parentRecipientNotice,
+  RECIPIENT_FILTER_DESCRIPTION,
   resolveLocationFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
@@ -69,18 +80,8 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
           .array(z.string())
           .optional()
           .describe('Award type code filters (A/B/C/D, 02–05, etc.)'),
-        agency_name: z
-          .string()
-          .optional()
-          .describe(
-            'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
-          ),
-        recipient_id: z
-          .string()
-          .optional()
-          .describe(
-            'recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash plus uppercase -P, -C, or -R; hash letters normalize to lowercase; empty is unset',
-          ),
+        ...AGENCY_FILTER_FIELDS,
+        recipient_id: z.string().optional().describe(RECIPIENT_FILTER_DESCRIPTION),
         naics_codes: z
           .array(z.string())
           .optional()
@@ -98,7 +99,9 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       })
       .strict()
       .optional()
-      .describe('Optional filters to scope the aggregation'),
+      .describe(
+        "Optional filters to scope the aggregation. With neither date bound, results use USAspending's available coverage without a date filter.",
+      ),
     limit: LIMIT.schema.describe('Items per page. Default 10, at most 100 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
@@ -157,6 +160,10 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
 
   // Agent-facing context: pagination totals and a recovery notice for empty pages.
   enrichment: {
+    applied_award_type_codes: z
+      .string()
+      .optional()
+      .describe('Award type codes sent, comma-separated'),
     applied_recipient_id: z
       .string()
       .optional()
@@ -168,7 +175,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     page: z.number().describe('Current page returned'),
     has_next: z.boolean().describe('Whether there are more pages'),
     applied_keywords: z.string().optional().describe('Keyword filters applied (comma-separated)'),
-    applied_agency_name: z.string().optional().describe('Awarding agency name filter applied'),
+    ...AGENCY_FILTER_ENRICHMENT,
     applied_naics_codes: z
       .string()
       .optional()
@@ -208,7 +215,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       .string()
       .optional()
       .describe(
-        'Names a limit reduced to the per-call maximum, a date bound that was filled in because only the other was supplied, and — when results are empty — any Assistance Listing, PSC, or DEF codes, recipient_id, and locations sent, with how to broaden filters. Absent when none applies.',
+        'Discloses a reduced limit, the use of available coverage without a date filter or any filled date bound, and parent recipient attribution scope. On empty results, names active scope filters and how to broaden them.',
       ),
   },
 
@@ -336,6 +343,8 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     if (mismatch?.filter === 'psc_codes') {
       throw ctx.fail('psc_codes_type_mismatch', mismatch.message);
     }
+    const agencies = await resolveAgencyFilters(svc, input.filters, ctx);
+    applyAgencyFilters(filters, agencies.names);
     const data = await svc.spendingByCategory(
       input.category,
       { filters, limit: limit.applied, page: input.page },
@@ -374,8 +383,11 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
       ...(input.filters?.keywords?.length
         ? { applied_keywords: input.filters.keywords.join(', ') }
         : {}),
-      ...(input.filters?.agency_name ? { applied_agency_name: input.filters.agency_name } : {}),
+      ...agencyFilterEcho(agencies.names),
       ...(effective.recipient_id ? { applied_recipient_id: effective.recipient_id } : {}),
+      ...(filters.award_type_codes
+        ? { applied_award_type_codes: filters.award_type_codes.join(', ') }
+        : {}),
       ...(effective.naics_codes?.length
         ? { applied_naics_codes: effective.naics_codes.join(', ') }
         : {}),
@@ -390,9 +402,14 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
     });
 
     // enrich.notice is last-wins, so every notice source joins into one string.
-    const notices = [limit.notice, filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS)];
+    const notices = [
+      limit.notice,
+      timePeriod ? filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS) : NO_DATE_FILTER_NOTICE,
+      ...agencies.notices,
+      parentRecipientNotice(effective.recipient_id),
+    ];
     if (results.length === 0) {
-      const codeParts = describeCodeFilters(codes);
+      const codeParts = [...describeCodeFilters(codes), ...describeAgencyFilters(agencies.names)];
       if (effective.recipient_id) codeParts.push(`recipient_id=${effective.recipient_id}`);
       codeParts.push(...describeLocationFilters(locations));
       notices.push(

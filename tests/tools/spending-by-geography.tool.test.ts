@@ -11,7 +11,12 @@ import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.j
 const mockSpendingByGeography = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
-  getUSASpendingService: () => ({ spendingByGeography: mockSpendingByGeography }),
+  getUSASpendingService: () => ({
+    spendingByGeography: mockSpendingByGeography,
+    autocompleteAwardingAgency: async () => ({
+      results: { toptier_agency: [{ name: 'Department of the Interior' }] },
+    }),
+  }),
 }));
 
 const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>

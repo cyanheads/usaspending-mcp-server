@@ -7,12 +7,21 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
+import {
+  AGENCY_FILTER_ENRICHMENT,
+  AGENCY_FILTER_FIELDS,
+  agencyFilterEcho,
+  applyAgencyFilters,
+  describeAgencyFilters,
+  resolveAgencyFilters,
+} from './agency-filters.js';
 import { countInput } from './count-limit.js';
 import {
   ANALYTICS_DATE_FIELDS,
   filledBoundNotice,
   floorViolationMessage,
   invertedRangeMessage,
+  NO_DATE_FILTER_NOTICE,
   optionalIsoDate,
 } from './dates.js';
 import {
@@ -26,6 +35,8 @@ import {
   LOCATION_FILTER_FIELDS,
   locationFilterEcho,
   normalizeEffectiveFilters,
+  parentRecipientNotice,
+  RECIPIENT_FILTER_DESCRIPTION,
   resolveLocationFilters,
 } from './filters.js';
 import { formatCurrency } from './formatting.js';
@@ -45,18 +56,8 @@ const SpendingFiltersSchema = z
       .describe(
         'Award type codes: A/B/C/D (contracts), IDV_A–IDV_E (IDVs), 02–05 (grants), 06/10 (direct payments), 07/08 (loans), 09/11 (insurance and other assistance), -1 (unspecified). Groups may be mixed here. Omit to aggregate every type.',
       ),
-    agency_name: z
-      .string()
-      .optional()
-      .describe(
-        'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
-      ),
-    recipient_id: z
-      .string()
-      .optional()
-      .describe(
-        'recipient_id from usaspending_search_recipients: hexadecimal 8-4-4-4-12 hash plus uppercase -P, -C, or -R; hash letters normalize to lowercase; empty is unset',
-      ),
+    ...AGENCY_FILTER_FIELDS,
+    recipient_id: z.string().optional().describe(RECIPIENT_FILTER_DESCRIPTION),
     naics_codes: z
       .array(z.string())
       .optional()
@@ -74,7 +75,9 @@ const SpendingFiltersSchema = z
   })
   .strict()
   .optional()
-  .describe('Optional filters to scope the spending aggregation');
+  .describe(
+    "Optional filters to scope the spending aggregation. With neither date bound, results use USAspending's available coverage without a date filter.",
+  );
 
 /**
  * Every award type code `search/spending_by_geography/` accepts, minus the `no intersection`
@@ -214,6 +217,10 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
   // Agent-facing context: scope, layer, count, the applied filters, disclosure of the
   // no-filter award-type default, the client-side cap, and a recovery notice for empty results.
   enrichment: {
+    applied_award_type_codes: z
+      .string()
+      .optional()
+      .describe('Award type codes sent, comma-separated'),
     applied_recipient_id: z
       .string()
       .optional()
@@ -232,7 +239,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
         'Area codes listed in shape_codes, letters uppercased and duplicates removed (comma-separated)',
       ),
     applied_keywords: z.string().optional().describe('Keyword filters applied (comma-separated)'),
-    applied_agency_name: z.string().optional().describe('Awarding agency name filter applied'),
+    ...AGENCY_FILTER_ENRICHMENT,
     applied_naics_codes: z
       .string()
       .optional()
@@ -286,7 +293,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       .string()
       .optional()
       .describe(
-        'How to reach areas omitted by limit, which shape_codes matched no area, which time-period bound was filled in when only the other was supplied, and — when the filters matched no area — any Assistance Listing, PSC, or DEF codes, recipient_id, and locations sent and how to broaden filters. Absent when none applies.',
+        'Discloses paging, unmatched shape_codes, the use of available coverage without a date filter or any filled date bound, and parent recipient attribution scope. On empty results, names active scope filters and how to broaden them.',
       ),
   },
 
@@ -411,6 +418,8 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
     if (mismatch?.filter === 'psc_codes') {
       throw ctx.fail('psc_codes_type_mismatch', mismatch.message);
     }
+    const agencies = await resolveAgencyFilters(svc, input.filters, ctx);
+    applyAgencyFilters(filters, agencies.names);
     // The endpoint answers HTTP 500 to `filters: {}`; any one populated key satisfies it.
     const defaultedAwardTypes = Object.keys(filters).length === 0;
     if (defaultedAwardTypes) filters.award_type_codes = ALL_AWARD_TYPE_CODES;
@@ -458,8 +467,11 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
       ...(input.filters?.keywords?.length
         ? { applied_keywords: input.filters.keywords.join(', ') }
         : {}),
-      ...(input.filters?.agency_name ? { applied_agency_name: input.filters.agency_name } : {}),
+      ...agencyFilterEcho(agencies.names),
       ...(effective.recipient_id ? { applied_recipient_id: effective.recipient_id } : {}),
+      ...(filters.award_type_codes
+        ? { applied_award_type_codes: filters.award_type_codes.join(', ') }
+        : {}),
       ...(effective.naics_codes?.length
         ? { applied_naics_codes: effective.naics_codes.join(', ') }
         : {}),
@@ -481,7 +493,7 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
 
     // enrich.notice is last-wins, and enrich.truncated writes the notice too, so
     // every notice source joins into one string written after both.
-    const notices: (string | undefined)[] = [];
+    const notices: (string | undefined)[] = [...agencies.notices];
     if (selected.length > results.length) {
       const ceiling = results.at(-1)?.aggregated_amount;
       const guidance = wanted
@@ -500,9 +512,12 @@ export const spendingByGeographyTool = tool('usaspending_spending_by_geography',
         `shape_codes ${unmatched.join(', ')} matched no ${input.geo_layer} area for these filters. A ${input.geo_layer} code is ${SHAPE_CODE_FORM[input.geo_layer]}, and an area with no spending under the filters is not listed.`,
       );
     }
-    notices.push(filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS));
+    notices.push(
+      timePeriod ? filledBoundNotice(timePeriod, ANALYTICS_DATE_FIELDS) : NO_DATE_FILTER_NOTICE,
+      parentRecipientNotice(effective.recipient_id),
+    );
     if (areas.length === 0) {
-      const codeParts = describeCodeFilters(codes);
+      const codeParts = [...describeCodeFilters(codes), ...describeAgencyFilters(agencies.names)];
       if (effective.recipient_id) codeParts.push(`recipient_id=${effective.recipient_id}`);
       codeParts.push(...describeLocationFilters(locations));
       notices.push(

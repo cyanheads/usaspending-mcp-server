@@ -404,6 +404,7 @@ export interface RawAgencyDetail {
       name?: string | null;
     }> | null;
   }> | null;
+  fiscal_year?: number | null;
   icon_filename?: string | null;
   mission?: string | null;
   name?: string | null;
@@ -736,9 +737,9 @@ export interface RawCfdaAutocomplete {
 
 /** Raw agency autocomplete bucket row; nested arrays are unused by agency-only callers. */
 export interface RawAgencyAutocomplete {
-  abbreviation?: string | null;
+  abbreviation?: string | null | undefined;
   code?: string | null;
-  name?: string | null;
+  name?: string | null | undefined;
   toptier_agency?: {
     code?: string | null;
     abbreviation?: string | null;

@@ -177,6 +177,21 @@ describe('buildFilters', () => {
     expect(filters.agencies).toBeUndefined();
   });
 
+  it('pairs both funding tiers and composes them with both awarding tiers', () => {
+    const funding_agency_name = 'Department of the Navy';
+    const funding = [
+      { type: 'funding', tier: 'toptier', name: funding_agency_name },
+      { type: 'funding', tier: 'subtier', name: funding_agency_name },
+    ];
+    expect(buildFilters({ funding_agency_name }).filters.agencies).toEqual(funding);
+    const agency_name = 'General Services Administration';
+    expect(buildFilters({ agency_name, funding_agency_name }).filters.agencies).toEqual([
+      { type: 'awarding', tier: 'toptier', name: agency_name },
+      { type: 'awarding', tier: 'subtier', name: agency_name },
+      ...funding,
+    ]);
+  });
+
   it('maps recipient_id to filters.recipient_id', () => {
     const { filters } = buildFilters({ recipient_id: 'abc123-P' });
     expect(filters.recipient_id).toBe('abc123-P');

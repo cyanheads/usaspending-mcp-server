@@ -32,8 +32,8 @@ const SUB_AGENCY_PAGE_LIMIT = 10;
 const BUDGET_YEAR_WAIT_MS = 5_000;
 
 const UnavailableSectionSchema = unavailableSectionSchema(
-  ['budgetary_resources', 'sub_agencies'],
-  'budgetary_resources: fiscal_year, the budget, obligation, and outlay totals, and budget_by_fiscal_year. sub_agencies: the sub-agency breakdown and its pagination.',
+  ['budgetary_resources', 'sub_agencies', 'def_codes'],
+  'budgetary_resources: fiscal_year, the budget, obligation, and outlay totals, and budget_by_fiscal_year. sub_agencies: the breakdown and its pagination. def_codes: the disaster/emergency funding codes and their fiscal year.',
 );
 
 type AgencySection = z.infer<typeof UnavailableSectionSchema>['section'];
@@ -69,7 +69,7 @@ function reportedThroughPeriod(row: RawBudgetaryResources): number | undefined {
 export const getAgencyTool = tool('usaspending_get_agency', {
   title: 'Get Agency Overview',
   description:
-    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year with reported budget data), sub-agency count, and DEF codes for disaster/emergency funding. budget_by_fiscal_year carries the same totals for every fiscal year with reported data since FY2017, newest first, for budget trends; a row whose reported_through_period is below 12 is year-to-date, so compare it to full years with care. Also returns a paginated sub-agency breakdown with obligation and transaction counts for the same fiscal year as the budget totals (the current fiscal year when no budget year is available within 5 seconds); sub_agency_fiscal_year names the year it covers. Accepts exactly one directory toptier_code (e.g., 097 for DoD, 1601 for Labor; one/two-digit numeric inputs are zero-padded to three digits) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results. When the budget or sub-agency request fails, the overview is still returned and unavailable_sections names each missing section with its reason.",
+    "Fetch an agency's fiscal-year overview including mission, budgetary resources, obligation and outlay totals (for the most recent fiscal year with reported budget data), sub-agency count, and disaster/emergency funding codes. def_codes_fiscal_year names the fiscal year covered by def_codes, which follows the budget totals when available. budget_by_fiscal_year carries the same totals for every fiscal year with reported data since FY2017, newest first, for budget trends; a row whose reported_through_period is below 12 is year-to-date, so compare it to full years with care. Also returns a paginated sub-agency breakdown with obligation and transaction counts for the same fiscal year as the budget totals (the current fiscal year when no budget year is available within 5 seconds); sub_agency_fiscal_year names the year it covers. Accepts exactly one directory toptier_code (e.g., 097 for DoD, 1601 for Labor; one/two-digit numeric inputs are zero-padded to three digits) or an agency_slug (e.g., department-of-defense) — both appear in usaspending_list_agencies results and award search results. When the budget, sub-agency or DEF code request fails, the overview is still returned and unavailable_sections names each missing section with its reason.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -195,7 +195,13 @@ export const getAgencyTool = tool('usaspending_get_agency', {
           .describe('DEF code entry with public law and title'),
       )
       .optional()
-      .describe('Disaster/Emergency Funding (DEF) codes applicable to this agency'),
+      .describe(
+        'Disaster/Emergency Funding (DEF) codes for the budget year, or for the default overview when no budget year is available. Empty when upstream returned no codes. Omitted when unavailable.',
+      ),
+    def_codes_fiscal_year: z
+      .number()
+      .optional()
+      .describe('Fiscal year covered by def_codes, when USAspending reports it'),
     website: z.string().optional().describe('Agency website URL'),
   }),
 
@@ -313,7 +319,11 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       throw ctx.fail('missing_input', 'Either toptier_code or agency_slug is required');
     }
     const code = toptierCode;
+    const deadlineAt = svc.requestDeadline();
     const budgetRequest = svc.getAgencyBudgetaryResources(code, ctx);
+    const budgetRowsRequest = budgetRequest.then((budget) =>
+      budgetRows(budget.agency_data_by_year),
+    );
     /**
      * The breakdown waits on the budget so it covers the same fiscal year as the totals,
      * by the same rule on every page. Without a budget year — the request failed, no
@@ -324,10 +334,10 @@ export const getAgencyTool = tool('usaspending_get_agency', {
      */
     const budgetYear = new Promise<number | undefined>((resolve, reject) => {
       const timer = setTimeout(() => resolve(undefined), BUDGET_YEAR_WAIT_MS);
-      budgetRequest.then(
-        (budget) => {
+      budgetRowsRequest.then(
+        (rows) => {
           clearTimeout(timer);
-          resolve(budgetRows(budget.agency_data_by_year)[0]?.fiscal_year ?? undefined);
+          resolve(rows[0]?.fiscal_year ?? undefined);
         },
         (err: unknown) => {
           clearTimeout(timer);
@@ -350,7 +360,8 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     }));
     const overviewRequest = svc.getAgency(code, ctx);
     // Settled up front, so a leg that rejects after the overview fails is still handled.
-    const legs = Promise.allSettled([subRequest, budgetRequest]);
+    const budgetLegRequest = Promise.allSettled([budgetRowsRequest]);
+    const subLegRequest = Promise.allSettled([subRequest]);
 
     /**
      * The overview decides the call and is awaited alone, so its failure surfaces as
@@ -362,20 +373,27 @@ export const getAgencyTool = tool('usaspending_get_agency', {
     if (!detail?.name) {
       throw ctx.fail('agency_not_found', `Agency not found: ${toptierCode}`);
     }
-    const [subLeg, budgetLeg] = await legs;
-
     /**
      * A failed budget or sub-agency request degrades to a disclosed partial result
      * rather than failing the call, since the overview alone still answers. Caller
      * cancellation and unclassified (non-upstream) errors are rethrown.
      */
     const unavailable: UnavailableSection<AgencySection>[] = [];
-    const budgetData = settleSection(ctx, 'budgetary_resources', budgetLeg, unavailable);
+    const [budgetLeg] = await budgetLegRequest;
+    const budgetYears = settleSection(ctx, 'budgetary_resources', budgetLeg, unavailable) ?? [];
+    const currentBudget = budgetYears[0];
+    const finalBudgetYear = currentBudget?.fiscal_year;
+    const defLegRequest = Promise.allSettled([
+      typeof finalBudgetYear === 'number' && finalBudgetYear !== detail.fiscal_year
+        ? svc.getAgencyDefCodes(code, finalBudgetYear, ctx, deadlineAt)
+        : detail,
+    ]);
+    const [[subLeg], [defLeg]] = await Promise.all([subLegRequest, defLegRequest]);
+    ctx.signal.throwIfAborted();
     const subLegData = settleSection(ctx, 'sub_agencies', subLeg, unavailable);
+    const defData = settleSection(ctx, 'def_codes', defLeg, unavailable);
     const subAgenciesData = subLegData?.page;
 
-    const budgetYears = budgetRows(budgetData?.agency_data_by_year);
-    const currentBudget = budgetYears[0];
     const budgetByFiscalYear = budgetYears.flatMap((row) => {
       if (typeof row.fiscal_year !== 'number') return [];
       const through = reportedThroughPeriod(row);
@@ -483,9 +501,12 @@ export const getAgencyTool = tool('usaspending_get_agency', {
             },
           }
         : {}),
-      ...(detail.def_codes?.length
+      ...(defData?.def_codes
         ? {
-            def_codes: detail.def_codes.map((d) => ({
+            ...(typeof defData.fiscal_year === 'number'
+              ? { def_codes_fiscal_year: defData.fiscal_year }
+              : {}),
+            def_codes: defData.def_codes.map((d) => ({
               ...(d.code ? { code: d.code } : {}),
               ...(d.public_law ? { public_law: d.public_law } : {}),
               ...(d.title ? { title: d.title } : {}),
@@ -560,8 +581,11 @@ export const getAgencyTool = tool('usaspending_get_agency', {
       }
     }
 
-    if (result.def_codes?.length) {
+    if (result.def_codes) {
       lines.push('\n### Disaster/Emergency Funding Codes');
+      if (typeof result.def_codes_fiscal_year === 'number')
+        lines.push(`**DEF Codes Fiscal Year:** ${result.def_codes_fiscal_year}`);
+      if (!result.def_codes.length) lines.push('USAspending reported no DEF codes.');
       for (const d of result.def_codes) {
         lines.push(
           `- **${escapeMarkdownInline(d.code ?? 'N/A')}** — ${escapeMarkdownInline(d.title ?? 'N/A')}${d.public_law ? ` (${escapeMarkdownInline(d.public_law)})` : ''}`,

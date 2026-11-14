@@ -107,7 +107,7 @@ const AMOUNT_COVERAGE_SCHEMA = z.object({
 export const disasterSpendingTool = tool('usaspending_disaster_spending', {
   title: 'Disaster and Emergency Spending',
   description:
-    'Fetch disaster and emergency supplemental spending broken down by agency, CFDA assistance program, recipient, or geography, or request an overview. Filter by DEF codes to select emergency appropriations, then check amount_coverage before interpreting amounts: award breakdowns and geography cover the provider COVID grouping, while overview and agency total cover all requested codes. Rows and award counts can match codes outside the monetary scope. DEF codes appear in usaspending_get_award account_obligations_by_defc and usaspending_get_agency def_codes fields.',
+    'Fetch disaster and emergency supplemental spending broken down by agency, CFDA assistance program, recipient, or geography, or request an overview. Find DEF codes in usaspending_autocomplete_filters with type def_code. Filter by those codes to select emergency appropriations, then check amount_coverage before interpreting amounts: award breakdowns and geography cover the provider COVID grouping, while overview and agency total cover all requested codes. Rows and award counts can match codes outside the monetary scope.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -125,7 +125,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     filters: z
       .object({
         def_codes: CODE_FILTER_FIELDS.def_codes.describe(
-          'DEF codes, 1–3 letters or digits, sent uppercased. Optional for overview; required for breakdowns. Amount coverage is reported separately: award breakdowns and geography aggregate only the provider COVID grouping; matching rows and counts may include other codes. Overview and agency total cover all requested codes. Find codes in usaspending_get_agency def_codes fields.',
+          'DEF codes, 1–3 letters or digits, sent uppercased. Optional for overview; required for breakdowns. Amount coverage is reported separately: award breakdowns and geography aggregate only the provider COVID grouping; matching rows and counts may include other codes. Overview and agency total cover all requested codes. Find codes in usaspending_autocomplete_filters with type def_code.',
         ),
         award_type_codes: z.array(z.string()).optional().describe('Award type code filters'),
         query: z
@@ -330,7 +330,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
       when: 'A non-overview dimension has no DEF codes.',
       retryable: false,
       recovery:
-        'Provide at least one code in filters.def_codes, or use dimension "overview" without codes. Find codes in usaspending_get_agency def_codes fields.',
+        'Find codes in usaspending_autocomplete_filters with type def_code. Provide at least one code in filters.def_codes, or use dimension "overview" without codes.',
     },
     {
       reason: 'api_unavailable',
@@ -360,7 +360,7 @@ export const disasterSpendingTool = tool('usaspending_disaster_spending', {
     if (input.dimension !== 'overview' && !input.filters?.def_codes?.length) {
       throw ctx.fail(
         'missing_def_codes',
-        `def_codes is required when dimension is "${input.dimension}". Provide at least one DEF code in filters.def_codes (e.g., ["L", "M", "N", "O", "P"] for COVID-19). DEF codes are listed in the usaspending_get_agency def_codes fields.`,
+        `def_codes is required when dimension is "${input.dimension}". Provide at least one DEF code in filters.def_codes (e.g., ["L", "M", "N", "O", "P"] for COVID-19). Find codes in usaspending_autocomplete_filters with type def_code.`,
         { dimension: input.dimension, missing_field: 'filters.def_codes' },
       );
     }

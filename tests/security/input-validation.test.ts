@@ -581,6 +581,7 @@ describe('Security — injection strings do not break tool format output', () =>
   it('searchRecipientsTool format handles script injection in name', () => {
     const injection = '<script>alert("xss")</script>';
     const output = {
+      period: 'trailing 12 months' as const,
       results: [
         {
           id: 'id-001',

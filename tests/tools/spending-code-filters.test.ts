@@ -529,6 +529,9 @@ describe('usaspending_search_awards code filters (#77)', () => {
       time_period_start: '2023-10-01',
       time_period_end: '2024-09-30',
     };
+    answer(`${BASE}autocomplete/awarding_agency_office/`, {
+      results: { toptier_agency: [{ name: analyticsFilters.agency_name }] },
+    });
     answer(ANALYTICS[0].endpoint, ANALYTICS[0].row);
     answerSearch();
 
@@ -537,7 +540,7 @@ describe('usaspending_search_awards code filters (#77)', () => {
 
     expect(analytics.isError).toBeFalsy();
     expect(search.isError).toBeFalsy();
-    const [analyticsSent, searchSent] = [await sentFilters(0), await sentFilters(1)];
+    const [analyticsSent, searchSent] = [await sentFilters(1), await sentFilters(3)];
     for (const key of ['program_numbers', 'def_codes', 'award_type_codes', 'time_period']) {
       expect({ key, value: searchSent[key] }).toEqual({ key, value: analyticsSent[key] });
     }

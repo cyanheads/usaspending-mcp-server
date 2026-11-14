@@ -60,8 +60,8 @@ import { LOCATION_AUTOCOMPLETE_LIMIT_MAX } from './types.js';
  * - `recipient/{id}/` — 400 for a well-formed miss ("Recipient ID not found")
  *   and for a malformed identifier ("Invalid Recipient-Level"). It also
  *   answers a malformed `year` ("Invalid year: abc.") with 400, so
- *   `getRecipient` only ever sends an integer `year` — any integer, in range
- *   or not, answers 200 — and no existing recipient can answer 400.
+ *   `getRecipient` sends only supported year forms: an integer or `all`.
+ *   Any integer, in range or not, answers 200 for an existing recipient.
  * - `federal_accounts/{code}/` — 400 for a well-formed miss ("Cannot find
  *   Federal Account"), 404 when the code shape fails URL routing.
  * - `agency/{code}/` and `awards/{id}/` — 404 for both a miss and a malformed
@@ -90,6 +90,43 @@ const DEFAULT_REQUEST_BUDGET_MS = 45_000;
  * warm, so 5 s is about four times its slowest measured answer.
  */
 const RECIPIENT_CHILDREN_WAIT_MS = 5_000;
+
+/** Cap for the supplemental agency-year overview within the original request budget. */
+const AGENCY_DEF_CODES_WAIT_MS = 3_000;
+
+const AgencyDefCodesSchema = z.object({
+  fiscal_year: z.number().int(),
+  def_codes: z.array(
+    z.object({
+      code: z.string().nullish(),
+      title: z.string().nullish(),
+      public_law: z.string().nullish(),
+    }),
+  ),
+});
+
+const DEF_CODES_REFERENCE_PATH = 'references/def_codes/';
+const DefCodesReferenceSchema = z.object({
+  codes: z.array(
+    z.object({
+      code: z.string().min(1),
+      title: z.string().nullish(),
+      public_law: z.string().nullish(),
+      disaster: z.string().nullish(),
+    }),
+  ),
+});
+
+const AgencyNameRowSchema = z.object({
+  name: z.string().nullish(),
+  abbreviation: z.string().nullish(),
+});
+const AgencyNameLookupSchema = z.object({
+  results: z.object({
+    toptier_agency: z.array(AgencyNameRowSchema).nullish(),
+    subtier_agency: z.array(AgencyNameRowSchema).nullish(),
+  }),
+});
 
 /** One `recipient/children/` row; `state_province` is absent when upstream has no location for the child. */
 const RecipientChildSchema = z.object({
@@ -598,13 +635,12 @@ export class USASpendingService {
 
   /**
    * Fetches a recipient profile. The endpoint scopes its totals by `year` alone
-   * (a fiscal year; omitted, the trailing 12 months) and has no award-type
-   * selector. `fiscal_year` must be an integer: a malformed `year` draws a 400,
-   * which {@link getEntity} would read as a missing recipient.
+   * (an integer fiscal year, `all` for cumulative amounts, or omitted for the
+   * trailing 12 months) and has no award-type selector.
    */
   async getRecipient(
     recipientId: string,
-    params: { fiscal_year?: number },
+    params: { fiscal_year?: number | 'all' },
     ctx: Context,
   ): Promise<RawRecipientDetail | undefined> {
     ctx.log.debug('getRecipient', { recipientId, fiscalYear: params.fiscal_year });
@@ -635,7 +671,7 @@ export class USASpendingService {
    */
   async getRecipientChildren(
     ueiOrDuns: string,
-    params: { fiscal_year?: number },
+    params: { fiscal_year?: number | 'all' },
     ctx: Context,
     deadlineAt: number,
   ): Promise<RecipientChild[]> {
@@ -679,6 +715,36 @@ export class USASpendingService {
   async getAgency(toptierCode: string, ctx: Context): Promise<RawAgencyDetail | undefined> {
     ctx.log.debug('getAgency', { toptierCode });
     return await this.getEntity<RawAgencyDetail>(`agency/${encodeURIComponent(toptierCode)}/`, ctx);
+  }
+
+  /** Reads DEF codes for a known agency and confirms the response covers the requested fiscal year. */
+  async getAgencyDefCodes(
+    toptierCode: string,
+    fiscalYear: number,
+    ctx: Context,
+    deadlineAt: number,
+  ) {
+    const query = new URLSearchParams({ fiscal_year: String(fiscalYear) });
+    const path = `agency/${encodeURIComponent(toptierCode)}/?${query}`;
+    const raw = await this.get<unknown>(
+      path,
+      ctx,
+      undefined,
+      Math.min(deadlineAt, Date.now() + AGENCY_DEF_CODES_WAIT_MS),
+      0,
+    );
+    ctx.signal.throwIfAborted();
+    const parsed = AgencyDefCodesSchema.safeParse(raw);
+    if (!parsed.success || parsed.data.fiscal_year !== fiscalYear) {
+      throw serviceUnavailable(
+        `USAspending did not return agency DEF codes for fiscal year ${fiscalYear}.`,
+        {
+          ...upstreamFailure('api_unavailable', false),
+          operation: `GET ${path}`,
+        },
+      );
+    }
+    return parsed.data;
   }
 
   /**
@@ -777,27 +843,29 @@ export class USASpendingService {
     return Date.now() + Math.min(DEFAULT_REQUEST_BUDGET_MS, this.retryBudgetMs);
   }
 
+  /** Reads the provider's DEF code catalog. An optional absolute deadline bounds secondary reads. */
+  async getDefCodesReference(ctx: Context, deadlineAt?: number) {
+    const raw = await this.get<unknown>(DEF_CODES_REFERENCE_PATH, ctx, undefined, deadlineAt);
+    ctx.signal.throwIfAborted();
+    const parsed = DefCodesReferenceSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw serviceUnavailable(
+        'USAspending returned the DEF code reference in an unexpected shape.',
+        {
+          ...upstreamFailure('api_unavailable', false),
+          operation: `GET ${DEF_CODES_REFERENCE_PATH}`,
+        },
+      );
+    }
+    return parsed.data.codes;
+  }
+
   /** Best-effort official COVID grouping, bounded to two seconds within the caller's total budget. */
   async getDisasterAmountCodes(ctx: Context, deadlineAt: number): Promise<string[] | undefined> {
     try {
-      const raw = await this.get<unknown>(
-        'references/def_codes/',
-        ctx,
-        undefined,
-        Math.min(deadlineAt, Date.now() + 2_000),
-      );
-      ctx.signal?.throwIfAborted();
-      const parsed = z
-        .object({
-          codes: z
-            .array(z.object({ code: z.string().min(1), disaster: z.string().nullable() }))
-            .min(1),
-        })
-        .safeParse(raw);
-      if (!parsed.success) return undefined;
-      return parsed.data.codes
-        .filter((entry) => entry.disaster === 'covid_19')
-        .map((entry) => entry.code);
+      const codes = await this.getDefCodesReference(ctx, Math.min(deadlineAt, Date.now() + 2_000));
+      if (!codes.length || codes.some((entry) => entry.disaster === undefined)) return;
+      return codes.filter((entry) => entry.disaster === 'covid_19').map((entry) => entry.code);
     } catch (error) {
       if (ctx.signal?.aborted) throw error;
       if (
@@ -1025,10 +1093,11 @@ export class USASpendingService {
     return this.post('autocomplete/cfda/', { search_text: searchText, limit }, ctx);
   }
 
-  autocompleteAwardingAgency(
+  async autocompleteAwardingAgency(
     searchText: string,
     limit: number,
     ctx: Context,
+    deadlineAt?: number,
   ): Promise<{
     results: {
       toptier_agency?: RawAgencyAutocomplete[];
@@ -1037,11 +1106,25 @@ export class USASpendingService {
     };
   }> {
     ctx.log.debug('autocompleteAwardingAgency', { searchText });
-    return this.post(
-      'autocomplete/awarding_agency_office/',
-      { search_text: searchText, limit },
-      ctx,
-    );
+    const path = 'autocomplete/awarding_agency_office/';
+    const body = { search_text: searchText, limit };
+    if (deadlineAt === undefined) return this.post(path, body, ctx);
+    const raw = await this.post<unknown>(path, body, ctx, deadlineAt, 0);
+    ctx.signal.throwIfAborted();
+    const parsed = AgencyNameLookupSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw serviceUnavailable('USAspending returned agency names in an unexpected shape.', {
+        ...upstreamFailure('api_unavailable', false),
+        operation: `POST ${path}`,
+      });
+    }
+    const { toptier_agency, subtier_agency } = parsed.data.results;
+    return {
+      results: {
+        ...(toptier_agency ? { toptier_agency } : {}),
+        ...(subtier_agency ? { subtier_agency } : {}),
+      },
+    };
   }
 
   autocompleteRecipient(

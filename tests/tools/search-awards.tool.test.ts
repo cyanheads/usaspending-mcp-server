@@ -20,7 +20,11 @@ const mockSearchAwards = vi.fn();
 const mockCountAwards = vi.fn();
 
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
-  getUSASpendingService: () => ({ searchAwards: mockSearchAwards, countAwards: mockCountAwards }),
+  getUSASpendingService: () => ({
+    searchAwards: mockSearchAwards,
+    countAwards: mockCountAwards,
+    autocompleteAwardingAgency: async () => ({ results: {} }),
+  }),
 }));
 
 /** Count buckets with `n` awards in the contracts group. */
@@ -1403,7 +1407,9 @@ describe('searchAwardsTool nested location filters (#109)', () => {
 
     const notice =
       'No awards match place_of_performance_location="country=USA, state=WA", recipient_location="country=USA, state=NM, county=049", types=A,B,C,D.';
-    expect(result.structuredContent).toMatchObject({ notice });
+    expect(result.structuredContent).toMatchObject({
+      notice: `Results use USAspending's available coverage without a date filter. ${notice}`,
+    });
     expect(textOf(result)).toContain(notice);
   });
 
@@ -1589,7 +1595,7 @@ describe('searchAwardsTool total count and recipient IDs (#114)', () => {
       expect(sc.notice).toContain(`Request page ${c.page + 1}`);
     } else {
       expect(sc).not.toHaveProperty('truncated');
-      expect(sc).not.toHaveProperty('notice');
+      expect(sc.notice).toBe("Results use USAspending's available coverage without a date filter.");
     }
     const text = textOf(result);
     expect(text).toContain(`**Has next:** ${c.hasNext ? 'Yes' : 'No'}`);
@@ -1656,7 +1662,9 @@ describe('searchAwardsTool total count and recipient IDs (#114)', () => {
 
     const sc = contentOf(result);
     expect(sc.page_metadata).toMatchObject({ has_next: false, total });
-    expect(sc.notice).toBe(fragment);
+    expect(sc.notice).toBe(
+      `Results use USAspending's available coverage without a date filter. ${fragment}`,
+    );
     expect(markdownText(textOf(result))).toContain(fragment);
   });
 
@@ -1822,7 +1830,8 @@ describe('searchAwardsTool limit above the 100 cap (#99)', () => {
       has_next: true,
       total: 250,
     });
-    const guidance = '250 awards match; this page ends at result 200. Request page 3 for more.';
+    const guidance =
+      "250 awards match; this page ends at result 200. Request page 3 for more. Results use USAspending's available coverage without a date filter.";
     expect(contentOf(at100)).not.toHaveProperty('limitClamp');
     expect(contentOf(at100).notice).toBe(guidance);
     expect(contentOf(at101)).toMatchObject({
@@ -1896,7 +1905,7 @@ describe('searchAwardsTool limit above the 100 cap (#99)', () => {
     const result = await search({ limit: 150, page: 3 });
 
     const notice =
-      'limit 150 exceeds the per-call maximum of 100; this call used limit 100. Page 3 is past the end of the 10 matching results. Request an earlier page with the same filters.';
+      "limit 150 exceeds the per-call maximum of 100; this call used limit 100. Results use USAspending's available coverage without a date filter. Page 3 is past the end of the 10 matching results. Request an earlier page with the same filters.";
     expect(contentOf(result)).toMatchObject({
       page_metadata: { limit: 100, page: 3, has_next: false, total: 10 },
       limitClamp: { field: 'limit', requested: 150, applied: 100 },

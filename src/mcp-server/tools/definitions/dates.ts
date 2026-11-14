@@ -125,6 +125,10 @@ export const ANALYTICS_DATE_FIELDS = {
   end: 'filters.time_period_end',
 } as const satisfies DateFields;
 
+/** Disclose that an endpoint queried its available coverage without dates. */
+export const NO_DATE_FILTER_NOTICE =
+  "Results use USAspending's available coverage without a date filter.";
+
 /**
  * The rejection message for a range whose start falls after its end, naming the
  * two input fields that carried them and telling the caller to swap them — or

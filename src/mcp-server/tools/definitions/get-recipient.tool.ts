@@ -51,7 +51,7 @@ function byAmountDesc(a: RankedChild, b: RankedChild): number {
 export const getRecipientTool = tool('usaspending_get_recipient', {
   title: 'Get Recipient Profile',
   description:
-    "Fetch a recipient's full profile including address, business type codes, parent organizations, alternate names, and total transaction and loan amounts. Recipient IDs are hexadecimal 8-4-4-4-12 hashes with a level suffix (-P parent, -C child, -R standalone) from usaspending_search_recipients or usaspending_get_award. Totals cover the trailing 12 months unless fiscal_year selects one fiscal year, and period names the window. parents lists every parent organization — a child often has several, and a parent lists itself — and each parent_id opens that parent in usaspending_get_recipient. For a -P parent, children lists its child recipients with their amounts over the same period, highest amount first, up to children_limit, and children_total counts them all; children is a best-effort second request, so when it fails the profile is still returned and unavailable_sections names children with its reason. For a recipient's totals by award type, use usaspending_spending_over_time with filters.recipient_id and award_type_codes. UEI and DUNS values can be used to cross-reference with SAM.gov and SEC EDGAR.",
+    "Fetch a recipient's full profile including address, business type codes, parent organizations, alternate names, and total transaction and loan amounts. A -P ID covers awards USAspending attributes to that parent, and historical attribution can vary. A -C ID covers the entity's own awards recorded with a parent, and a -R ID covers its own awards recorded without one. Use IDs returned by usaspending_search_recipients or usaspending_get_award. If search returns both -C and -R for the entity, check both. Never construct an ID by replacing a suffix. Totals cover the trailing 12 months by default. Set fiscal_year to one year or \"all\" for USAspending's searchable history through the request date. The period field names the window. parents lists every parent organization — a child often has several, and a parent lists itself — and each parent_id opens that parent in usaspending_get_recipient. For a -P parent, children lists its child recipients with their amounts over the same period, highest amount first, up to children_limit, and children_total counts them all; children is a best-effort second request, so when it fails the profile is still returned and unavailable_sections names children with its reason. For a recipient's totals by award type, use usaspending_spending_over_time with filters.recipient_id and award_type_codes. UEI and DUNS values can be used to cross-reference with SAM.gov and SEC EDGAR.",
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -62,13 +62,19 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
         'Recipient hexadecimal 8-4-4-4-12 hash with level suffix, e.g., b97d19b0-833c-8d8f-3a2c-157d04ea55ef-P — from usaspending_search_recipients or usaspending_get_award',
       ),
     fiscal_year: z
-      .number()
-      .int()
-      .min(2001)
-      .max(2030)
+      .preprocess(
+        (value) => {
+          // Preserve the framework's exact numeric-string repair when adding a string branch.
+          if (typeof value !== 'string') return value;
+          const trimmed = value.trim();
+          const year = Number(trimmed);
+          return Number.isFinite(year) && String(year) === trimmed ? year : value;
+        },
+        z.union([z.number().int().min(2001).max(2030), z.literal('all')]),
+      )
       .optional()
       .describe(
-        'Fiscal year to scope the totals to (e.g., 2024, which runs October 2023 through September 2024). Omit for the trailing 12 months.',
+        'Fiscal year to scope the totals to (e.g., 2024, which runs October 2023 through September 2024). Use "all" for searchable history through the request date. Omit for the trailing 12 months.',
       ),
     children_limit: CHILDREN_LIMIT.schema.describe(
       'Child recipients to return for a parent (-P) profile, highest amount first. Default 50, at most 500 per call. Ignored for -C and -R profiles.',
@@ -133,7 +139,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
     period: z
       .string()
       .describe(
-        'Window the totals cover: FY<year> when fiscal_year was given, otherwise "trailing 12 months"',
+        'Window the totals cover: FY<year> for a single fiscal year, "all fiscal years" for searchable history through the request date, or "trailing 12 months" when fiscal_year is omitted',
       ),
     total_transaction_amount: z
       .number()
@@ -175,7 +181,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
       )
       .optional()
       .describe(
-        'Child recipients of a parent (-P) over period, highest amount first, up to children_limit; affiliates with no transactions in the period are listed at 0. [] when the parent has none. Absent for -C and -R recipients, and when the children request failed (see unavailable_sections).',
+        'Child recipients of a parent (-P) over period, highest amount first, up to children_limit. A single fiscal year or the trailing 12 months can include affiliates with no transactions at 0. [] when the parent has none. Absent for -C and -R recipients, and when the children request failed (see unavailable_sections).',
       ),
     children_total: z
       .number()
@@ -240,7 +246,11 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
   async handler(input, ctx) {
     ctx.log.info('usaspending_get_recipient', { recipient_id: input.recipient_id });
     const svc = getUSASpendingService();
-    const period = input.fiscal_year !== undefined ? { fiscal_year: input.fiscal_year } : {};
+    const { fiscal_year } = input;
+    const period = fiscal_year !== undefined ? { fiscal_year } : {};
+    let periodLabel = 'trailing 12 months';
+    if (fiscal_year === 'all') periodLabel = 'all fiscal years';
+    else if (fiscal_year !== undefined) periodLabel = `FY${fiscal_year}`;
     // The children request chains after the profile and ends inside the profile request's deadline.
     const deadlineAt = svc.requestDeadline();
     const r = await svc.getRecipient(input.recipient_id, period, ctx);
@@ -327,7 +337,7 @@ export const getRecipientTool = tool('usaspending_get_recipient', {
 
     return {
       name: r.name,
-      period: input.fiscal_year !== undefined ? `FY${input.fiscal_year}` : 'trailing 12 months',
+      period: periodLabel,
       ...(r.uei ? { uei: r.uei } : {}),
       ...(r.duns ? { duns: r.duns } : {}),
       ...(r.recipient_id ? { recipient_id: r.recipient_id } : {}),

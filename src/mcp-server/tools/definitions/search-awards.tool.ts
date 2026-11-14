@@ -12,6 +12,14 @@ import {
   type AwardCounts,
   getUSASpendingService,
 } from '@/services/usaspending/usaspending-service.js';
+import {
+  AGENCY_FILTER_ENRICHMENT,
+  AGENCY_FILTER_FIELDS,
+  agencyFilterEcho,
+  applyAgencyFilters,
+  describeAgencyFilters,
+  resolveAgencyFilters,
+} from './agency-filters.js';
 import { countLimit, LimitClampSchema, limitClampTrailer } from './count-limit.js';
 import {
   ANALYTICS_DATE_FIELDS,
@@ -20,6 +28,7 @@ import {
   filledBoundNotice,
   floorViolationMessage,
   invertedRangeMessage,
+  NO_DATE_FILTER_NOTICE,
   optionalIsoDate,
   resolveDateRange,
 } from './dates.js';
@@ -28,7 +37,6 @@ import {
   AWARD_TYPE_CODES,
   applyCodeFilters,
   applyLocationFilters,
-  awardingAgencyFilters,
   CODE_FILTER_FIELDS,
   codeFilterEcho,
   describeCodeFilters,
@@ -228,12 +236,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe(
         'Filter by award type codes. All codes must belong to a single group: A/B/C/D (contracts), IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E (IDVs), 02/03/04/05/F001/F002 (grants), 06/10/F006/F007 (direct payments), 07/08/F003/F004 (loans), 09/11/-1/F005/F008/F009/F010 (other assistance). Defaults to contracts. Mixing groups causes a 422 error. The group decides which sort values apply.',
       ),
-    agency_name: z
-      .string()
-      .optional()
-      .describe(
-        'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
-      ),
+    ...AGENCY_FILTER_FIELDS,
     recipient_name: z
       .string()
       .optional()
@@ -259,7 +262,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .strict()
       .optional()
       .describe(
-        'Filter awards by date range (action date). Both blank means no date filter; one blank end is filled and named in the notice.',
+        "Filter awards by date range (action date). Omit both bounds or leave both blank to query USAspending's available coverage without a date filter. One blank end is filled and named in the notice.",
       ),
     location_filter: LocationFilterSchema,
     sort: z
@@ -315,12 +318,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           .describe(
             'Award type codes; all must belong to one group (A/B/C/D contracts, IDV_A–IDV_E IDVs, 02/03/04/05/F001/F002 grants, 06/10/F006/F007 direct payments, 07/08/F003/F004 loans, 09/11/-1/F005/F008/F009/F010 other assistance). When non-empty, overrides the top-level award_type_codes and decides which sort values apply; an empty array falls back to the top-level value.',
           ),
-        agency_name: z
-          .string()
-          .optional()
-          .describe(
-            'Awarding top-tier or sub-tier agency name — use the matched name from usaspending_autocomplete_filters type=awarding_agency; use toptier_name to select the whole parent department. A sub-tier name shared by several parents matches under all parents.',
-          ),
+        ...AGENCY_FILTER_FIELDS,
         recipient_name: z
           .string()
           .optional()
@@ -336,7 +334,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         ...CODE_FILTER_FIELDS,
         ...LOCATION_FILTER_FIELDS,
         time_period_start: optionalIsoDate(
-          'Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC).',
+          "Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC). With no effective start or end, the query uses USAspending's available coverage without a date filter.",
         ),
         time_period_end: optionalIsoDate(
           'End date (YYYY-MM-DD). Given alone, the range starts at 2007-10-01, the earliest searchable date.',
@@ -488,7 +486,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         'Notices the USAspending API returned with this response — e.g. a supplied filter it ignored because this endpoint does not support it. Every successful response also carries a standing advisory that search covers 2007-10-01 onward; that advisory is boilerplate, not a verdict on the dates requested. Present whenever the API returns any messages.',
       ),
     applied_keyword: z.string().optional().describe('Keyword filter applied to this search'),
-    applied_agency_name: z.string().optional().describe('Awarding agency name filter applied'),
+    applied_recipient_name: z
+      .string()
+      .optional()
+      .describe('Effective recipient name sent upstream'),
+    applied_award_type_codes: z.string().describe('Award type codes sent, comma-separated'),
+    ...AGENCY_FILTER_ENRICHMENT,
     applied_naics_codes: z
       .string()
       .optional()
@@ -534,7 +537,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe(
-        'A reduced limit, how to page on when more results remain, which date bound was filled in when only the other was supplied, why an empty page is empty (nothing matches, the page is past the last match, or — without a total — unknown), and which section failed to load. Absent when none applies.',
+        'A reduced limit, how to page on, the use of available coverage without a date filter or any filled date bound, active filters on an empty page, and any section that failed to load. Absent when none applies.',
       ),
   },
 
@@ -661,7 +664,6 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   ],
 
   async handler(input, ctx) {
-    const countDeadlineAt = Date.now() + COUNT_DEADLINE_MS;
     // Every read below uses the applied limit, never input.limit.
     const { applied: limit, notice: clampNotice } = LIMIT.apply(ctx, 'limit', input.limit);
     ctx.log.info('usaspending_search_awards', {
@@ -708,7 +710,6 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     const awardTypeCodes = f?.award_type_codes?.length
       ? f.award_type_codes
       : input.award_type_codes;
-    const agencyName = f?.agency_name || input.agency_name;
     const recipientName = f?.recipient_name || input.recipient_name;
     const mergedNaicsCodes =
       f?.naics_codes && f.naics_codes.length > 0 ? f.naics_codes : input.naics_codes;
@@ -820,9 +821,15 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     const filters: Record<string, unknown> = {};
     if (keywords?.length) filters.keywords = keywords;
     filters.award_type_codes = awardTypeCodes;
-    if (agencyName) {
-      filters.agencies = awardingAgencyFilters(agencyName);
-    }
+    const names = {
+      agency_name: f?.agency_name || input.agency_name,
+      funding_agency_name: f?.funding_agency_name || input.funding_agency_name,
+    };
+    const agencies =
+      names.agency_name || names.funding_agency_name
+        ? await resolveAgencyFilters(svc, names, ctx)
+        : { names, notices: [] };
+    applyAgencyFilters(filters, agencies.names);
     if (recipientName) filters.recipient_search_text = [recipientName];
     if (naicsCodes?.length) {
       filters.naics_codes = { require: naicsCodes };
@@ -833,6 +840,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     }
     applyLocationFilters(filters, locations);
 
+    const countDeadlineAt = Date.now() + COUNT_DEADLINE_MS;
     const searchRequest = svc.searchAwards(
       {
         filters,
@@ -953,7 +961,9 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       has_next: page_metadata.has_next,
       ...(data.messages?.length ? { upstream_messages: data.messages } : {}),
       ...(keywords?.length ? { applied_keyword: keywords.join(', ') } : {}),
-      ...(agencyName ? { applied_agency_name: agencyName } : {}),
+      ...(recipientName ? { applied_recipient_name: recipientName } : {}),
+      applied_award_type_codes: awardTypeCodes.join(', '),
+      ...agencyFilterEcho(agencies.names),
       ...(naicsCodes?.length ? { applied_naics_codes: naicsCodes.join(', ') } : {}),
       ...codeFilterEcho(codes),
       ...locationFilterEcho(locations),
@@ -969,7 +979,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
 
     // enrich.notice is last-wins, and enrich.truncated writes the notice too, so
     // every notice source joins into one string written at the end.
-    const notices: (string | undefined)[] = [clampNotice];
+    const notices: (string | undefined)[] = [clampNotice, ...agencies.notices];
 
     /**
      * The truncated/shown/cap disclosure needs evidence that rows exist past this
@@ -985,12 +995,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       }
       notices.push(guidance);
     }
-    notices.push(filledBoundNotice(timePeriod, filledFields));
+    notices.push(timePeriod ? filledBoundNotice(timePeriod, filledFields) : NO_DATE_FILTER_NOTICE);
 
     if (results.length === 0) {
       const filterParts: string[] = [];
+      const agencyParts = describeAgencyFilters(agencies.names);
       if (keywords?.length) filterParts.push(`keyword="${keywords.join(', ')}"`);
-      if (agencyName) filterParts.push(`agency="${agencyName}"`);
+      if (recipientName) filterParts.push(`recipient_name="${recipientName}"`);
+      filterParts.push(...agencyParts);
       filterParts.push(...describeCodeFilters(codes), ...describeLocationFilters(locations));
       filterParts.push(`types=${awardTypeCodes.join(',')}`);
       const filterText = filterParts.join(', ');
@@ -999,6 +1011,10 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
           ? emptyPageNotice(page, limit, pagedTotal, `No awards match ${filterText}.`)
           : `Page ${page} returned no awards for ${filterText}.${total !== undefined ? ` The API reports ${total.toLocaleString()} matching awards across all pages.` : ' The total match count is unavailable, so an empty page does not establish zero matches.'}`,
       );
+      if (pagedTotal !== undefined && pagedTotal > 0) {
+        if (recipientName) notices.push(`Recipient filter: recipient_name="${recipientName}".`);
+        if (agencyParts.length) notices.push(`Agency filters: ${agencyParts.join(', ')}.`);
+      }
     }
     if (unavailable.length > 0) {
       ctx.enrich({ unavailable_sections: unavailable });

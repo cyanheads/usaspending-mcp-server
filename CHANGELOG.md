@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.3](changelog/0.7.x/0.7.3.md) — 2026-11-13
+
+Filter awards and spending by funding agency, look up DEF codes by title or public law, and get all-year recipient totals. Agency detail aligns DEF codes with the budget year, and spending results explain their applied scope.
+
 ## [0.7.2](changelog/0.7.x/0.7.2.md) — 2026-11-12
 
 Resolve place names to location codes and filter category, geography, and time-series results by place; clamp oversized limits; open recipient parents and children; add multi-year agency budgets, award competition detail, and award search totals.

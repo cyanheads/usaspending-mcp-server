@@ -10,14 +10,19 @@ import {
   applyLocationFilters,
   buildFilters,
   CODE_FILTER_FIELDS,
+  CONTRACT_FILTER_FIELDS,
+  contractFilterEcho,
+  describeContractFilters,
   describeLocationFilters,
   LOCATION_FILTER_FIELDS,
   locationFilterEcho,
+  NESTED_LOCATION_FILTER_FIELDS,
   normalizeCodeFilters,
+  normalizeContractFilters,
   normalizeEffectiveFilters,
   resolveLocationFilters,
 } from '@/mcp-server/tools/definitions/filters.js';
-import { resolveLocation } from '@/mcp-server/tools/definitions/locations.js';
+import { LocationFilterSchema, resolveLocation } from '@/mcp-server/tools/definitions/locations.js';
 
 describe('effective filter validation', () => {
   it.each(['P', 'C', 'R'])('preserves recipient level %s', (level) => {
@@ -58,6 +63,8 @@ describe('effective filter validation', () => {
           normalizeEffectiveFilters({ naics_codes: [value], recipient_id: value });
           CODE_FILTER_FIELDS.def_codes.safeParse([value]);
           normalizeCodeFilters({ def_codes: [value] });
+          for (const field of Object.values(CONTRACT_FILTER_FIELDS)) field.safeParse([value]);
+          normalizeContractFilters({ set_aside_type_codes: [value] });
         };
         // Warm each size before samples so tier transitions cannot masquerade as growth.
         for (let i = 0; i < 30; i++) run();
@@ -76,6 +83,12 @@ describe('effective filter validation', () => {
         expect(normalizeCodeFilters({ def_codes: [value] }).def_codes).toEqual([
           value.toUpperCase(),
         ]);
+        for (const field of Object.values(CONTRACT_FILTER_FIELDS)) {
+          expect(field.safeParse([value]).success).toBe(false);
+        }
+        expect(normalizeContractFilters({ set_aside_type_codes: [value] })).toEqual({
+          set_aside_type_codes: [value.toUpperCase()],
+        });
         const normalized = normalizeEffectiveFilters({ naics_codes: [value] });
         if (value.includes('_')) expect(normalized).toMatchObject({ reason: 'invalid_naics_code' });
         else if (value.includes('(') || value.slice(0, -1).includes('\n'))
@@ -84,7 +97,9 @@ describe('effective filter validation', () => {
       }
       guard(readings[0]!, readings[3]!);
     }
-  });
+    // Synchronous: vitest cannot interrupt the body, so a wall-clock timeout guards no hang
+    // and only fails linear work on a loaded machine; the thread-CPU guard bounds growth.
+  }, 0);
   it.each([
     ['054', '54'],
     ['+54', '54'],
@@ -370,6 +385,98 @@ describe('analyticsTypeMismatch (#77)', () => {
   });
 });
 
+describe('contract filters (#119)', () => {
+  const KEYS = [
+    'extent_competed_type_codes',
+    'set_aside_type_codes',
+    'contract_pricing_type_codes',
+  ] as const;
+
+  it('declares the three keys award search sends under the same names', () => {
+    expect(Object.keys(CONTRACT_FILTER_FIELDS)).toEqual(KEYS);
+  });
+
+  it.each(['F', 'C', 'cdo', 'Ndo', 'SBA', '8AN', 'EDWOSBSS', '1', 'j'])(
+    'accepts %j on every key: 1–8 ASCII letters or digits, either case',
+    (value) => {
+      for (const key of KEYS) {
+        expect({ key, ok: CONTRACT_FILTER_FIELDS[key].safeParse([value]).success }).toEqual({
+          key,
+          ok: true,
+        });
+      }
+    },
+  );
+
+  it.each(['', 'E Civ', ' F', 'F\n', 'EDWOSBSS1', 'HS-2', '８A', 'é'])(
+    'rejects %j on every key, naming the expected grammar',
+    (value) => {
+      for (const key of KEYS) {
+        const parsed = CONTRACT_FILTER_FIELDS[key].safeParse([value]);
+        expect({ key, ok: parsed.success }).toEqual({ key, ok: false });
+        expect(parsed.error?.issues[0]?.message).toBe(
+          'Expected an FPDS code of 1–8 letters or digits',
+        );
+      }
+    },
+  );
+
+  it('accepts an absent or empty list at the schema, as unset', () => {
+    for (const key of KEYS) {
+      expect(CONTRACT_FILTER_FIELDS[key].safeParse(undefined).success).toBe(true);
+      expect(CONTRACT_FILTER_FIELDS[key].safeParse([]).success).toBe(true);
+    }
+  });
+
+  it('uppercases each list, the only case upstream matches, and drops an empty or absent one', () => {
+    expect(
+      normalizeContractFilters({
+        extent_competed_type_codes: ['c', 'Ndo'],
+        set_aside_type_codes: [],
+        contract_pricing_type_codes: undefined,
+      }),
+    ).toEqual({ extent_competed_type_codes: ['C', 'NDO'] });
+    expect(
+      normalizeContractFilters({
+        extent_competed_type_codes: ['F'],
+        set_aside_type_codes: ['sba', '8an'],
+        contract_pricing_type_codes: ['j', '1'],
+      }),
+    ).toEqual({
+      extent_competed_type_codes: ['F'],
+      set_aside_type_codes: ['SBA', '8AN'],
+      contract_pricing_type_codes: ['J', '1'],
+    });
+    expect(normalizeContractFilters({})).toEqual({});
+  });
+
+  it('echoes and describes each list sent, comma-joined, and nothing when unset', () => {
+    const codes = {
+      extent_competed_type_codes: ['C', 'G'],
+      set_aside_type_codes: ['SBA'],
+      contract_pricing_type_codes: ['J', 'Y'],
+    };
+    expect(contractFilterEcho(codes)).toEqual({
+      applied_extent_competed_type_codes: 'C, G',
+      applied_set_aside_type_codes: 'SBA',
+      applied_contract_pricing_type_codes: 'J, Y',
+    });
+    expect(describeContractFilters(codes)).toEqual([
+      'extent_competed_type_codes=C,G',
+      'set_aside_type_codes=SBA',
+      'contract_pricing_type_codes=J,Y',
+    ]);
+    expect(contractFilterEcho({ set_aside_type_codes: ['NONE'] })).toEqual({
+      applied_set_aside_type_codes: 'NONE',
+    });
+    expect(describeContractFilters({ set_aside_type_codes: ['NONE'] })).toEqual([
+      'set_aside_type_codes=NONE',
+    ]);
+    expect(contractFilterEcho({})).toEqual({});
+    expect(describeContractFilters({})).toEqual([]);
+  });
+});
+
 /**
  * One shape per failure branch of `resolveLocation`, with the field each
  * message must name: the offending field, quoted value included when it has one.
@@ -412,27 +519,66 @@ describe('resolveLocation field path (#109)', () => {
   );
 });
 
-describe('location filters (#109)', () => {
-  it('declares both keys as strict location objects with their own descriptions', () => {
-    const schema = z.toJSONSchema(z.object(LOCATION_FILTER_FIELDS), { io: 'input' }) as {
-      properties: Record<
-        string,
-        { additionalProperties?: boolean; description?: string; properties?: object }
-      >;
-      required?: string[];
-    };
-    const pop = schema.properties.place_of_performance_location;
-    const recipient = schema.properties.recipient_location;
+interface LocationNode {
+  additionalProperties?: boolean;
+  description?: string;
+  properties: Record<string, { description?: string }>;
+}
 
-    expect(schema.required ?? []).toEqual([]);
+/** An object of location fields as `tools/list` advertises it. */
+const advertised = (fields: z.ZodRawShape) =>
+  z.toJSONSchema(z.object(fields), { io: 'input' }) as {
+    properties: Record<string, LocationNode>;
+    required?: string[];
+  };
+
+/** A schema node with every description removed: the part validation reads. */
+const stripDescriptions = (node: unknown): unknown =>
+  JSON.parse(JSON.stringify(node, (key, value) => (key === 'description' ? undefined : value)));
+
+const CODE_FIELDS = ['country', 'state', 'county'] as const;
+
+describe('location filters (#109)', () => {
+  /** Award search's top-level location_filter, the full statement of the location fields. */
+  const locationFilter = advertised({ location_filter: LocationFilterSchema }).properties
+    .location_filter!;
+
+  it('declares both keys as strict location objects, the location fields stated in full once (#131)', () => {
+    const { properties, required } = advertised(LOCATION_FILTER_FIELDS);
+    const { place_of_performance_location: pop, recipient_location: recipient } = properties;
+
+    expect(required ?? []).toEqual([]);
     for (const field of [pop, recipient]) {
       expect(Object.keys(field?.properties ?? {})).toEqual(['country', 'state', 'county', 'city']);
       expect(field?.additionalProperties).toBe(false);
-      expect(field?.description).toContain('usaspending_autocomplete_filters type=location');
     }
+    expect(pop?.description).toContain('usaspending_autocomplete_filters type=location');
     expect(pop?.description).toContain('applied_location');
+    expect(pop?.properties).toEqual(locationFilter.properties);
+    expect(recipient?.description).toMatch(/^Same as filters\.place_of_performance_location, /);
     expect(recipient?.description).toContain('applied_recipient_location');
-    expect(pop?.description).not.toEqual(recipient?.description);
+    expect(stripDescriptions(recipient)).toEqual(stripDescriptions(pop));
+    for (const key of CODE_FIELDS) {
+      expect(recipient?.properties[key]?.description).toBe(
+        `Same as filters.place_of_performance_location.${key}.`,
+      );
+    }
+  });
+
+  it("points award search's nested copy at its top-level location_filter (#131)", () => {
+    const { place_of_performance_location: pop, recipient_location: recipient } = advertised(
+      NESTED_LOCATION_FILTER_FIELDS,
+    ).properties;
+
+    expect(pop?.description).toBe('Same as the top-level location_filter.');
+    expect(recipient?.description).toMatch(/^Same as the top-level location_filter, /);
+    expect(recipient?.description).toContain('applied_recipient_location');
+    for (const field of [pop, recipient]) {
+      expect(stripDescriptions(field)).toEqual(stripDescriptions(locationFilter));
+      for (const key of CODE_FIELDS) {
+        expect(field?.properties[key]?.description).toBe(`Same as location_filter.${key}.`);
+      }
+    }
   });
 
   it('resolves no key to no location', () => {

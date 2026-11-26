@@ -1,7 +1,8 @@
 /**
  * @fileoverview `usaspending_search_awards` behavior keyed to the award-type
  * group: sort resolution and validation, the loan fields, the
- * `assistance_listings` filter, and the count bucket that supplies the total.
+ * `assistance_listings` filter, and the two count requests: the total (one
+ * bucket) and the matches per award-type group.
  * Runs through the tool's public contract on a real `USASpendingService`
  * beneath a strict fetch fake, so every assertion reads the request body that
  * actually left the process — and a pre-request rejection is proven by an empty
@@ -464,8 +465,9 @@ describe('usaspending_search_awards — assistance_listings filter (#61)', () =>
     expect(mixed.structuredContent).toMatchObject({
       error: { data: { reason: 'assistance_listings_type_mismatch' } },
     });
+    // Only the first call reached upstream: its search, total count, and group count (#125).
     expect(callsTo(ENDPOINT)).toHaveLength(1);
-    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(1);
+    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(2);
   });
 
   it('allows loans, which carry listings, and keeps the loan sort', async () => {
@@ -519,15 +521,160 @@ describe('usaspending_search_awards — assistance_listings filter (#61)', () =>
   });
 });
 
+describe('usaspending_search_awards — contract filters by award-type group (#119)', () => {
+  const CONTRACT_FILTERS = {
+    extent_competed_type_codes: ['f'],
+    set_aside_type_codes: ['sba'],
+    contract_pricing_type_codes: ['j'],
+  };
+  const SENT = {
+    extent_competed_type_codes: ['F'],
+    set_aside_type_codes: ['SBA'],
+    contract_pricing_type_codes: ['J'],
+  };
+  /** The total count's body: the count request carrying the award type codes the search sent. */
+  const totalCountFilters = async () => {
+    const bodies = await Promise.all(
+      callsTo(COUNT_ENDPOINT).map(
+        async (call) =>
+          JSON.parse(await call.request.clone().text()) as { filters: Record<string, unknown> },
+      ),
+    );
+    return bodies.find((body) => 'award_type_codes' in body.filters)?.filters;
+  };
+  const isProcurement = (g: (typeof GROUPS)[number]) =>
+    g.label === 'contracts' || g.label === 'IDVs';
+  const PROCUREMENT = GROUPS.filter(isProcurement);
+  const ASSISTANCE = GROUPS.filter((g) => !isProcurement(g));
+
+  it.each(PROCUREMENT)(
+    'sends the codes uppercased with $label to the search and the total count',
+    async ({ codes }) => {
+      answer();
+      const result = await run({ award_type_codes: [...codes], ...CONTRACT_FILTERS });
+
+      expect(result.isError).toBeFalsy();
+      const { filters } = await sentBody();
+      expect(filters).toMatchObject({ award_type_codes: [...codes], ...SENT });
+      expect(await totalCountFilters()).toEqual(filters);
+    },
+  );
+
+  it.each(ASSISTANCE)('rejects any of them with $label before any request', async ({ codes }) => {
+    const result = await run({ award_type_codes: [...codes], set_aside_type_codes: ['SBA'] });
+
+    expect(result.isError).toBe(true);
+    expect(http.calls).toHaveLength(0);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: -32007,
+        message: `set_aside_type_codes match only contracts and IDVs, but award_type_codes [${codes.join(', ')}] include assistance codes, which carry no competition, set-aside, or pricing codes.`,
+        data: {
+          reason: 'contract_filters_type_mismatch',
+          recovery: { hint: recoveryOf('contract_filters_type_mismatch') },
+        },
+      },
+    });
+    expect(textOf(result)).toContain('(reason contract_filters_type_mismatch · not retryable)');
+  });
+
+  it('names every contract filter given, flat or nested, under nested assistance codes', async () => {
+    const result = await run({
+      extent_competed_type_codes: ['C'],
+      filters: {
+        award_type_codes: ['02', 'A'],
+        set_aside_type_codes: [],
+        contract_pricing_type_codes: ['Y'],
+      },
+    });
+
+    expect(http.calls).toHaveLength(0);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        message:
+          'extent_competed_type_codes, contract_pricing_type_codes match only contracts and IDVs, but award_type_codes [02, A] include assistance codes, which carry no competition, set-aside, or pricing codes.',
+        data: { reason: 'contract_filters_type_mismatch' },
+      },
+    });
+  });
+
+  it('keeps psc_codes_type_mismatch, unchanged, when psc_codes rides along', async () => {
+    const result = await run({
+      award_type_codes: ['02'],
+      psc_codes: ['Y1NE'],
+      ...CONTRACT_FILTERS,
+    });
+
+    expect(http.calls).toHaveLength(0);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        message:
+          'psc_codes match only contracts and IDVs, but award_type_codes [02] include assistance codes, which carry no PSC.',
+        data: {
+          reason: 'psc_codes_type_mismatch',
+          recovery: { hint: recoveryOf('psc_codes_type_mismatch') },
+        },
+      },
+    });
+  });
+
+  it('leaves an assistance group without the contract filters to run as before', async () => {
+    answer();
+    const result = await run({
+      award_type_codes: ['02'],
+      ...Object.fromEntries(Object.keys(CONTRACT_FILTERS).map((key) => [key, []])),
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect((await sentBody()).filters).toEqual({ award_type_codes: ['02'] });
+  });
+});
+
 /** The count bucket each group's award type codes select. */
 const BUCKETS = { contracts: 11, idvs: 22, grants: 33, direct_payments: 44, loans: 55, other: 66 };
 
-describe('usaspending_search_awards — the total from the count request (#114)', () => {
+type CountKind = 'total' | 'group';
+
+/** Which count a request is: the total count carries award_type_codes, the group count (#125) does not. */
+const countKind = async (request: Request): Promise<CountKind> => {
+  const { filters } = (await request.clone().json()) as { filters: Record<string, unknown> };
+  return 'award_type_codes' in filters ? 'total' : 'group';
+};
+
+/** Routes the count endpoint, answering each count by its kind. */
+const routeCounts = (
+  respond: (kind: CountKind, request: Request) => Response | Promise<Response>,
+) =>
+  http.route({
+    method: 'POST',
+    match: COUNT_ENDPOINT,
+    respond: async (request) => respond(await countKind(request), request),
+  });
+
+/** The count requests sent, by kind, in order. */
+const countCalls = async () => {
+  const calls = callsTo(COUNT_ENDPOINT);
+  const kinds = await Promise.all(calls.map((call) => countKind(call.request)));
+  return {
+    total: calls.filter((_, i) => kinds[i] === 'total'),
+    group: calls.filter((_, i) => kinds[i] === 'group'),
+  };
+};
+
+/** A count answer carrying {@link BUCKETS}. */
+const bucketsResponse = () =>
+  Response.json({ results: BUCKETS, spending_level: 'awards', messages: [] });
+
+describe('usaspending_search_awards — the total and group counts (#114, #125)', () => {
   type Content = Record<string, unknown> & { page_metadata: Record<string, unknown> };
   const contentOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
     result.structuredContent as Content;
-  const countBody = async () =>
-    JSON.parse(await callsTo(COUNT_ENDPOINT)[0]!.request.text()) as Record<string, unknown>;
+  const answerSearch = () =>
+    http.route({
+      method: 'POST',
+      match: ENDPOINT,
+      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
+    });
 
   afterEach(() => {
     vi.useRealTimers();
@@ -543,11 +690,7 @@ describe('usaspending_search_awards — the total from the count request (#114)'
     ['other', ['-1', 'F010']],
   ] as const)('reads the %s bucket for codes %j', async (bucket, codes) => {
     answerCount(BUCKETS);
-    http.route({
-      method: 'POST',
-      match: ENDPOINT,
-      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
-    });
+    answerSearch();
 
     const result = await run({ award_type_codes: [...codes], keyword: 'bridge' });
 
@@ -555,83 +698,128 @@ describe('usaspending_search_awards — the total from the count request (#114)'
     expect(contentOf(result)).toMatchObject({
       totalCount: BUCKETS[bucket],
       page_metadata: { total: BUCKETS[bucket] },
+      matches_by_group: BUCKETS,
     });
-    // One count, carrying exactly the filters the search sent and nothing else.
-    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(1);
-    expect(await countBody()).toEqual({ filters: (await sentBody()).filters });
+    // The total count carries exactly the filters the search sent and nothing else; the
+    // group count, the same filters without award_type_codes.
+    const { total, group } = await countCalls();
+    expect(total).toHaveLength(1);
+    expect(group).toHaveLength(1);
+    const { filters } = await sentBody();
+    const { award_type_codes: _codes, ...withoutCodes } = filters;
+    expect(await total[0]!.request.clone().json()).toEqual({ filters });
+    expect(await group[0]!.request.clone().json()).toEqual({ filters: withoutCodes });
+  });
+
+  it('sends only the total count when award_type_codes is the only filter', async () => {
+    answerCount(BUCKETS);
+    answerSearch();
+
+    const result = await run({ award_type_codes: ['02'] });
+
+    expect(contentOf(result)).toMatchObject({ page_metadata: { total: BUCKETS.grants } });
+    expect(contentOf(result)).not.toHaveProperty('matches_by_group');
+    expect(contentOf(result)).not.toHaveProperty('unavailable_sections');
+    const { total, group } = await countCalls();
+    expect(total).toHaveLength(1);
+    expect(group).toHaveLength(0);
   });
 
   it.each([
     {
-      label: 'a 4xx',
+      label: 'the total count fails with a 4xx',
+      failing: 'total',
+      section: 'total',
       status: 422,
       body: { detail: 'Field filters|keywords must be a list' },
       reason: 'upstream_error',
       retryable: false,
     },
     {
-      label: 'a 5xx',
+      label: 'the total count fails with a 5xx',
+      failing: 'total',
+      section: 'total',
       status: 503,
       body: { detail: 'Service Unavailable' },
       reason: 'api_unavailable',
       retryable: true,
     },
-  ])('answers with the rows when the count fails with $label, sending it once', async (c) => {
-    http.route({
-      method: 'POST',
-      match: COUNT_ENDPOINT,
-      respond: Response.json(c.body, { status: c.status }),
-    });
-    http.route({
-      method: 'POST',
-      match: ENDPOINT,
-      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
-    });
+    {
+      label: 'the group count fails with a 5xx',
+      failing: 'group',
+      section: 'matches_by_group',
+      status: 503,
+      body: { detail: 'Service Unavailable' },
+      reason: 'api_unavailable',
+      retryable: true,
+    },
+  ] as const)('answers with the rows when $label, sending each count once', async (c) => {
+    routeCounts((kind) =>
+      kind === c.failing ? Response.json(c.body, { status: c.status }) : bucketsResponse(),
+    );
+    answerSearch();
 
     const result = await run({ keyword: 'bridge' });
 
     expect(result.isError).toBeFalsy();
     const sc = contentOf(result);
     expect(sc.results).toHaveLength(1);
-    expect(sc).not.toHaveProperty('totalCount');
-    expect(sc.page_metadata).not.toHaveProperty('total');
+    if (c.failing === 'total') {
+      expect(sc).not.toHaveProperty('totalCount');
+      expect(sc.page_metadata).not.toHaveProperty('total');
+      expect(sc.matches_by_group).toEqual(BUCKETS);
+    } else {
+      expect(sc).toMatchObject({ totalCount: 11, page_metadata: { total: 11 } });
+      expect(sc).not.toHaveProperty('matches_by_group');
+    }
     expect(sc.unavailable_sections).toEqual([
-      expect.objectContaining({ section: 'total', reason: c.reason, retryable: c.retryable }),
+      expect.objectContaining({ section: c.section, reason: c.reason, retryable: c.retryable }),
     ]);
-    expect(sc.notice).toContain(`Partial result: total (${c.reason})`);
+    expect(sc.notice).toContain(`Partial result: ${c.section} (${c.reason})`);
     expect(textOf(result)).toContain('**Unavailable sections:**');
-    expect(callsTo(COUNT_ENDPOINT)).toHaveLength(1);
+    const { total, group } = await countCalls();
+    expect(total).toHaveLength(1);
+    expect(group).toHaveLength(1);
   });
 
-  it('aborts a count that outruns its 10 s deadline and answers by then', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    http.route({
-      method: 'POST',
-      match: COUNT_ENDPOINT,
-      respond: (request) =>
-        new Promise<Response>((_resolve, reject) => {
-          request.signal.addEventListener('abort', () => reject(request.signal.reason));
-        }),
-    });
-    http.route({
-      method: 'POST',
-      match: ENDPOINT,
-      respond: Response.json({ results: [contractRow], page_metadata: { page: 1 } }),
-    });
+  it.each([
+    { hanging: ['total'], sections: ['total'] },
+    { hanging: ['group'], sections: ['matches_by_group'] },
+    { hanging: ['total', 'group'], sections: ['total', 'matches_by_group'] },
+  ] as const)(
+    'aborts the counts that outrun the shared 10 s deadline ($hanging) and answers by then',
+    async (c) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const hangs = (kind: CountKind) => (c.hanging as readonly CountKind[]).includes(kind);
+      routeCounts((kind, request) =>
+        hangs(kind)
+          ? new Promise<Response>((_resolve, reject) => {
+              request.signal.addEventListener('abort', () => reject(request.signal.reason));
+            })
+          : bucketsResponse(),
+      );
+      answerSearch();
 
-    let settled = false;
-    const pending = run({ keyword: 'bridge' }).finally(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(10_000);
+      let settled = false;
+      const pending = run({ keyword: 'bridge' }).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(settled).toBe(true);
-    const sc = contentOf(await pending);
-    expect(sc.results).toHaveLength(1);
-    expect(sc).not.toHaveProperty('totalCount');
-    expect(sc.unavailable_sections).toEqual([
-      expect.objectContaining({ section: 'total', reason: 'api_timeout', retryable: true }),
-    ]);
-    expect(callsTo(COUNT_ENDPOINT)[0]!.request.signal.aborted).toBe(true);
-  });
+      expect(settled).toBe(true);
+      const sc = contentOf(await pending);
+      expect(sc.results).toHaveLength(1);
+      expect(sc.unavailable_sections).toEqual(
+        c.sections.map((section) =>
+          expect.objectContaining({ section, reason: 'api_timeout', retryable: true }),
+        ),
+      );
+      if (hangs('total')) expect(sc).not.toHaveProperty('totalCount');
+      else expect(sc).toMatchObject({ totalCount: 11 });
+      if (hangs('group')) expect(sc).not.toHaveProperty('matches_by_group');
+      else expect(sc.matches_by_group).toEqual(BUCKETS);
+      const calls = await countCalls();
+      for (const kind of c.hanging) expect(calls[kind][0]!.request.signal.aborted).toBe(true);
+    },
+  );
 });

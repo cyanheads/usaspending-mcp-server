@@ -384,7 +384,8 @@ describe('USASpendingService entity lookups', () => {
       },
     };
     const fetchMock = stubFetch(200, JSON.stringify(payload));
-    const result = await newService().autocompleteAwardingAgency(
+    const result = await newService().autocompleteAgency(
+      'awarding',
       'Geological',
       11,
       createMockContext(),
@@ -393,6 +394,51 @@ describe('USASpendingService entity lookups', () => {
     expect(url).toBe('https://api.usaspending.gov/api/v2/autocomplete/awarding_agency_office/');
     expect(JSON.parse(init.body as string)).toEqual({ search_text: 'Geological', limit: 11 });
     expect(result).toEqual(payload);
+  });
+  it('requests the funding directory on its own route under both lookup branches', async () => {
+    const route = 'https://api.usaspending.gov/api/v2/autocomplete/funding_agency_office/';
+    const name = 'Northern Border Regional Commission';
+    const payload = {
+      results: {
+        toptier_agency: [{ name, abbreviation: 'NBRC', code: '573' }],
+        subtier_agency: [
+          { name, abbreviation: 'NBRC', code: '9557', toptier_agency: { code: '573', name } },
+        ],
+        office: [],
+      },
+    };
+    const plain = stubFetch(200, JSON.stringify(payload));
+    const svc = newService();
+    const lookup = (deadlineAt?: number) =>
+      svc.autocompleteAgency('funding', 'Northern Border', 11, createMockContext(), deadlineAt);
+    expect(await lookup()).toEqual(payload);
+    const [url, init] = plain.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(route);
+    expect(JSON.parse(init.body as string)).toEqual({ search_text: 'Northern Border', limit: 11 });
+
+    const bounded = stubFetch(200, JSON.stringify(payload));
+    const row = { name, abbreviation: 'NBRC' };
+    expect(await lookup(Date.now() + 10_000)).toEqual({
+      results: { toptier_agency: [row], subtier_agency: [row] },
+    });
+    expect(bounded.mock.calls.map(([sent]) => String(sent))).toEqual([route]);
+
+    const unavailable = stubFetch(503, JSON.stringify({ detail: 'Service Unavailable' }));
+    await expect(lookup(Date.now() + 10_000)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'api_unavailable', retryable: true },
+    });
+    expect(unavailable).toHaveBeenCalledTimes(1);
+
+    stubFetch(200, JSON.stringify({ results: { subtier_agency: [null] } }));
+    await expect(lookup(Date.now() + 10_000)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: {
+        reason: 'api_unavailable',
+        retryable: false,
+        operation: 'POST autocomplete/funding_agency_office/',
+      },
+    });
   });
   let ctx: ReturnType<typeof createMockContext>;
 
@@ -465,7 +511,7 @@ describe('USASpendingService entity lookups', () => {
   it('does not start optional awarding-agency autocomplete after its deadline', async () => {
     const fetchMock = stubFetch(200, JSON.stringify({ results: {} }));
     await expect(
-      newService().autocompleteAwardingAgency('Interior', 25, ctx, Date.now() - 1),
+      newService().autocompleteAgency('awarding', 'Interior', 25, ctx, Date.now() - 1),
     ).rejects.toMatchObject({ code: JsonRpcErrorCode.Timeout });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -480,12 +526,12 @@ describe('USASpendingService entity lookups', () => {
         data: { reason: 'api_unavailable', retryable: true },
       };
       await expect(
-        svc.autocompleteAwardingAgency('Interior', 25, ctx, Date.now() + 10_000),
+        svc.autocompleteAgency('awarding', 'Interior', 25, ctx, Date.now() + 10_000),
       ).rejects.toMatchObject(assertUnavailable);
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       const primary = expect(
-        svc.autocompleteAwardingAgency('Interior', 25, ctx),
+        svc.autocompleteAgency('awarding', 'Interior', 25, ctx),
       ).rejects.toMatchObject(assertUnavailable);
       await vi.advanceTimersByTimeAsync(10_000);
       await primary;
@@ -875,7 +921,8 @@ describe('USASpendingService countAwards (#114)', () => {
   });
 
   it('aborts the request at the deadline and fails as api_timeout', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // Date is faked too: the service measures the deadline's budget against Date.now().
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const fetchMock = stubHangingFetch();
     let settled = false;
     const outcome = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 })
@@ -897,6 +944,30 @@ describe('USASpendingService countAwards (#114)', () => {
     });
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('aborts the request when its own signal fires, leaving the caller signal untouched', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fetchMock = stubHangingFetch();
+    const cut = new AbortController();
+    let settled = false;
+    const outcome = newServiceWith({ timeoutMs: 60_000, retryBudgetMs: 60_000 })
+      .countAwards({}, ctx, Date.now() + 10_000, cut.signal)
+      .then(failIfResolved, (e: unknown) => e as McpError)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(settled).toBe(false);
+    cut.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    expect(await outcome).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal?.aborted).toBe(true);
+    expect(ctx.signal.aborted).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -22,11 +22,17 @@ vi.mock('@/services/usaspending/usaspending-service.js', async (original) => ({
 }));
 const http = createFetchMock();
 const DIRECTORY = 'https://api.usaspending.gov/api/v2/autocomplete/awarding_agency_office/';
+const FUNDING_DIRECTORY = 'https://api.usaspending.gov/api/v2/autocomplete/funding_agency_office/';
 const NASA = 'National Aeronautics and Space Administration';
 const GSA = 'General Services Administration';
 const DOD = 'Department of Defense';
 const DOE = 'Department of Energy';
 const NAVY = 'Department of the Navy';
+/** Listed only in the awarding directory, as upstream lists it. */
+const DELTA = 'Delta Regional Authority';
+/** Listed only in the funding directory, as upstream lists them. */
+const NBRC = 'Northern Border Regional Commission';
+const NIGC = 'National Indian Gaming Commission';
 const PARENT_SCOPE = 'awards USAspending attributes to that parent';
 const RequestBody = z.object({
   search_text: z.string().optional(),
@@ -44,6 +50,7 @@ const directory = vi.fn((request: Request): Response | Promise<Response> =>
             { name: GSA, abbreviation: 'GSA' },
             { name: DOD, abbreviation: 'DOD' },
             { name: DOE, abbreviation: 'DOE' },
+            { name: DELTA, abbreviation: 'DRA' },
           ],
           subtier_agency: [
             { name: NASA, abbreviation: 'NASA' },
@@ -62,14 +69,46 @@ const directory = vi.fn((request: Request): Response | Promise<Response> =>
       }),
     ),
 );
+/** `autocomplete/funding_agency_office/`: neither directory contains the other. */
+const fundingDirectory = vi.fn((_request: Request): Response | Promise<Response> =>
+  Response.json({
+    results: {
+      toptier_agency: [
+        { name: GSA, abbreviation: 'GSA' },
+        { name: DOD, abbreviation: 'DOD' },
+        { name: DOE, abbreviation: 'DOE' },
+        { name: NBRC, abbreviation: 'NBRC' },
+      ],
+      subtier_agency: [
+        { name: NAVY, abbreviation: 'USN', toptier_agency: { name: DOD } },
+        { name: NBRC, abbreviation: 'NBRC', toptier_agency: { name: NBRC } },
+        {
+          name: NIGC,
+          abbreviation: 'NIGC',
+          toptier_agency: { name: 'Department of the Interior' },
+        },
+      ],
+    },
+  }),
+);
+/** Directory lookups the call sent, in request order. */
+const lookupUrls = () =>
+  http.calls.flatMap(({ request }) =>
+    request.url.includes('/autocomplete/') ? [request.url] : [],
+  );
 
 beforeEach(() => {
   directory.mockClear();
+  fundingDirectory.mockClear();
   http.reset();
   http.route(
     {
       match: DIRECTORY,
       respond: directory,
+    },
+    {
+      match: FUNDING_DIRECTORY,
+      respond: fundingDirectory,
     },
     {
       match: 'https://api.usaspending.gov/api/v2/search/spending_by_award_count/',
@@ -94,6 +133,12 @@ afterEach(() => {
   http.restore();
   upstream.service = undefined;
 });
+
+/** The text a CommonMark client reads from every text block of a response. */
+const renderedText = (response: Awaited<ReturnType<typeof runToolContract>>) =>
+  response.content
+    .flatMap((block) => (block.type === 'text' ? [markdownText(block.text)] : []))
+    .join('\n');
 
 const analytics = [
   { definition: spendingByCategoryTool, args: { category: 'naics', page: 3 } },
@@ -140,6 +185,45 @@ it.each(['NASA', NASA.toLowerCase()])(
   },
 );
 
+it('trims padded agency names before each lookup and sends the directory spelling', async () => {
+  const result = await runToolContract(spendingOverTimeTool, {
+    group: 'fiscal_year',
+    filters: { agency_name: '  NASA ', funding_agency_name: ' NIGC  ' },
+  });
+  expect(result.structuredContent).toMatchObject({
+    applied_agency_name: NASA,
+    applied_funding_agency_name: NIGC,
+  });
+  expect(JSON.stringify(result.structuredContent)).not.toContain('Could not verify');
+  const lookups = http.calls.filter(({ request }) => request.url.includes('/autocomplete/'));
+  const searched = await Promise.all(
+    lookups.map(async ({ request }) => RequestBody.parse(await request.clone().json()).search_text),
+  );
+  expect(searched.sort()).toEqual(['NASA', 'NIGC']);
+});
+
+it('treats a whitespace-only agency name as absent: no lookup and no agency filter', async () => {
+  const result = await runToolContract(spendingOverTimeTool, {
+    group: 'fiscal_year',
+    filters: { agency_name: '   ', funding_agency_name: ' ' },
+  });
+  expect(result.isError).toBeFalsy();
+  expect(lookupUrls()).toEqual([]);
+  expect(result.structuredContent).not.toHaveProperty('applied_agency_name');
+  expect(result.structuredContent).not.toHaveProperty('applied_funding_agency_name');
+  const sent = RequestBody.parse(await http.calls.at(-1)!.request.clone().json());
+  expect(sent.filters).not.toHaveProperty('agencies');
+});
+
+it('award search falls back to the flat agency name when the nested one is blank', async () => {
+  const result = await runToolContract(searchAwardsTool, {
+    agency_name: 'NASA',
+    filters: { agency_name: '  ' },
+  });
+  expect(result.structuredContent).toMatchObject({ applied_agency_name: NASA });
+  expect(lookupUrls()).toEqual([DIRECTORY]);
+});
+
 it.each([
   [
     'OIG',
@@ -177,6 +261,18 @@ it.each([
     });
   },
 );
+
+it('points an unverified awarding name at the awarding lookup on both surfaces', async () => {
+  const response = await runToolContract(spendingOverTimeTool, {
+    group: 'fiscal_year',
+    filters: { agency_name: 'Delta Regional' },
+  });
+  const sentence =
+    'Could not verify agency_name="Delta Regional" because no exact agency name or abbreviation matched. Sent the original name. Use usaspending_autocomplete_filters type=awarding_agency to check the name.';
+  expect(response.structuredContent).toMatchObject({ notice: expect.stringContaining(sentence) });
+  expect(renderedText(response)).toContain(sentence);
+  expect(http.calls[0]!.request.url).toBe(DIRECTORY);
+});
 
 it('prefers an exact own name over abbreviation matches', async () => {
   directory.mockResolvedValueOnce(
@@ -299,7 +395,8 @@ it('bounds both in-flight agency lookups to the same two-second deadline', async
     });
     return reply.promise;
   };
-  directory.mockImplementationOnce(stall).mockImplementationOnce(stall);
+  directory.mockImplementationOnce(stall);
+  fundingDirectory.mockImplementationOnce(stall);
   const result = runToolContract(spendingOverTimeTool, {
     group: 'fiscal_year',
     filters: { agency_name: 'NASA', funding_agency_name: 'DoD' },
@@ -307,7 +404,7 @@ it('bounds both in-flight agency lookups to the same two-second deadline', async
   try {
     await vi.advanceTimersByTimeAsync(1_999);
     expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
-    expect(http.calls.map((call) => call.request.url)).toEqual([DIRECTORY, DIRECTORY]);
+    expect(http.calls.map((call) => call.request.url)).toEqual([DIRECTORY, FUNDING_DIRECTORY]);
     await vi.advanceTimersByTimeAsync(1);
     expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
     const response = await result;
@@ -316,7 +413,11 @@ it('bounds both in-flight agency lookups to the same two-second deadline', async
       applied_funding_agency_name: 'DoD',
       notice: expect.stringContaining('the agency directory was unavailable'),
     });
-    expect(directory).toHaveBeenCalledTimes(2);
+    expect(response.structuredContent).toMatchObject({
+      notice: expect.stringContaining('type=funding_agency'),
+    });
+    expect(directory).toHaveBeenCalledTimes(1);
+    expect(fundingDirectory).toHaveBeenCalledTimes(1);
   } finally {
     for (const reply of replies) reply.resolve(Response.json({ results: {} }));
     await result;
@@ -324,12 +425,82 @@ it('bounds both in-flight agency lookups to the same two-second deadline', async
   }
 });
 
+it('resolves an exact funding-only name in the funding directory without a notice', async () => {
+  const response = await runToolContract(searchAwardsTool, { funding_agency_name: NBRC });
+  expect(response.isError).toBeFalsy();
+  expect(lookupUrls()).toEqual([FUNDING_DIRECTORY]);
+  expect(await http.calls.at(-1)!.request.clone().json()).toMatchObject({
+    filters: {
+      agencies: [
+        { type: 'funding', tier: 'toptier', name: NBRC },
+        { type: 'funding', tier: 'subtier', name: NBRC },
+      ],
+    },
+  });
+  expect(response.structuredContent).toMatchObject({ applied_funding_agency_name: NBRC });
+  expect(JSON.stringify(response.structuredContent)).not.toContain('Could not verify');
+  expect(renderedText(response)).not.toContain('Could not verify');
+});
+
+it('sends an awarding-only funding name as supplied and points at the funding lookup', async () => {
+  const response = await runToolContract(spendingOverTimeTool, {
+    group: 'fiscal_year',
+    filters: { funding_agency_name: DELTA },
+  });
+  const sentence = `Could not verify funding_agency_name="${DELTA}" because no exact agency name or abbreviation matched. Sent the original name. Use usaspending_autocomplete_filters type=funding_agency to check the name.`;
+  expect(response.structuredContent).toMatchObject({
+    applied_funding_agency_name: DELTA,
+    notice: expect.stringContaining(sentence),
+  });
+  expect(renderedText(response)).toContain(sentence);
+  expect(lookupUrls()).toEqual([FUNDING_DIRECTORY]);
+  expect(await http.calls.at(-1)!.request.clone().json()).toMatchObject({
+    filters: {
+      agencies: [
+        { type: 'funding', tier: 'toptier', name: DELTA },
+        { type: 'funding', tier: 'subtier', name: DELTA },
+      ],
+    },
+  });
+});
+
+const NIGC_ABBREVIATION = { funding_agency_name: 'nigc' };
+it.each([
+  { site: 'usaspending_search_awards', definition: searchAwardsTool, args: NIGC_ABBREVIATION },
+  {
+    site: 'usaspending_search_awards filters',
+    definition: searchAwardsTool,
+    args: { filters: NIGC_ABBREVIATION },
+  },
+  ...analytics.map(({ definition, args }) => ({
+    site: definition.name,
+    definition,
+    args: { ...args, filters: NIGC_ABBREVIATION },
+  })),
+])('$site resolves funding_agency_name in the funding directory', async ({ definition, args }) => {
+  const response = await runToolContract(definition, args);
+  expect(response.isError).toBeFalsy();
+  expect(lookupUrls()).toEqual([FUNDING_DIRECTORY]);
+  expect(await http.calls.at(-1)!.request.clone().json()).toMatchObject({
+    filters: {
+      agencies: [
+        { type: 'funding', tier: 'toptier', name: NIGC },
+        { type: 'funding', tier: 'subtier', name: NIGC },
+      ],
+    },
+  });
+  expect(response.structuredContent).toMatchObject({ applied_funding_agency_name: NIGC });
+  expect(JSON.stringify(response.structuredContent)).not.toContain('Could not verify');
+  expect(renderedText(response)).toContain(NIGC);
+  expect(renderedText(response)).not.toContain('Could not verify');
+});
+
 it.each([
   { input: {}, expected: [], lookups: [] },
   {
     input: { funding_agency_name: 'DOE', filters: { funding_agency_name: '' } },
     expected: [['funding', DOE]],
-    lookups: ['DOE'],
+    lookups: [[FUNDING_DIRECTORY, 'DOE']],
   },
   {
     input: {
@@ -341,7 +512,10 @@ it.each([
       ['awarding', GSA],
       ['funding', DOD],
     ],
-    lookups: ['GSA', 'DoD'],
+    lookups: [
+      [DIRECTORY, 'GSA'],
+      [FUNDING_DIRECTORY, 'DoD'],
+    ],
   },
   {
     input: { agency_name: 'GSA', filters: { funding_agency_name: 'USN' } },
@@ -349,7 +523,10 @@ it.each([
       ['awarding', GSA],
       ['funding', NAVY],
     ],
-    lookups: ['GSA', 'USN'],
+    lookups: [
+      [DIRECTORY, 'GSA'],
+      [FUNDING_DIRECTORY, 'USN'],
+    ],
   },
   {
     input: { agency_name: 'GSA', funding_agency_name: 'GSA' },
@@ -357,7 +534,10 @@ it.each([
       ['awarding', GSA],
       ['funding', GSA],
     ],
-    lookups: ['GSA'],
+    lookups: [
+      [DIRECTORY, 'GSA'],
+      [FUNDING_DIRECTORY, 'GSA'],
+    ],
   },
   {
     input: { agency_name: 'GSA', funding_agency_name: 'Missing agency' },
@@ -365,18 +545,37 @@ it.each([
       ['awarding', GSA],
       ['funding', 'Missing agency'],
     ],
-    lookups: ['GSA', 'Missing agency'],
+    lookups: [
+      [DIRECTORY, 'GSA'],
+      [FUNDING_DIRECTORY, 'Missing agency'],
+    ],
   },
 ])(
-  'composes $expected into both award requests using only effective names',
+  'composes $expected into the search and its counts using only effective names',
   async ({ input, expected, lookups }) => {
     const response = await runToolContract(searchAwardsTool, input);
-    const bodies = await Promise.all(
-      http.calls.map(async ({ request }) => RequestBody.parse(await request.clone().json())),
+    const sent = await Promise.all(
+      http.calls.map(async ({ request }) => ({
+        url: request.url,
+        body: RequestBody.parse(await request.clone().json()),
+      })),
     );
-    expect(bodies.slice(0, -2).map((body) => body.search_text)).toEqual(lookups);
-    const [rows, count] = bodies.slice(-2);
-    expect(rows?.filters).toEqual(count?.filters);
+    const sentTo = (path: string) =>
+      sent.filter(({ url }) => url === `https://api.usaspending.gov/api/v2/${path}`);
+    expect(
+      sent
+        .filter(({ url }) => url.includes('/autocomplete/'))
+        .map(({ url, body }) => [url, body.search_text]),
+    ).toEqual(lookups);
+    const [rows] = sentTo('search/spending_by_award/').map(({ body }) => body);
+    /**
+     * The total count gets the search's filters; the group count (#125) the same
+     * filters without award_type_codes, and is not sent when nothing else filters.
+     */
+    const { award_type_codes: _codes, ...withoutCodes } = rows?.filters ?? {};
+    expect(sentTo('search/spending_by_award_count/').map(({ body }) => body.filters)).toEqual(
+      Object.keys(withoutCodes).length > 0 ? [rows?.filters, withoutCodes] : [rows?.filters],
+    );
     const agencies = expected.flatMap(([type, name]) =>
       ['toptier', 'subtier'].map((tier) => ({ type, tier, name })),
     );
@@ -493,6 +692,7 @@ it.each([1, 3])(
     http.reset();
     http.route(
       { match: DIRECTORY, respond: directory },
+      { match: FUNDING_DIRECTORY, respond: fundingDirectory },
       {
         match: 'https://api.usaspending.gov/api/v2/search/spending_by_award_count/',
         respond: () =>

@@ -145,34 +145,64 @@ function blankableCode(pattern: RegExp, message: string, description: string) {
     .optional();
 }
 
+/** The code fields' full descriptions, stated once per tool, at its first location object. */
+const CODE_FIELD_DESCRIPTIONS = {
+  country:
+    'ISO 3166-1 alpha-3 country code (e.g., USA); USA when omitted. A US territory code — PRI, GUM, VIR, ASM, MNP — is sent as USA with the territory as state.',
+  state:
+    "Under USA (the default): a US state, DC, territory, freely associated state, or armed-forces code as a 2-letter postal code (NM, PR, FM, AE) or 2-digit FIPS code (35). Under another country: that country's own 2-letter subdivision code (ON with CAN).",
+  county:
+    'US county FIPS code: 3 digits with state (049 with state NM), or the 5-digit state + county code (35049, Santa Fe County, NM), whose first two digits set the state — the form usaspending_spending_by_geography county rows carry as shape_code.',
+};
+
+type CodeField = keyof typeof CODE_FIELD_DESCRIPTIONS;
+
+/** The location object, its code fields described by `describe`; the caller describes the object. */
+function locationObject(describe: (field: CodeField) => string) {
+  return z
+    .object({
+      country: blankableCode(
+        /^[A-Za-z]{3}$/,
+        'Expected a 3-letter ISO 3166-1 alpha-3 country code (e.g. USA)',
+        describe('country'),
+      ),
+      state: blankableCode(
+        /^(?:[A-Za-z]{2}|\d{2})$/,
+        'Expected a 2-letter US postal code (e.g. NM) or a 2-digit state FIPS code (e.g. 35)',
+        describe('state'),
+      ),
+      county: blankableCode(
+        /^(?:\d{3}|\d{5})$/,
+        'Expected a county FIPS code: 3 digits with state (e.g. 049) or 5 digits (e.g. 35049)',
+        describe('county'),
+      ),
+      city: z.string().optional().describe('City name'),
+    })
+    .strict()
+    .optional();
+}
+
 /**
  * The `location_filter` object of `usaspending_search_awards`, and the object
- * each location key in `filters` takes under its own description.
+ * each location key in `filters` takes under its own description, at the first
+ * location object a tool declares. Later copies in the same tool use
+ * {@link locationFilterTwin}.
  */
-export const LocationFilterSchema = z
-  .object({
-    country: blankableCode(
-      /^[A-Za-z]{3}$/,
-      'Expected a 3-letter ISO 3166-1 alpha-3 country code (e.g. USA)',
-      'ISO 3166-1 alpha-3 country code (e.g., USA); USA when omitted. A US territory code — PRI, GUM, VIR, ASM, MNP — is sent as USA with the territory as state.',
-    ),
-    state: blankableCode(
-      /^(?:[A-Za-z]{2}|\d{2})$/,
-      'Expected a 2-letter US postal code (e.g. NM) or a 2-digit state FIPS code (e.g. 35)',
-      "Under USA (the default): a US state, DC, territory, freely associated state, or armed-forces code as a 2-letter postal code (NM, PR, FM, AE) or 2-digit FIPS code (35). Under another country: that country's own 2-letter subdivision code (ON with CAN).",
-    ),
-    county: blankableCode(
-      /^(?:\d{3}|\d{5})$/,
-      'Expected a county FIPS code: 3 digits with state (e.g. 049) or 5 digits (e.g. 35049)',
-      'US county FIPS code: 3 digits with state (049 with state NM), or the 5-digit state + county code (35049, Santa Fe County, NM), whose first two digits set the state — the form usaspending_spending_by_geography county rows carry as shape_code.',
-    ),
-    city: z.string().optional().describe('City name'),
-  })
-  .strict()
-  .optional()
-  .describe(
-    'Filter by place of performance. Takes codes, not place names — resolve a state or county name to its code with usaspending_autocomplete_filters type=location. Blank fields are ignored, and an all-blank object is no location filter. The location sent is echoed as applied_location.',
-  );
+export const LocationFilterSchema = locationObject(
+  (field) => CODE_FIELD_DESCRIPTIONS[field],
+).describe(
+  'Filter by place of performance. Takes codes, not place names — resolve a state or county name to its code with usaspending_autocomplete_filters type=location. Blank fields are ignored, and an all-blank object is no location filter. The location sent is echoed as applied_location.',
+);
+
+/**
+ * The location object again, for a later copy in the same tool: it validates
+ * as {@link LocationFilterSchema} does, and each code field points at the same
+ * field under `path`, the tool's first location object (`location_filter` on award
+ * search, `filters.place_of_performance_location` on the analytics tools).
+ */
+export function locationFilterTwin(path: string) {
+  return locationObject((field) => `Same as ${path}.${field}.`);
+}
 
 /** A location as USAspending's `place_of_performance_locations` and `recipient_locations` match it. */
 export interface SentLocation {

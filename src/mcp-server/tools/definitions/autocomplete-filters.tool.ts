@@ -73,14 +73,23 @@ function mapLocationBuckets(resp: RawLocationAutocompleteResponse, requested: nu
 export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', {
   title: 'Autocomplete Codes and Names',
   description:
-    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), def_code (Disaster/Emergency Funding codes by code, appropriation title, or public law), awarding_agency (agency and sub-agency names, each with its tier and top-tier parent — agency_name and funding_agency_name filters take the matched name; a sub-tier name shared by several parents matches under all parents), recipient (recipient names with UEI/DUNS), or location (US state, county, and congressional district names, resolved to the codes the location filters and usaspending_spending_by_geography shape_codes take). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
+    'Look up valid code values for filter fields by searching free-text descriptions. Use the type parameter to select the lookup table: naics (NAICS industry codes), psc (product/service codes), cfda (CFDA/Assistance Listing program numbers), def_code (Disaster/Emergency Funding codes by code, appropriation title, or public law), awarding_agency and funding_agency (agency and sub-agency names from the awarding and the funding directory, each with its tier and top-tier parent — agency_name takes an awarding_agency match and funding_agency_name a funding_agency match; a sub-tier name shared by several parents matches under all parents), recipient (recipient names with UEI/DUNS), or location (US state, county, and congressional district names, resolved to the codes the location filters and usaspending_spending_by_geography shape_codes take). Call this before filtering awards when you know a description but not the exact code. Returns matching codes and names for use in other tool filters.',
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
     type: z
-      .enum(['naics', 'psc', 'cfda', 'awarding_agency', 'recipient', 'location', 'def_code'])
+      .enum([
+        'naics',
+        'psc',
+        'cfda',
+        'awarding_agency',
+        'funding_agency',
+        'recipient',
+        'location',
+        'def_code',
+      ])
       .describe(
-        'Lookup table to search: naics (industry codes), psc (product/service codes, for psc_codes), cfda (Assistance Listing program numbers, for assistance_listings), def_code (Disaster/Emergency Funding codes, for def_codes), awarding_agency (agency and sub-agency names), recipient (recipient names), location (US states with DC and the territories, counties, and current congressional districts, matched from the start of their name: "King County", "Santa Fe", "WA-07"; countries, cities, and ZIP codes are not returned). The psc_codes, assistance_listings, and def_codes filters are taken by usaspending_search_awards and the spending analytics tools.',
+        'Lookup table to search: naics (industry codes), psc (product/service codes, for psc_codes), cfda (Assistance Listing program numbers, for assistance_listings), def_code (Disaster/Emergency Funding codes, for def_codes), awarding_agency (awarding agency and sub-agency names, for agency_name), funding_agency (funding agency and sub-agency names, for funding_agency_name), recipient (recipient names), location (US states with DC and the territories, counties, and current congressional districts, matched from the start of their name: "King County", "Santa Fe", "WA-07"; countries, cities, and ZIP codes are not returned). The psc_codes, assistance_listings, and def_codes filters are taken by usaspending_search_awards and the spending analytics tools.',
       ),
     search_text: z
       .string()
@@ -116,7 +125,7 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                "Human-readable name or description; for awarding_agency, the matched agency's own name, which for a sub-agency differs from toptier_name; for location, upstream's uppercase name (WASHINGTON, KING, WA-07)",
+                "Human-readable name or description; for awarding_agency and funding_agency, the matched agency's own name, which for a sub-agency differs from toptier_name; for location, upstream's uppercase name (WASHINGTON, KING, WA-07)",
               ),
             public_law: z
               .string()
@@ -136,30 +145,32 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
               .string()
               .optional()
               .describe(
-                "awarding_agency only: the matched agency's own abbreviation, when it has one",
+                "awarding_agency and funding_agency only: the matched agency's own abbreviation, when it has one",
               ),
             tier: z
               .enum(['toptier', 'subtier'])
               .optional()
               .describe(
-                'awarding_agency only: toptier for a department-level agency, subtier for a component under one',
+                'awarding_agency and funding_agency only: toptier for a department-level agency, subtier for a component under one',
               ),
             toptier_name: z
               .string()
               .optional()
               .describe(
-                'awarding_agency only: the top-tier parent name. Use the matched name in agency_name or funding_agency_name on usaspending_search_awards and spending analytics to select the sub-agency; use toptier_name intentionally to select its whole parent department.',
+                'awarding_agency and funding_agency only: the top-tier parent name. Use the matched name in agency_name (from awarding_agency) or funding_agency_name (from funding_agency) on usaspending_search_awards and spending analytics to select the sub-agency; use toptier_name intentionally to select its whole parent department.',
               ),
             toptier_code: z
               .string()
               .optional()
               .describe(
-                'awarding_agency only: the directory top-tier agency code, accepted by usaspending_get_agency',
+                'awarding_agency and funding_agency only: the directory top-tier agency code, accepted by usaspending_get_agency',
               ),
             subtier_code: z
               .string()
               .optional()
-              .describe('awarding_agency only: the matched sub-tier agency code, when supplied'),
+              .describe(
+                'awarding_agency and funding_agency only: the matched sub-tier agency code, when supplied',
+              ),
             uei: z
               .string()
               .optional()
@@ -321,8 +332,9 @@ export const autocompleteFiltersTool = tool('usaspending_autocomplete_filters', 
             ? { name: r.popular_name }
             : {}),
       }));
-    } else if (input.type === 'awarding_agency') {
-      const resp = await svc.autocompleteAwardingAgency(input.search_text, requested, ctx);
+    } else if (input.type === 'awarding_agency' || input.type === 'funding_agency') {
+      const role = input.type === 'awarding_agency' ? 'awarding' : 'funding';
+      const resp = await svc.autocompleteAgency(role, input.search_text, requested, ctx);
       const mapAgency = (r: RawAgencyAutocomplete, tier: 'toptier' | 'subtier'): ResultItem => {
         const parent = tier === 'toptier' ? r : r.toptier_agency;
         return {

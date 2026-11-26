@@ -18,7 +18,7 @@ import { markdownText } from '../helpers/markdown-text.js';
 const mockAutocompleteNaics = vi.fn();
 const mockAutocompletePsc = vi.fn();
 const mockAutocompleteCfda = vi.fn();
-const mockAutocompleteAwardingAgency = vi.fn();
+const mockAutocompleteAgency = vi.fn();
 const mockAutocompleteRecipient = vi.fn();
 const mockAutocompleteLocation = vi.fn();
 
@@ -27,11 +27,27 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
     autocompleteNaics: mockAutocompleteNaics,
     autocompletePsc: mockAutocompletePsc,
     autocompleteCfda: mockAutocompleteCfda,
-    autocompleteAwardingAgency: mockAutocompleteAwardingAgency,
+    autocompleteAgency: mockAutocompleteAgency,
     autocompleteRecipient: mockAutocompleteRecipient,
     autocompleteLocation: mockAutocompleteLocation,
   }),
 }));
+
+/** Every advertised description of `field`, flat or nested, in a tool's input schema. */
+function fieldDescriptions(def: { input: z.ZodType }, field: string): string[] {
+  const descriptions: string[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === field && value && typeof value === 'object') {
+        descriptions.push(String((value as { description?: string }).description));
+      }
+      walk(value);
+    }
+  };
+  walk(z.toJSONSchema(def.input));
+  return descriptions;
+}
 
 /**
  * Wiring of the shared count-limit mechanism, whose full table lives in
@@ -211,7 +227,7 @@ describe('autocompleteFiltersTool', () => {
   });
 
   it('maps a top-tier awarding_agency match with name equal to toptier_name and no id (#71)', async () => {
-    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+    mockAutocompleteAgency.mockResolvedValueOnce({
       results: {
         toptier_agency: [{ code: '097', abbreviation: 'DOD', name: 'Department of Defense' }],
         subtier_agency: [],
@@ -263,7 +279,7 @@ describe('autocompleteFiltersTool', () => {
       },
     };
     const run = (search_text: string, rows: unknown[]) => {
-      mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+      mockAutocompleteAgency.mockResolvedValueOnce({
         results: {
           toptier_agency: rows.filter((r) => !(r as Record<string, unknown>).toptier_agency),
           subtier_agency: rows.filter((r) => (r as Record<string, unknown>).toptier_agency),
@@ -334,30 +350,18 @@ describe('autocompleteFiltersTool', () => {
       spendingByCategoryTool,
       spendingByGeographyTool,
       spendingOverTimeTool,
-    ])('$name: every agency_name accepts matched names and discloses shared parents', (def) => {
-      const descriptions: string[] = [];
-      const walk = (node: unknown): void => {
-        if (!node || typeof node !== 'object') return;
-        for (const [key, value] of Object.entries(node)) {
-          if (key === 'agency_name' && value && typeof value === 'object') {
-            descriptions.push(String((value as { description?: string }).description));
-          }
-          walk(value);
-        }
-      };
-      walk(z.toJSONSchema(def.input));
+    ])('$name: first agency_name accepts matched names and discloses shared parents', (def) => {
+      const [first, ...later] = fieldDescriptions(def, 'agency_name');
 
-      expect(descriptions.length).toBeGreaterThan(0);
-      for (const description of descriptions) {
-        expect(description).toMatch(/top-tier/i);
-        expect(description).toContain('matched name');
-        expect(description).toContain('all parents');
-      }
+      expect(first).toMatch(/top-tier/i);
+      expect(first).toContain('matched name');
+      expect(first).toContain('all parents');
+      for (const pointer of later) expect(pointer).toBe('Same as the top-level agency_name.');
     });
   });
 
   it('caps the ordered agency union without deduplicating tiers or shared names and never expands nested arrays', async () => {
-    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+    mockAutocompleteAgency.mockResolvedValueOnce({
       results: {
         toptier_agency: [
           {
@@ -412,7 +416,7 @@ describe('autocompleteFiltersTool', () => {
   it.each([499, 500, 501])(
     'judges agency maximum saturation using %i agency rows and no offices',
     async (count) => {
-      mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+      mockAutocompleteAgency.mockResolvedValueOnce({
         results: {
           toptier_agency: Array.from({ length: Math.min(count, 500) }, (_, i) => ({
             name: `Top ${i}`,
@@ -438,7 +442,7 @@ describe('autocompleteFiltersTool', () => {
   );
 
   it('returns no_match for office-only matches with a recovery hint on both surfaces', async () => {
-    mockAutocompleteAwardingAgency.mockResolvedValueOnce({
+    mockAutocompleteAgency.mockResolvedValueOnce({
       results: { toptier_agency: [], subtier_agency: [], office: [{ name: 'Office' }] },
     });
     const response = await runToolContract(autocompleteFiltersTool, {
@@ -459,6 +463,123 @@ describe('autocompleteFiltersTool', () => {
           .join('\n'),
       ),
     ).toContain('broader');
+  });
+
+  describe('funding_agency searches the funding directory (#133)', () => {
+    const NBRC = 'Northern Border Regional Commission';
+    const PARENT = { code: '573', abbreviation: 'NBRC', name: NBRC };
+    const rendered = (response: Awaited<ReturnType<typeof runToolContract>>) =>
+      markdownText(
+        response.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n'),
+      );
+
+    it.each([
+      ['awarding_agency', 'awarding'],
+      ['funding_agency', 'funding'],
+    ] as const)('%s asks the %s directory and maps its rows in one shape', async (type, role) => {
+      mockAutocompleteAgency.mockResolvedValueOnce({
+        results: {
+          toptier_agency: [PARENT],
+          subtier_agency: [{ ...PARENT, code: '9557', toptier_agency: PARENT }],
+          office: [{ name: 'Office must stay absent' }],
+        },
+      });
+      const response = await runToolContract(autocompleteFiltersTool, {
+        type,
+        search_text: 'Northern Border',
+      });
+
+      expect(response.isError).toBeFalsy();
+      expect(mockAutocompleteAgency).toHaveBeenLastCalledWith(
+        role,
+        'Northern Border',
+        11,
+        expect.anything(),
+      );
+      expect(response.structuredContent).toMatchObject({ type, total: 2 });
+      expect((response.structuredContent as { results: unknown[] }).results).toEqual([
+        {
+          name: NBRC,
+          abbreviation: 'NBRC',
+          tier: 'toptier',
+          toptier_name: NBRC,
+          toptier_code: '573',
+        },
+        {
+          name: NBRC,
+          abbreviation: 'NBRC',
+          tier: 'subtier',
+          toptier_name: NBRC,
+          toptier_code: '573',
+          subtier_code: '9557',
+        },
+      ]);
+      const text = rendered(response);
+      for (const value of [type, NBRC, 'NBRC', 'toptier', 'subtier', '573', '9557']) {
+        expect(text).toContain(value);
+      }
+      expect(text).not.toContain('Office must stay absent');
+    });
+
+    it('reports a funding_agency miss as no_match on both surfaces', async () => {
+      mockAutocompleteAgency.mockResolvedValueOnce({
+        results: { toptier_agency: [], subtier_agency: [], office: [] },
+      });
+      const response = await runToolContract(autocompleteFiltersTool, {
+        type: 'funding_agency',
+        search_text: 'Delta Regional',
+      });
+
+      expect(response.isError).toBe(true);
+      expect(mockAutocompleteAgency).toHaveBeenLastCalledWith(
+        'funding',
+        'Delta Regional',
+        11,
+        expect.anything(),
+      );
+      expect(response.structuredContent).toMatchObject({
+        error: {
+          data: {
+            reason: 'no_match',
+            recovery: { hint: expect.stringContaining('Delta Regional') },
+          },
+        },
+      });
+      expect(rendered(response)).toContain('No funding_agency results matched "Delta Regional"');
+    });
+
+    it('points each agency lookup type at its own filter', () => {
+      const typeDescription = autocompleteFiltersTool.input.shape.type.description ?? '';
+      const toptierName =
+        autocompleteFiltersTool.output.shape.results.element.shape.toptier_name.description ?? '';
+      expect(autocompleteFiltersTool.input.shape.type.options).toContain('funding_agency');
+      expect(autocompleteFiltersTool.description).toContain(
+        'agency_name takes an awarding_agency match and funding_agency_name a funding_agency match',
+      );
+      expect(typeDescription).toMatch(/awarding_agency \([^)]*, for agency_name\)/);
+      expect(typeDescription).toMatch(/funding_agency \([^)]*, for funding_agency_name\)/);
+      expect(toptierName).toContain(
+        'agency_name (from awarding_agency) or funding_agency_name (from funding_agency)',
+      );
+    });
+
+    it.each([
+      searchAwardsTool,
+      spendingByCategoryTool,
+      spendingByGeographyTool,
+      spendingOverTimeTool,
+    ])('$name: funding_agency_name points at the funding lookup, stated once', (def) => {
+      const [first, ...later] = fieldDescriptions(def, 'funding_agency_name');
+
+      expect(first).toContain('usaspending_autocomplete_filters type=funding_agency');
+      expect(first).not.toContain('type=awarding_agency');
+      for (const pointer of later) {
+        expect(pointer).toBe('Same as the top-level funding_agency_name.');
+      }
+    });
   });
 
   it('maps recipient_name to name for recipient type', async () => {
@@ -643,6 +764,7 @@ describe('autocompleteFiltersTool', () => {
       'psc',
       'cfda',
       'awarding_agency',
+      'funding_agency',
       'recipient',
       'location',
     ] as const) {

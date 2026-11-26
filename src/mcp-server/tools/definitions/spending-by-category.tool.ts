@@ -25,6 +25,7 @@ import {
   optionalIsoDate,
 } from './dates.js';
 import {
+  AWARD_TYPE_GROUP_LIST,
   analyticsTypeMismatch,
   applyLocationFilters,
   buildFilters,
@@ -79,7 +80,7 @@ export const spendingByCategoryTool = tool('usaspending_spending_by_category', {
         award_type_codes: z
           .array(z.string())
           .optional()
-          .describe('Award type code filters (A/B/C/D, 02–05, etc.)'),
+          .describe(`Award type codes: ${AWARD_TYPE_GROUP_LIST}; groups may be mixed.`),
         ...AGENCY_FILTER_FIELDS,
         recipient_id: z.string().optional().describe(RECIPIENT_FILTER_DESCRIPTION),
         naics_codes: z

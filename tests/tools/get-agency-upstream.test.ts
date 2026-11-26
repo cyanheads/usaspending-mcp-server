@@ -172,6 +172,26 @@ describe('usaspending_get_agency against the real service', () => {
     },
   );
 
+  it('lists a throttled DEF lookup as api_unavailable and retryable', async () => {
+    stubRoutes(
+      agencyDefRoutes(() => Response.json({ detail: 'Request was throttled.' }, { status: 429 })),
+    );
+    const result = await settle({ toptier_code: '075' });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      name: 'Health and Human Services',
+      unavailable_sections: [
+        expect.objectContaining({
+          section: 'def_codes',
+          reason: 'api_unavailable',
+          retryable: true,
+        }),
+      ],
+    });
+    expect(textOf(result)).toContain('- def_codes: api_unavailable (retryable)');
+    expect(textOf(result)).toContain('Retry the call to load def_codes.');
+  });
+
   it('returns the rest of the agency within the supplemental deadline if the DEF body stalls', async () => {
     stubRoutes(
       agencyDefRoutes(

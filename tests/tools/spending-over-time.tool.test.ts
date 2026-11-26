@@ -12,7 +12,7 @@ const mockSpendingOverTime = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
     spendingOverTime: mockSpendingOverTime,
-    autocompleteAwardingAgency: async () => ({ results: {} }),
+    autocompleteAgency: async () => ({ results: {} }),
   }),
 }));
 

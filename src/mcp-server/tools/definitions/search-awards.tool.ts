@@ -1,12 +1,12 @@
 /**
  * @fileoverview Tool to search federal awards by keyword, recipient, agency, award type,
- * NAICS, Assistance Listing, PSC, or DEF code, place of performance or recipient
- * location, or date range.
+ * NAICS, Assistance Listing, PSC, or DEF code, contract competition, set-aside, or
+ * pricing code, place of performance or recipient location, or date range.
  * @module mcp-server/tools/definitions/search-awards.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, timeout } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
   type AwardCounts,
@@ -35,15 +35,21 @@ import {
 import {
   ASSISTANCE_AWARD_TYPE_CODES,
   AWARD_TYPE_CODES,
+  AWARD_TYPE_GROUP_LIST,
   applyCodeFilters,
   applyLocationFilters,
   CODE_FILTER_FIELDS,
+  CONTRACT_FILTER_FIELDS,
   codeFilterEcho,
+  contractFilterEcho,
   describeCodeFilters,
+  describeContractFilters,
   describeLocationFilters,
-  LOCATION_FILTER_FIELDS,
   locationFilterEcho,
+  NESTED_LOCATION_FILTER_FIELDS,
+  nestedTwins,
   normalizeCodeFilters,
+  normalizeContractFilters,
   normalizeEffectiveFilters,
   PROCUREMENT_AWARD_TYPE_CODES,
   resolveLocationFilters,
@@ -142,14 +148,18 @@ const AWARD_TYPE_GROUPS = {
 
 type AwardTypeGroupName = keyof typeof AWARD_TYPE_GROUPS;
 
+/** The group names in {@link AWARD_TYPE_GROUPS} order, which output and notices follow. */
+const AWARD_TYPE_GROUP_NAMES = Object.keys(AWARD_TYPE_GROUPS) as AwardTypeGroupName[];
+
 /**
  * The group every code belongs to, or `undefined` when the codes span groups or
  * include one outside them — upstream's own 422 then decides, unguessed.
  */
 function resolveAwardTypeGroup(codes: readonly string[]): AwardTypeGroupName | undefined {
-  const names = Object.keys(AWARD_TYPE_GROUPS) as AwardTypeGroupName[];
   const groups = new Set(
-    codes.map((code) => names.find((name) => AWARD_TYPE_GROUPS[name].codes.includes(code))),
+    codes.map((code) =>
+      AWARD_TYPE_GROUP_NAMES.find((name) => AWARD_TYPE_GROUPS[name].codes.includes(code)),
+    ),
   );
   const [only] = groups;
   return groups.size === 1 ? only : undefined;
@@ -179,20 +189,71 @@ const MAX_PAGE_OFFSET = 50_000;
 const CURSOR_WINDOW_OFFSET = 10_000;
 
 /**
- * How long the count request may run, measured from the start of the call: about
- * 2.5× the slowest cold count measured (an 18-year all-contracts filter); warm
- * repeats answer in well under a second. Past it the request is aborted and the
- * total reported unavailable, so a slow count never holds the answer longer.
+ * How long the count requests may run, measured from the start of the call: about
+ * 2.5× the slowest cold total count measured (an 18-year all-contracts filter); warm
+ * repeats answer in well under a second. Both counts share it. Past it a count is
+ * aborted and its section reported unavailable, so a slow count never holds the
+ * answer longer.
  */
 const COUNT_DEADLINE_MS = 10_000;
+
+/**
+ * How long the group count may run past the later of the search and the total
+ * count before it is cut and `matches_by_group` reported unavailable. On cold
+ * queries the count across every group lags those two by under this on narrow
+ * filters, but by several seconds on the widest date range, where waiting for it
+ * under the shared deadline would more than double the call for a best-effort field.
+ */
+const GROUP_COUNT_GRACE_MS = 2_000;
+
+/**
+ * The group count's settled result, or a timeout standing in for it once it has run
+ * {@link GROUP_COUNT_GRACE_MS} past the search and the total count. The caller
+ * aborts the request it stopped waiting for.
+ */
+async function settleWithinGrace<T>(
+  leg: Promise<PromiseSettledResult<T>>,
+): Promise<PromiseSettledResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cut = new Promise<PromiseSettledResult<T>>((resolve) => {
+    timer = setTimeout(
+      () =>
+        resolve({
+          status: 'rejected',
+          reason: timeout(
+            `The count across award-type groups was still running ${GROUP_COUNT_GRACE_MS / 1000} s after the search and the total count finished, so it was cut.`,
+            { reason: 'api_timeout', retryable: true },
+          ),
+        }),
+      GROUP_COUNT_GRACE_MS,
+    );
+  });
+  try {
+    return await Promise.race([leg, cut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** search/spending_by_award/ answers a limit above 100 with a 422. */
 const LIMIT = countLimit({ tool: 'usaspending_search_awards', default: 10, cap: 100 });
 
 const UnavailableSectionSchema = unavailableSectionSchema(
-  ['total'],
-  'total: page_metadata.total and totalCount, from the count request.',
+  ['total', 'matches_by_group'],
+  "total: page_metadata.total and totalCount, from the count sent with the search's filters. matches_by_group: matches_by_group, from the count sent without award_type_codes.",
 );
+
+/**
+ * The other groups with matches, each with its count and the codes that search it.
+ * Upstream applies every filter to every group, so a filter only some groups carry
+ * (NAICS, PSC, the contract filters, assistance listings) zeroes the rest, and this
+ * never points at a group the call's filters exclude.
+ */
+function otherGroupsNotice(selected: AwardTypeGroupName, matches: AwardCounts): string | undefined {
+  const others = AWARD_TYPE_GROUP_NAMES.filter((name) => name !== selected && matches[name] > 0);
+  if (others.length === 0) return;
+  return `Other award-type groups match these filters: ${others.map((name) => `${name} ${matches[name].toLocaleString()} (award_type_codes ${AWARD_TYPE_GROUPS[name].codes.join(', ')})`).join(', ')}. Search one by setting award_type_codes to its codes.`;
+}
 
 /** Paging guidance before the 10,000-result offset where the cursor pair stops. */
 const CURSOR_GUIDANCE = `More results may remain — request the next page, or chain last_record_sort_value + last_record_unique_id from page_metadata to page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number limit. The cursor pair stops being returned once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture it before then; a short or empty page marks the true end.`;
@@ -218,8 +279,7 @@ function knownTotalGuidance(page: number, limit: number, total: number): string 
 
 export const searchAwardsTool = tool('usaspending_search_awards', {
   title: 'Search Federal Awards',
-  description:
-    'Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, PSC, DEF code, location, or date range. Location filters by place of performance (location_filter, or filters.place_of_performance_location, which overrides it) or by where the recipient is based (filters.recipient_location). Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Rows carry the recipient_id that opens usaspending_get_recipient, and the recipient UEI, when upstream has them; page_metadata.total counts every match in the selected award-type group. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.',
+  description: `Search federal awards by keyword, recipient, agency, award type, NAICS code, assistance listing (CFDA) number, PSC, DEF code, extent competed, set-aside, contract pricing, location, or date range. Location filters by place of performance (location_filter, or filters.place_of_performance_location, which overrides it) or by where the recipient is based (filters.recipient_location). The contract filters extent_competed_type_codes, set_aside_type_codes, and contract_pricing_type_codes take the FPDS codes usaspending_get_award returns: 1–8 letters or digits, sent uppercased; an empty list is unset, several values match any of them, and an unknown code matches nothing. Only contracts and IDVs carry these codes, so a call whose award types include an assistance code is rejected as contract_filters_type_mismatch. Returns ranked award summaries including recipient names, amounts, awarding agencies, and generated award IDs for use with usaspending_get_award; loan rows carry loan value, subsidy cost, and issue date in place of award amount and dates. Rows carry the recipient_id that opens usaspending_get_recipient, and the recipient UEI, when upstream has them; page_metadata.total counts every match for the call's filters and award_type_codes. Page numbers reach results up to a ${MAX_PAGE_OFFSET.toLocaleString()}-result offset (page × limit); past it, continue with last_record_sort_value and last_record_unique_id from page_metadata, which the upstream returns only while page × limit is under ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so capture the pair before then. With both cursor fields supplied, page is ignored. Award types: A/B/C/D = contracts, IDV_A–IDV_E = IDVs, 02/03/04/05/F001/F002 = grants, 06/10/F006/F007 = direct payments, 07/08/F003/F004 = loans, 09/11/-1/F005/F008/F009/F010 = other assistance. Dates must be ISO 8601 (YYYY-MM-DD). Earliest data: 2007-10-01 via search API. DoD contracts have a 90-day publication lag.`,
   annotations: { readOnlyHint: true, openWorldHint: true, idempotentHint: true },
 
   input: z.object({
@@ -234,7 +294,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .min(1)
       .default(['A', 'B', 'C', 'D'])
       .describe(
-        'Filter by award type codes. All codes must belong to a single group: A/B/C/D (contracts), IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E (IDVs), 02/03/04/05/F001/F002 (grants), 06/10/F006/F007 (direct payments), 07/08/F003/F004 (loans), 09/11/-1/F005/F008/F009/F010 (other assistance). Defaults to contracts. Mixing groups causes a 422 error. The group decides which sort values apply.',
+        `Filter by award type codes. All codes must belong to a single group: ${AWARD_TYPE_GROUP_LIST}. Defaults to contracts. Mixing groups causes a 422 error. The group decides which sort values apply.`,
       ),
     ...AGENCY_FILTER_FIELDS,
     recipient_name: z
@@ -250,6 +310,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         'NAICS codes: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize whitespace, plus, leading zeros and digit underscores; unclassified spellings remain provider-validated. Use usaspending_autocomplete_filters type=naics to look up codes.',
       ),
     ...CODE_FILTER_FIELDS,
+    ...CONTRACT_FILTER_FIELDS,
     time_period: z
       .object({
         start_date: blankableIsoDate(
@@ -283,19 +344,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
     limit: LIMIT.schema.describe('Awards per page. Default 10, at most 100 per call.'),
-    page: z
-      .number()
-      .int()
-      .min(1)
-      .default(1)
-      .describe(
-        `Page number (1-based). Page-number pagination caps at a ${MAX_PAGE_OFFSET.toLocaleString()}-result offset (page × limit), but the keyset cursor below is only returned while the offset stays under ${CURSOR_WINDOW_OFFSET.toLocaleString()} — capture the cursor pair before paging past that, or the only way forward is page numbers.`,
-      ),
+    page: z.number().int().min(1).default(1).describe('Page number (1-based).'),
     last_record_sort_value: z
       .string()
       .optional()
       .describe(
-        `Keyset-pagination cursor: the last_record_sort_value from a prior response page_metadata. Provide together with last_record_unique_id to fetch the next page past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page-number cap. The upstream stops emitting the pair once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, so take it from a page below that offset. When both cursor fields are supplied, page is ignored.`,
+        'Keyset-pagination cursor: the last_record_sort_value from a prior response page_metadata. Provide together with last_record_unique_id.',
       ),
     last_record_unique_id: z
       .number()
@@ -309,41 +363,24 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         keywords: z
           .array(z.string())
           .optional()
-          .describe(
-            'Full-text search terms across award descriptions, recipient names, and places; effective terms need at least three characters without trimming; nonempty nested values override flat values',
-          ),
+          .describe('Same as the top-level keyword, as a list of terms.'),
         award_type_codes: z
           .array(z.string())
           .optional()
-          .describe(
-            'Award type codes; all must belong to one group (A/B/C/D contracts, IDV_A–IDV_E IDVs, 02/03/04/05/F001/F002 grants, 06/10/F006/F007 direct payments, 07/08/F003/F004 loans, 09/11/-1/F005/F008/F009/F010 other assistance). When non-empty, overrides the top-level award_type_codes and decides which sort values apply; an empty array falls back to the top-level value.',
-          ),
-        ...AGENCY_FILTER_FIELDS,
-        recipient_name: z
-          .string()
-          .optional()
-          .describe(
-            'Recipient name search (partial match); maps to recipient_search_text. Use instead of recipient_id, which this endpoint ignores.',
-          ),
-        naics_codes: z
-          .array(z.string())
-          .optional()
-          .describe(
-            'NAICS industry codes to require: canonical 2, 4, or 6 digits; recognized ASCII integer aliases normalize; unclassified spellings remain provider-validated; nonempty nested values override flat values',
-          ),
-        ...CODE_FILTER_FIELDS,
-        ...LOCATION_FILTER_FIELDS,
-        time_period_start: optionalIsoDate(
-          "Start date (YYYY-MM-DD); earliest valid 2007-10-01. Given alone, the range runs through today (UTC). With no effective start or end, the query uses USAspending's available coverage without a date filter.",
-        ),
-        time_period_end: optionalIsoDate(
-          'End date (YYYY-MM-DD). Given alone, the range starts at 2007-10-01, the earliest searchable date.',
-        ),
+          .describe('Same as the top-level award_type_codes.'),
+        ...nestedTwins(AGENCY_FILTER_FIELDS),
+        recipient_name: z.string().optional().describe('Same as the top-level recipient_name.'),
+        naics_codes: z.array(z.string()).optional().describe('Same as the top-level naics_codes.'),
+        ...nestedTwins(CODE_FILTER_FIELDS),
+        ...nestedTwins(CONTRACT_FILTER_FIELDS),
+        ...NESTED_LOCATION_FILTER_FIELDS,
+        time_period_start: optionalIsoDate('Same as the top-level time_period.start_date.'),
+        time_period_end: optionalIsoDate('Same as the top-level time_period.end_date.'),
       })
       .strict()
       .optional()
       .describe(
-        'Optional analytics-style filter object mirroring the shape the spending analytics tools accept, for reusing one filter set across tools. When both this object and the equivalent top-level flat filters are given, this object wins per-field. recipient_id is rejected — this endpoint silently ignores it; filter by recipient via recipient_name.',
+        "Optional analytics-style filter object mirroring the shape the spending analytics tools accept, for reusing one filter set across tools. A nonempty value here wins over its top-level counterpart per field; an empty list, a blank string, or an all-blank location falls back to the top-level value. recipient_id is rejected — this endpoint silently ignores it; filter by recipient via recipient_name. The three contract filters are award search's alone; the analytics tools reject them.",
       ),
   }),
 
@@ -418,34 +455,43 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .describe('Matching award summaries'),
     page_metadata: z
       .object({
-        has_next: z
-          .boolean()
-          .describe(
-            `Whether more results remain. With total known on page-number paging, true exactly when rows lie past this page. Without it — the count failed, or the page came by cursor — true on any full page, since the upstream flag reads false on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset; an exactly-full final page then reports one page more than exists. A short or empty page marks the end.`,
-          ),
+        has_next: z.boolean().describe('Whether more results remain.'),
         page: z.number().describe('Current page number'),
         limit: z.number().describe('Results per page'),
         total: z
           .number()
           .optional()
           .describe(
-            'Awards matching the filters in the selected award-type group, across all pages. Absent when the count request failed; unavailable_sections then names it.',
+            "Awards matching every filter, award_type_codes included, across all pages: codes naming part of a group count only that part, so matches_by_group's entry for the group can exceed it. Absent when the total count failed; unavailable_sections then names it.",
           ),
         last_record_sort_value: z
           .string()
           .optional()
           .describe(
-            `Keyset-pagination cursor for the next page — pass back as last_record_sort_value to continue past the ${MAX_PAGE_OFFSET.toLocaleString()}-result page limit. Absent once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, where the upstream stops emitting the pair.`,
+            'Keyset-pagination cursor for the next page — pass back as last_record_sort_value.',
           ),
         last_record_unique_id: z
           .number()
           .optional()
           .describe(
-            'Keyset-pagination cursor for the next page — pass back as last_record_unique_id alongside last_record_sort_value. Absent on the same pages that omit last_record_sort_value.',
+            'Keyset-pagination cursor for the next page — pass back as last_record_unique_id alongside last_record_sort_value.',
           ),
       })
       .describe(
-        'Pagination metadata: has_next, the page and limit, the total match count, and the keyset cursor pair.',
+        `Pagination metadata: has_next, the page and limit, the total match count, and the keyset cursor pair. With total known on page-number paging, has_next is true exactly when rows lie past this page. Without it — the count failed, or the page came by cursor — has_next is true on any full page, because the upstream's own next-page flag reads false on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset; an exactly-full final page then reports one page more than exists, and a short or empty page marks the end. The cursor pair is absent once page × limit reaches ${CURSOR_WINDOW_OFFSET.toLocaleString()}, where the upstream stops emitting it.`,
+      ),
+    matches_by_group: z
+      .object({
+        contracts: z.number().describe('Matching contracts.'),
+        idvs: z.number().describe('Matching IDVs.'),
+        grants: z.number().describe('Matching grants.'),
+        direct_payments: z.number().describe('Matching direct payments.'),
+        loans: z.number().describe('Matching loans.'),
+        other: z.number().describe('Matching other assistance awards.'),
+      })
+      .optional()
+      .describe(
+        "Awards matching every filter but award_type_codes, per award-type group — what a search of another group would find. The selected group's entry counts the whole group, so it can exceed page_metadata.total when award_type_codes name part of it. A filter only some groups carry (naics_codes, psc_codes, the contract filters, assistance_listings) leaves the others at 0. Absent when award_type_codes is the only filter. Best-effort: absent when its count failed or ran more than 2 s past the search and the total count, which unavailable_sections then names.",
       ),
   }),
 
@@ -454,23 +500,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
   // structuredContent and content[] without a format() entry.
   enrichment: {
     page: z.number().describe('Current page number returned'),
-    has_next: z
-      .boolean()
-      .describe(
-        'Whether more results remain: exact with a known total on page-number paging, otherwise true on any full page.',
-      ),
+    has_next: z.boolean().describe('Same as page_metadata.has_next.'),
     truncated: z
       .boolean()
       .optional()
       .describe(
-        `True when rows are known to lie past this page: page × limit is below the total, or the upstream reports a next page (continue via page or the cursor). Without a total — the count failed, or the page came by cursor — only the upstream flag counts, and it reads false on every page past a ${CURSOR_WINDOW_OFFSET.toLocaleString()}-result offset; has_next still says whether to request another.`,
+        'True when rows are known to lie past this page: page × limit is below the total, or the upstream reports a next page. Unlike has_next, a full page alone never sets it.',
       ),
-    totalCount: z
-      .number()
-      .optional()
-      .describe(
-        'Awards matching the filters in the selected award-type group, across all pages — the same value as page_metadata.total. Absent when the count request failed.',
-      ),
+    totalCount: z.number().optional().describe('Same as page_metadata.total.'),
     shown: z
       .number()
       .optional()
@@ -508,6 +545,18 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .string()
       .optional()
       .describe('DEF codes sent, uppercased (comma-separated)'),
+    applied_extent_competed_type_codes: z
+      .string()
+      .optional()
+      .describe('Extent-competed codes sent, uppercased (comma-separated)'),
+    applied_set_aside_type_codes: z
+      .string()
+      .optional()
+      .describe('Set-aside codes sent, uppercased (comma-separated)'),
+    applied_contract_pricing_type_codes: z
+      .string()
+      .optional()
+      .describe('Contract pricing codes sent, uppercased (comma-separated)'),
     applied_location: z
       .string()
       .optional()
@@ -530,14 +579,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       .array(UnavailableSectionSchema)
       .optional()
       .describe(
-        `Present when the count request failed, was rejected, or ran past its ${COUNT_DEADLINE_MS / 1000}-second deadline; the awards on the page are unaffected. Absent when the count loaded.`,
+        `Present when a count request failed, was rejected, or ran past the ${COUNT_DEADLINE_MS / 1000}-second deadline both counts share, or when the group count ran more than ${GROUP_COUNT_GRACE_MS / 1000} s past the search and the total count; the awards on the page are unaffected. Absent when every count sent loaded.`,
       ),
     limitClamp: LimitClampSchema,
     notice: z
       .string()
       .optional()
       .describe(
-        'A reduced limit, how to page on, the use of available coverage without a date filter or any filled date bound, active filters on an empty page, and any section that failed to load. Absent when none applies.',
+        'A reduced limit, how to page on, the use of available coverage without a date filter or any filled date bound, active filters on an empty page, other award-type groups with matches and their award_type_codes, and any section that failed to load. Absent when none applies.',
       ),
   },
 
@@ -654,6 +703,14 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         'Set award_type_codes to contracts A/B/C/D (the default) or IDVs IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E alongside psc_codes.',
     },
     {
+      reason: 'contract_filters_type_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'extent_competed_type_codes, set_aside_type_codes, or contract_pricing_type_codes was given while the award type codes include assistance codes.',
+      retryable: false,
+      recovery:
+        'Set award_type_codes to contracts A/B/C/D (the default) or IDVs IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E, or drop extent_competed_type_codes, set_aside_type_codes, and contract_pricing_type_codes to search assistance awards.',
+    },
+    {
       reason: 'invalid_location',
       code: JsonRpcErrorCode.ValidationError,
       when: 'location_filter, filters.place_of_performance_location, or filters.recipient_location names an unknown US state, a county without a state or under an armed-forces code, a county or FIPS-number state under a non-USA country, or parts that place it in different states.',
@@ -767,11 +824,23 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       psc_codes: f?.psc_codes?.length ? f.psc_codes : input.psc_codes,
       def_codes: f?.def_codes?.length ? f.def_codes : input.def_codes,
     });
+    const contractCodes = normalizeContractFilters({
+      extent_competed_type_codes: f?.extent_competed_type_codes?.length
+        ? f.extent_competed_type_codes
+        : input.extent_competed_type_codes,
+      set_aside_type_codes: f?.set_aside_type_codes?.length
+        ? f.set_aside_type_codes
+        : input.set_aside_type_codes,
+      contract_pricing_type_codes: f?.contract_pricing_type_codes?.length
+        ? f.contract_pricing_type_codes
+        : input.contract_pricing_type_codes,
+    });
 
     /**
-     * Contracts and IDVs carry no listings, and assistance awards no PSC: upstream
-     * answers either pairing with 200, zero rows, and no message, which reads as
-     * "no such awards" rather than a mismatched filter.
+     * Contracts and IDVs carry no listings, and assistance awards no PSC or
+     * contract filter code: upstream answers each such pairing with 200, zero
+     * rows, and no message, which reads as "no such awards" rather than a
+     * mismatched filter.
      */
     if (
       codes.assistance_listings &&
@@ -786,6 +855,16 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       throw ctx.fail(
         'psc_codes_type_mismatch',
         `psc_codes match only contracts and IDVs, but award_type_codes [${awardTypeCodes.join(', ')}] include assistance codes, which carry no PSC.`,
+      );
+    }
+    const contractKeys = Object.keys(contractCodes);
+    if (
+      contractKeys.length > 0 &&
+      awardTypeCodes.some((code) => ASSISTANCE_AWARD_TYPE_CODES.has(code))
+    ) {
+      throw ctx.fail(
+        'contract_filters_type_mismatch',
+        `${contractKeys.join(', ')} match only contracts and IDVs, but award_type_codes [${awardTypeCodes.join(', ')}] include assistance codes, which carry no competition, set-aside, or pricing codes.`,
       );
     }
 
@@ -822,8 +901,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     if (keywords?.length) filters.keywords = keywords;
     filters.award_type_codes = awardTypeCodes;
     const names = {
-      agency_name: f?.agency_name || input.agency_name,
-      funding_agency_name: f?.funding_agency_name || input.funding_agency_name,
+      agency_name: f?.agency_name?.trim() || input.agency_name,
+      funding_agency_name: f?.funding_agency_name?.trim() || input.funding_agency_name,
     };
     const agencies =
       names.agency_name || names.funding_agency_name
@@ -835,6 +914,8 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       filters.naics_codes = { require: naicsCodes };
     }
     applyCodeFilters(filters, codes);
+    // Upstream takes the contract filters under the keys the tool declares.
+    Object.assign(filters, contractCodes);
     if (timePeriod) {
       filters.time_period = [{ start_date: timePeriod.start_date, end_date: timePeriod.end_date }];
     }
@@ -860,21 +941,47 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ctx,
     );
     /**
-     * The count gets the very `filters` object the search sends, so every filter
-     * reaches both, and runs beside the search as a best-effort side read under its
-     * own deadline. Codes spanning groups never reach it: upstream's 422 fails the
-     * search. Settled up front, so a count that rejects after a failed search is
-     * still handled; the search is awaited alone, so its failure surfaces at once.
+     * Two counts run beside the search as best-effort side reads, one attempt each
+     * under the shared deadline, and only when the codes resolve to one group: codes
+     * spanning groups fail the search with upstream's 422. The total count gets the
+     * very `filters` object the search sends, so every filter reaches both. The group
+     * count gets those filters without award_type_codes, so upstream reports every
+     * group's matches. It is a separate request, not the source of `total`, because a
+     * count across every group runs slower on broad filters and a late one must not
+     * cost the total; nor may it cost the call much time, so it is cut once it runs
+     * GROUP_COUNT_GRACE_MS past the search and the total count. USAspending's count
+     * rejects an empty `filters`, so with no filter beside the codes it is not sent.
+     * Settled up front, so a count that rejects after a failed search is still
+     * handled; the search is awaited alone, so its failure surfaces at once. Any
+     * count still in flight when the handler leaves is aborted.
      */
-    const countLeg = Promise.allSettled([
-      groupName ? svc.countAwards(filters, ctx, countDeadlineAt) : undefined,
-    ]);
-    const data = await searchRequest;
-    const [countResult] = await countLeg;
+    const { award_type_codes: _awardTypeCodes, ...groupFilters } = filters;
+    const sideReads = new AbortController();
+    const settle = <T>(count: Promise<T> | undefined) =>
+      Promise.allSettled([count]).then(([leg]) => leg);
+    const totalLeg = settle(
+      groupName ? svc.countAwards(filters, ctx, countDeadlineAt, sideReads.signal) : undefined,
+    );
+    const groupLeg = settle(
+      groupName && Object.keys(groupFilters).length > 0
+        ? svc.countAwards(groupFilters, ctx, countDeadlineAt, sideReads.signal)
+        : undefined,
+    );
+    let data: Awaited<typeof searchRequest>;
+    let countResult: Awaited<typeof totalLeg>;
+    let groupCountResult: Awaited<typeof groupLeg>;
+    try {
+      data = await searchRequest;
+      countResult = await totalLeg;
+      groupCountResult = await settleWithinGrace(groupLeg);
+    } finally {
+      sideReads.abort();
+    }
 
-    // A failed count leaves the total unknown and is disclosed; a caller abort rethrows.
-    const unavailable: UnavailableSection<'total'>[] = [];
+    // A failed count leaves its field unknown and is disclosed; a caller abort rethrows.
+    const unavailable: UnavailableSection<'total' | 'matches_by_group'>[] = [];
     const counts = settleSection(ctx, 'total', countResult, unavailable);
+    const matchesByGroup = settleSection(ctx, 'matches_by_group', groupCountResult, unavailable);
     const total = groupName && counts ? counts[groupName] : undefined;
 
     const results = (data.results ?? []).map((r) => ({
@@ -966,6 +1073,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       ...agencyFilterEcho(agencies.names),
       ...(naicsCodes?.length ? { applied_naics_codes: naicsCodes.join(', ') } : {}),
       ...codeFilterEcho(codes),
+      ...contractFilterEcho(contractCodes),
       ...locationFilterEcho(locations),
       ...(timePeriod
         ? {
@@ -1003,7 +1111,11 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
       if (keywords?.length) filterParts.push(`keyword="${keywords.join(', ')}"`);
       if (recipientName) filterParts.push(`recipient_name="${recipientName}"`);
       filterParts.push(...agencyParts);
-      filterParts.push(...describeCodeFilters(codes), ...describeLocationFilters(locations));
+      filterParts.push(
+        ...describeCodeFilters(codes),
+        ...describeContractFilters(contractCodes),
+        ...describeLocationFilters(locations),
+      );
       filterParts.push(`types=${awardTypeCodes.join(',')}`);
       const filterText = filterParts.join(', ');
       notices.push(
@@ -1016,6 +1128,7 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
         if (agencyParts.length) notices.push(`Agency filters: ${agencyParts.join(', ')}.`);
       }
     }
+    if (groupName && matchesByGroup) notices.push(otherGroupsNotice(groupName, matchesByGroup));
     if (unavailable.length > 0) {
       ctx.enrich({ unavailable_sections: unavailable });
       notices.push(unavailableNotice(unavailable));
@@ -1023,7 +1136,11 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     const notice = notices.filter(Boolean).join(' ');
     if (notice) ctx.enrich.notice(notice);
 
-    return { results, page_metadata };
+    return {
+      results,
+      page_metadata,
+      ...(matchesByGroup ? { matches_by_group: matchesByGroup } : {}),
+    };
   },
 
   format: (result) => {
@@ -1032,6 +1149,12 @@ export const searchAwardsTool = tool('usaspending_search_awards', {
     lines.push(
       `\n**Results:** ${result.results.length} | **Page:** ${result.page_metadata.page}${total !== undefined ? ` | **Total matches:** ${total.toLocaleString()}` : ''} | **Per page:** ${result.page_metadata.limit} | **Has next:** ${result.page_metadata.has_next ? 'Yes' : 'No'}`,
     );
+    const groups = result.matches_by_group;
+    if (groups) {
+      lines.push(
+        `\n**Matches by award-type group:** ${AWARD_TYPE_GROUP_NAMES.map((name) => `${name} ${groups[name].toLocaleString()}`).join(' | ')}`,
+      );
+    }
     for (const r of result.results) {
       lines.push('');
       lines.push(

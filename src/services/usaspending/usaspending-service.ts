@@ -349,6 +349,9 @@ export class USASpendingService {
    *
    * `maxRetries` overrides `withRetry`'s default of three retries; a side read
    * beside a call's main request passes 0, so a failure ends it at once.
+   *
+   * `cut` aborts this request alone, beside the caller's signal: a tool stops a
+   * side read it no longer waits for. Its abort is left untouched, like the caller's.
    */
   private async request<T>(
     operation: string,
@@ -357,12 +360,14 @@ export class USASpendingService {
     init: FetchWithTimeoutOptions,
     deadlineAt?: number,
     maxRetries?: number,
+    cut?: AbortSignal,
   ): Promise<T> {
     const budgetMs = Math.min(
       this.retryBudgetMs,
       deadlineAt === undefined ? this.retryBudgetMs : deadlineAt - Date.now(),
     );
-    ctx.signal?.throwIfAborted();
+    const signal = cut ? AbortSignal.any([ctx.signal, cut]) : ctx.signal;
+    signal?.throwIfAborted();
     if (budgetMs <= 0)
       throw timeout(`The call deadline elapsed before USAspending was asked for ${operation}.`, {
         ...upstreamFailure('api_timeout'),
@@ -386,14 +391,14 @@ export class USASpendingService {
           operation,
           context: ctx,
           baseDelayMs: RETRY_BASE_DELAY_MS,
-          signal: ctx.signal,
+          signal,
           deadlineMs: budgetMs,
           ...(maxRetries !== undefined ? { maxRetries } : {}),
           isTransient: (err) => !isAttemptTimeout(err) && defaultIsTransient(err),
         },
       );
     } catch (err) {
-      if (ctx.signal?.aborted) throw err;
+      if (signal?.aborted) throw err;
       const attemptTimedOut = isAttemptTimeout(err);
       const budgetSpent = isBudgetExpiry(err) || (attemptTimedOut && cutAtBudget);
       if (budgetSpent || attemptTimedOut) {
@@ -444,6 +449,7 @@ export class USASpendingService {
     ctx: Context,
     deadlineAt?: number,
     maxRetries?: number,
+    cut?: AbortSignal,
   ): Promise<T> {
     return this.request<T>(
       `POST ${path}`,
@@ -459,6 +465,7 @@ export class USASpendingService {
       },
       deadlineAt,
       maxRetries,
+      cut,
     );
   }
 
@@ -540,19 +547,22 @@ export class USASpendingService {
   /**
    * Counts the awards matching `filters` in each award-type group. A side read
    * beside a search: one attempt, never retried, aborted at `deadlineAt` (epoch
-   * ms). Upstream builds the count from the same filter query as the search, so
-   * the search's own `filters` give its total.
+   * ms) or when `cut` aborts, whichever comes first. Upstream builds the count from
+   * the same filter query as the search, so the search's own `filters` give its total;
+   * the same filters without `award_type_codes` give every group's matches.
    * @throws {McpError} The classified upstream failure; `api_unavailable` when the
-   * body lacks a non-negative integer count for every group.
+   * body lacks a non-negative integer count for every group. A `cut` abort rejects
+   * as a caller abort does, with no upstream classification.
    */
   async countAwards(
     filters: Record<string, unknown>,
     ctx: Context,
     deadlineAt: number,
+    cut?: AbortSignal,
   ): Promise<AwardCounts> {
     ctx.log.debug('countAwards');
     const path = 'search/spending_by_award_count/';
-    const raw = await this.post<unknown>(path, { filters }, ctx, deadlineAt, 0);
+    const raw = await this.post<unknown>(path, { filters }, ctx, deadlineAt, 0, cut);
     const parsed = AwardCountResponseSchema.safeParse(raw);
     if (!parsed.success) {
       throw serviceUnavailable('USAspending returned an award count without a count per group.', {
@@ -1093,7 +1103,14 @@ export class USASpendingService {
     return this.post('autocomplete/cfda/', { search_text: searchText, limit }, ctx);
   }
 
-  async autocompleteAwardingAgency(
+  /**
+   * Agency names in one role's directory: `autocomplete/awarding_agency_office/` or
+   * `autocomplete/funding_agency_office/`. Neither directory contains the other, so a
+   * name is looked up only where its role lists it. With `deadlineAt`, the lookup is
+   * optional: one attempt bounded by that deadline, its bucket shape validated.
+   */
+  async autocompleteAgency(
+    role: 'awarding' | 'funding',
     searchText: string,
     limit: number,
     ctx: Context,
@@ -1105,8 +1122,8 @@ export class USASpendingService {
       office?: unknown[];
     };
   }> {
-    ctx.log.debug('autocompleteAwardingAgency', { searchText });
-    const path = 'autocomplete/awarding_agency_office/';
+    ctx.log.debug('autocompleteAgency', { role, searchText });
+    const path = `autocomplete/${role}_agency_office/`;
     const body = { search_text: searchText, limit };
     if (deadlineAt === undefined) return this.post(path, body, ctx);
     const raw = await this.post<unknown>(path, body, ctx, deadlineAt, 0);

@@ -25,6 +25,7 @@ import {
 } from './dates.js';
 import {
   AWARD_TYPE_CODES,
+  AWARD_TYPE_GROUP_LIST,
   analyticsTypeMismatch,
   applyLocationFilters,
   buildFilters,
@@ -68,7 +69,7 @@ export const spendingOverTimeTool = tool('usaspending_spending_over_time', {
           .array(z.string())
           .optional()
           .describe(
-            'Award type code filters (A/B/C/D, 02–05, etc.); groups may be mixed. When omitted, defaults to contracts (A, B, C, D).',
+            `Award type codes: ${AWARD_TYPE_GROUP_LIST}; groups may be mixed. When omitted, defaults to contracts (${DEFAULT_AWARD_TYPE_CODES.join(', ')}).`,
           ),
         ...AGENCY_FILTER_FIELDS,
         recipient_id: z.string().optional().describe(RECIPIENT_FILTER_DESCRIPTION),

@@ -548,39 +548,81 @@ describe('usaspending_search_awards code filters (#77)', () => {
   });
 });
 
-describe('tools/list describes the code filters the same way on all four tools (#77)', () => {
-  interface Node {
-    description?: string;
-    items?: { pattern?: string; description?: string };
-    properties?: Record<string, Node>;
-  }
-  const inputSchema = (tool: { input: z.ZodType }) =>
-    z.toJSONSchema(tool.input, { io: 'input' }) as Node & Record<string, unknown>;
+interface Node {
+  description?: string;
+  items?: { pattern?: string; description?: string };
+  properties?: Record<string, Node>;
+}
+const inputSchema = (tool: { input: z.ZodType }) =>
+  z.toJSONSchema(tool.input, { io: 'input' }) as Node & Record<string, unknown>;
 
+describe('tools/list advertises one schema per code filter on all four tools (#77, #131)', () => {
   const KEYS = ['assistance_listings', 'psc_codes', 'def_codes'] as const;
 
-  it('advertises one schema per key at every site, inline, with its pattern', () => {
+  it('describes each key in full once per tool, inline, with its pattern; the award search nested twin points at the top level', () => {
     const search = inputSchema(searchAwardsTool);
-    const sites: [string, Node][] = [
-      ['usaspending_search_awards', search],
-      ['usaspending_search_awards filters', search.properties!.filters!],
-      ...ANALYTICS.map(
-        ({ name, tool }) => [name, inputSchema(tool).properties!.filters!] as [string, Node],
-      ),
-    ];
     for (const key of KEYS) {
-      const [first, ...rest] = sites.map(([site, node]) => ({ site, node: node.properties![key] }));
-      expect(first!.node?.description).toEqual(expect.any(String));
-      expect(first!.node?.items?.pattern).toEqual(expect.any(String));
-      for (const other of rest) {
-        expect({ site: other.site, node: other.node }).toEqual({
-          site: other.site,
-          node: first!.node,
+      const flat = search.properties![key]!;
+      expect(flat.description).toEqual(expect.any(String));
+      expect(flat.items?.pattern).toEqual(expect.any(String));
+      expect(search.properties!.filters!.properties![key]).toEqual({
+        ...flat,
+        description: `Same as the top-level ${key}.`,
+      });
+      for (const { name, tool } of ANALYTICS) {
+        expect({ name, node: inputSchema(tool).properties!.filters!.properties![key] }).toEqual({
+          name,
+          node: flat,
         });
       }
     }
     for (const tool of [searchAwardsTool, ...ANALYTICS.map((a) => a.tool)]) {
       expect(JSON.stringify(inputSchema(tool))).not.toContain('$ref');
     }
+  });
+
+  const CONTRACT_KEYS = [
+    'extent_competed_type_codes',
+    'set_aside_type_codes',
+    'contract_pricing_type_codes',
+  ] as const;
+
+  it('advertises the contract filters on award search alone, the nested twin pointing at the top level (#119)', () => {
+    const search = inputSchema(searchAwardsTool);
+    for (const key of CONTRACT_KEYS) {
+      const flat = search.properties![key]!;
+      const nested = search.properties!.filters!.properties![key]!;
+      expect(flat.description).toContain('usaspending_get_award');
+      expect(flat.items?.pattern).toBe('^[0-9A-Za-z]{1,8}$');
+      expect(nested).toEqual({ ...flat, description: `Same as the top-level ${key}.` });
+    }
+    expect(searchAwardsTool.description).toContain('contract_filters_type_mismatch');
+    for (const { name, tool } of ANALYTICS) {
+      const properties = inputSchema(tool).properties!.filters!.properties!;
+      for (const key of CONTRACT_KEYS) {
+        expect({ name, key, advertised: key in properties }).toEqual({
+          name,
+          key,
+          advertised: false,
+        });
+      }
+    }
+  });
+});
+
+describe('award_type_codes descriptions name every award type code under its group', () => {
+  /** USAspending's award type partition, F-codes and -1 included, spelled out rather than read from the source. */
+  const GROUPED =
+    'A/B/C/D (contracts), IDV_A/IDV_B/IDV_B_A/IDV_B_B/IDV_B_C/IDV_C/IDV_D/IDV_E (IDVs), 02/03/04/05/F001/F002 (grants), 06/10/F006/F007 (direct payments), 07/08/F003/F004 (loans), 09/11/-1/F005/F008/F009/F010 (other assistance)';
+  const SITES = [
+    { name: 'usaspending_search_awards', node: () => inputSchema(searchAwardsTool).properties! },
+    ...ANALYTICS.map(({ name, tool }) => ({
+      name,
+      node: () => inputSchema(tool).properties!.filters!.properties!,
+    })),
+  ];
+
+  it.each(SITES)('$name', ({ node }) => {
+    expect(node().award_type_codes?.description).toContain(GROUPED);
   });
 });

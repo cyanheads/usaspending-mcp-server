@@ -7,7 +7,7 @@
  */
 
 import { type Context, z } from '@cyanheads/mcp-ts-core';
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 
 /** Why a section is missing, mapped from the service's typed upstream failure reasons. */
@@ -35,7 +35,7 @@ export function unavailableSectionSchema<const S extends readonly [string, ...st
       reason: z
         .enum(UNAVAILABLE_REASONS)
         .describe(
-          'api_unavailable: USAspending was unreachable or answered with a server error. api_timeout: no answer before the request deadline. upstream_error: USAspending rejected the request, or its record lacks the identifier the section is requested by.',
+          'api_unavailable: USAspending was unreachable, throttled the request, or answered with a server error. api_timeout: no answer before the request deadline. upstream_error: USAspending rejected the request, or its record lacks the identifier the section is requested by.',
         ),
       retryable: z.boolean().describe('Whether retrying the call may load this section.'),
       message: z.string().describe('The failure message for this section.'),
@@ -46,7 +46,9 @@ export function unavailableSectionSchema<const S extends readonly [string, ...st
 /**
  * Settles one secondary request: its value when it fulfilled; otherwise
  * `undefined`, with an entry pushed onto `into`. Caller cancellation and any
- * error that is not a classified upstream failure (`McpError`) rethrow.
+ * error that is not a classified upstream failure (`McpError`) rethrow. An
+ * upstream throttle (HTTP 429) is a temporary unavailability: a later call can
+ * load the section.
  */
 export function settleSection<T, S extends string>(
   ctx: Context,
@@ -57,6 +59,10 @@ export function settleSection<T, S extends string>(
   if (leg.status === 'fulfilled') return leg.value;
   const err: unknown = leg.reason;
   if (ctx.signal.aborted || !(err instanceof McpError)) throw err;
+  if (err.code === JsonRpcErrorCode.RateLimited) {
+    into.push({ section, reason: 'api_unavailable', retryable: true, message: err.message });
+    return;
+  }
   const reason = err.data?.reason;
   into.push({
     section,

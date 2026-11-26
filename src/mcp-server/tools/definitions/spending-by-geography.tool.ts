@@ -25,6 +25,7 @@ import {
   optionalIsoDate,
 } from './dates.js';
 import {
+  AWARD_TYPE_GROUP_LIST,
   analyticsTypeMismatch,
   applyLocationFilters,
   buildFilters,
@@ -54,7 +55,7 @@ const SpendingFiltersSchema = z
       .array(z.string())
       .optional()
       .describe(
-        'Award type codes: A/B/C/D (contracts), IDV_A–IDV_E (IDVs), 02–05 (grants), 06/10 (direct payments), 07/08 (loans), 09/11 (insurance and other assistance), -1 (unspecified). Groups may be mixed here. Omit to aggregate every type.',
+        `Award type codes: ${AWARD_TYPE_GROUP_LIST}. Groups may be mixed here. Omit to aggregate every type.`,
       ),
     ...AGENCY_FILTER_FIELDS,
     recipient_id: z.string().optional().describe(RECIPIENT_FILTER_DESCRIPTION),

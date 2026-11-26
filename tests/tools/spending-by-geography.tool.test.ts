@@ -13,7 +13,7 @@ const mockSpendingByGeography = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
     spendingByGeography: mockSpendingByGeography,
-    autocompleteAwardingAgency: async () => ({
+    autocompleteAgency: async () => ({
       results: { toptier_agency: [{ name: 'Department of the Interior' }] },
     }),
   }),

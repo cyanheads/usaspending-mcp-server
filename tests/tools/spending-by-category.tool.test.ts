@@ -14,7 +14,7 @@ const mockSpendingByCategory = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
     spendingByCategory: mockSpendingByCategory,
-    autocompleteAwardingAgency: async () => ({ results: {} }),
+    autocompleteAgency: async () => ({ results: {} }),
   }),
 }));
 

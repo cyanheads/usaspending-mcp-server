@@ -2,7 +2,8 @@
  * @fileoverview Shared filter builder for USAspending analytics endpoints, and the
  * program, product/service, and emergency-funding code filters and the
  * place-of-performance and recipient location filters shared by
- * `usaspending_search_awards` and the three spending analytics tools.
+ * `usaspending_search_awards` and the three spending analytics tools, plus the
+ * contract competition, set-aside, and pricing filters award search alone takes.
  * @module mcp-server/tools/definitions/filters
  */
 
@@ -12,6 +13,7 @@ import { type DateRange, resolveDateRange } from './dates.js';
 import {
   describeLocation,
   LocationFilterSchema,
+  locationFilterTwin,
   resolveLocation,
   type SentLocation,
 } from './locations.js';
@@ -129,6 +131,25 @@ export const AWARD_TYPE_CODES = {
   other: ['09', '11', '-1', 'F005', 'F008', 'F009', 'F010'],
 } satisfies Record<string, readonly string[]>;
 
+type AwardTypeGroupKey = keyof typeof AWARD_TYPE_CODES;
+
+const AWARD_TYPE_GROUP_LABELS = {
+  contracts: 'contracts',
+  idvs: 'IDVs',
+  grants: 'grants',
+  direct_payments: 'direct payments',
+  loans: 'loans',
+  other: 'other assistance',
+} satisfies Record<AwardTypeGroupKey, string>;
+
+/**
+ * Every award type code by group, as the `award_type_codes` descriptions list
+ * them: `A/B/C/D (contracts), IDV_A/… (IDVs), …`.
+ */
+export const AWARD_TYPE_GROUP_LIST = (Object.keys(AWARD_TYPE_CODES) as AwardTypeGroupKey[])
+  .map((group) => `${AWARD_TYPE_CODES[group].join('/')} (${AWARD_TYPE_GROUP_LABELS[group]})`)
+  .join(', ');
+
 /** Contract and IDV award type codes — the awards that carry a PSC and no Assistance Listing. */
 export const PROCUREMENT_AWARD_TYPE_CODES: ReadonlySet<string> = new Set([
   ...AWARD_TYPE_CODES.contracts,
@@ -147,9 +168,24 @@ export const ASSISTANCE_AWARD_TYPE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Re-describes each field as a pointer to its top-level twin, for a tool that
+ * declares the same fields flat and again in a nested object: one schema per
+ * key, its full description stated once per tool, at the top level.
+ */
+export function nestedTwins<const T extends Record<string, z.ZodType>>(fields: T): T {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, schema]) => [
+      key,
+      schema.describe(`Same as the top-level ${key}.`),
+    ]),
+  ) as T;
+}
+
+/**
  * The three code filters, keyed as every tool that takes them declares them.
- * One instance per key, spread into each tool's input, so `tools/list`
- * describes them identically everywhere.
+ * One schema per key, spread into each tool's input; award search, which
+ * declares them flat and in `filters`, points the nested copy at the flat one
+ * with {@link nestedTwins}.
  */
 export const CODE_FILTER_FIELDS = {
   assistance_listings: z
@@ -252,20 +288,130 @@ export function describeCodeFilters(codes: CodeFilters): string[] {
 }
 
 /**
+ * An FPDS code as USAspending stores it on contracts and IDVs: 1–8 letters or
+ * digits. Upstream matches these exactly and case-sensitively, publishes no list
+ * of them, and stores every code observed in uppercase.
+ */
+const FPDS_CODE_PATTERN = /^[0-9A-Za-z]{1,8}$/;
+
+const fpdsCodes = (item: string, description: string) =>
+  z
+    .array(
+      z
+        .string()
+        .regex(FPDS_CODE_PATTERN, 'Expected an FPDS code of 1–8 letters or digits')
+        .describe(item),
+    )
+    .optional()
+    .describe(description);
+
+/**
+ * The contract filters, sent under these same upstream keys. Only
+ * `usaspending_search_awards` spreads them (flat, and as pointer twins in its
+ * nested `filters`); the analytics tools' `filters` stays without them. The rule
+ * the three share sits once on award search's tool description.
+ */
+export const CONTRACT_FILTER_FIELDS = {
+  extent_competed_type_codes: fpdsCodes(
+    'FPDS extent-competed code, e.g. C',
+    'Filter by extent competed, the competition.extent_competed.code usaspending_get_award returns: A full and open competition, B not available for competition, C not competed, D full and open after exclusion of sources, E follow-on to competed action, F competed under simplified acquisition procedures (SAP), G not competed under SAP, CDO competitive delivery order, NDO non-competitive delivery order.',
+  ),
+  set_aside_type_codes: fpdsCodes(
+    'FPDS set-aside code, e.g. SBA',
+    'Filter by set-aside type, the competition.type_set_aside.code usaspending_get_award returns: NONE no set-aside used, SBA small business total, SBP small business partial, 8A 8(a) competed, 8AN 8(a) sole source, 8AC SDB 8(a) set-aside, HZC HUBZone, HZS HUBZone sole source, HS2 HUBZone and 8(a), HS3 8(a) with HUBZone preference, SDVOSBC service-disabled veteran-owned small business (SDVOSB), SDVOSBS SDVOSB sole source, VSA veteran, VSS veteran sole source, WOSB women-owned small business, WOSBSS WOSB sole source, EDWOSB economically disadvantaged WOSB, EDWOSBSS EDWOSB sole source, HMT HBCU or minority institution total, HMP HBCU or minority institution partial, ESB emerging small business, RSB reserved for small business, VSB very small business, BI Buy Indian, IEE Indian economic enterprise, ISBEE Indian small business economic enterprise. Most recent contracts carry no set-aside code at all, not even NONE, so no value matches them; most IDVs (IDV_A–IDV_E) carry one.',
+  ),
+  contract_pricing_type_codes: fpdsCodes(
+    'FPDS contract pricing code, e.g. J',
+    'Filter by contract pricing type, the contract_pricing.code usaspending_get_award returns: J firm fixed price, K fixed price with economic price adjustment, L fixed price incentive, M fixed price award fee, A fixed price redetermination, B fixed price level of effort, R cost plus award fee, S cost no fee, T cost sharing, U cost plus fixed fee, V cost plus incentive fee, Y time and materials, Z labor hours, 1 order dependent, 2 combination, 3 other.',
+  ),
+};
+
+type ContractFilterKey = keyof typeof CONTRACT_FILTER_FIELDS;
+
+const CONTRACT_FILTER_KEYS = Object.keys(CONTRACT_FILTER_FIELDS) as ContractFilterKey[];
+
+/** The contract filters as sent: uppercased, with an empty list dropped. */
+type ContractFilters = { [K in ContractFilterKey]?: string[] };
+
+/**
+ * Upstream matches the codes case-sensitively, answering a lowercase one with
+ * zero rows, and 422s on an empty list, so both are normalized away.
+ */
+export function normalizeContractFilters(
+  f: {
+    [K in ContractFilterKey]?: string[] | undefined;
+  },
+): ContractFilters {
+  const codes: ContractFilters = {};
+  for (const key of CONTRACT_FILTER_KEYS) {
+    const values = f[key];
+    if (values?.length) codes[key] = values.map((code) => code.toUpperCase());
+  }
+  return codes;
+}
+
+/** The contract filters sent, as the comma-joined `applied_*` echo award search carries. */
+export function contractFilterEcho(codes: ContractFilters): {
+  applied_contract_pricing_type_codes?: string;
+  applied_extent_competed_type_codes?: string;
+  applied_set_aside_type_codes?: string;
+} {
+  const { extent_competed_type_codes, set_aside_type_codes, contract_pricing_type_codes } = codes;
+  return {
+    ...(extent_competed_type_codes
+      ? { applied_extent_competed_type_codes: extent_competed_type_codes.join(', ') }
+      : {}),
+    ...(set_aside_type_codes
+      ? { applied_set_aside_type_codes: set_aside_type_codes.join(', ') }
+      : {}),
+    ...(contract_pricing_type_codes
+      ? { applied_contract_pricing_type_codes: contract_pricing_type_codes.join(', ') }
+      : {}),
+  };
+}
+
+/** The contract filters sent, as `key=value` parts an empty-result notice names. */
+export function describeContractFilters(codes: ContractFilters): string[] {
+  return CONTRACT_FILTER_KEYS.flatMap((key) => {
+    const values = codes[key];
+    return values ? [`${key}=${values.join(',')}`] : [];
+  });
+}
+
+/** What recipient_location changes from the place-of-performance object it otherwise repeats. */
+const RECIPIENT_LOCATION_DIFFERENCE =
+  'but filters by where the recipient is based, which can differ from where the work is done; the location sent is echoed as applied_recipient_location.';
+
+/**
  * The two location filters, keyed as every `filters` object that takes them
- * declares them. One instance per key, spread into each tool's `filters`, so
- * `tools/list` describes them identically everywhere.
+ * declares them, for the analytics tools: place_of_performance_location states
+ * the location fields in full, and recipient_location, validated the same way,
+ * points at it.
  */
 export const LOCATION_FILTER_FIELDS = {
   place_of_performance_location: LocationFilterSchema.describe(
     'Filter by place of performance — where the work is done. Takes codes, not place names — resolve a state or county name to its code with usaspending_autocomplete_filters type=location. Blank fields are ignored, and an all-blank object is no location filter. The location sent is echoed as applied_location.',
   ),
-  recipient_location: LocationFilterSchema.describe(
-    'Filter by recipient location — where the recipient is based, which can differ from where the work is done. Takes codes, not place names — resolve a state or county name to its code with usaspending_autocomplete_filters type=location. Blank fields are ignored, and an all-blank object is no location filter. The location sent is echoed as applied_recipient_location.',
+  recipient_location: locationFilterTwin('filters.place_of_performance_location').describe(
+    `Same as filters.place_of_performance_location, ${RECIPIENT_LOCATION_DIFFERENCE}`,
   ),
 };
 
 type LocationFilterKey = keyof typeof LOCATION_FILTER_FIELDS;
+
+/**
+ * The location filters of `usaspending_search_awards`' nested `filters`, both
+ * pointing at its top-level location_filter, which states the location fields
+ * first.
+ */
+export const NESTED_LOCATION_FILTER_FIELDS = {
+  place_of_performance_location: locationFilterTwin('location_filter').describe(
+    'Same as the top-level location_filter.',
+  ),
+  recipient_location: locationFilterTwin('location_filter').describe(
+    `Same as the top-level location_filter, ${RECIPIENT_LOCATION_DIFFERENCE}`,
+  ),
+} satisfies Record<LocationFilterKey, unknown>;
 
 /** The location filters as a call supplied them. */
 export type LocationFilterInput = {

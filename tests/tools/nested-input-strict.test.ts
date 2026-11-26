@@ -19,7 +19,7 @@ import { spendingByGeographyTool } from '@/mcp-server/tools/definitions/spending
 import { spendingOverTimeTool } from '@/mcp-server/tools/definitions/spending-over-time.tool.js';
 
 const svc = vi.hoisted(() => ({
-  autocompleteAwardingAgency: vi.fn(async () => ({ results: {} })),
+  autocompleteAgency: vi.fn(async () => ({ results: {} })),
   searchAwards: vi.fn(),
   countAwards: vi.fn(),
   spendingByCategory: vi.fn(),
@@ -153,6 +153,12 @@ describe('Nested objects made only of declared keys keep working', () => {
       naics_codes: { require: ['541512'] },
       time_period: [{ start_date: '2023-01-01', end_date: '2023-12-31' }],
     });
+    // The total count gets those filters; the group count (#125) the same without the codes.
+    const { award_type_codes: _codes, ...withoutCodes } = searchSent();
+    expect(svc.countAwards.mock.calls.map(([filters]) => filters)).toEqual([
+      searchSent(),
+      withoutCodes,
+    ]);
   });
 
   it('search_awards: every filters field blank sends only the flat award type default', async () => {
@@ -166,6 +172,9 @@ describe('Nested objects made only of declared keys keep working', () => {
         assistance_listings: [],
         psc_codes: [],
         def_codes: [],
+        extent_competed_type_codes: [],
+        set_aside_type_codes: [],
+        contract_pricing_type_codes: [],
         place_of_performance_location: { country: '', state: '', county: '', city: '' },
         recipient_location: { country: '', state: '', county: '', city: '' },
         time_period_start: '',
@@ -175,6 +184,10 @@ describe('Nested objects made only of declared keys keep working', () => {
 
     expect(result.isError).toBeFalsy();
     expect(searchSent()).toEqual({ award_type_codes: ['A', 'B', 'C', 'D'] });
+    // With no filter beside the codes, only the total count is sent (#125): one count, carrying the codes.
+    expect(svc.countAwards.mock.calls.map(([filters]) => filters)).toEqual([
+      { award_type_codes: ['A', 'B', 'C', 'D'] },
+    ]);
   });
 
   it('search_awards: an empty filters.award_type_codes falls back to the flat value', async () => {
@@ -333,6 +346,14 @@ const UNDECLARED = [
       path: 'filters.recipient_location.zip',
       object: 'filters.recipient_location',
       accepted: 'county',
+    },
+    {
+      // Award search's contract filters are its own (#119).
+      label: `${tool.name} filters.extent_competed_type_codes`,
+      run: () => tool.run({ filters: { extent_competed_type_codes: ['C'] } }),
+      path: 'filters.extent_competed_type_codes',
+      object: 'filters',
+      accepted: 'psc_codes',
     },
   ]),
   {

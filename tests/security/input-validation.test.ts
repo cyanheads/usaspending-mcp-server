@@ -69,7 +69,7 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
     autocompleteCfda: vi
       .fn()
       .mockResolvedValue({ results: [{ program_number: '10.001', program_title: 'Test' }] }),
-    autocompleteAwardingAgency: vi
+    autocompleteAgency: vi
       .fn()
       .mockResolvedValue({ results: [{ id: 1, toptier_agency: { name: 'DoD' } }] }),
     autocompleteRecipient: vi

@@ -4,7 +4,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import {
   createMockContext,
   getEnrichment,
@@ -23,7 +23,7 @@ vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({
     searchAwards: mockSearchAwards,
     countAwards: mockCountAwards,
-    autocompleteAwardingAgency: async () => ({ results: {} }),
+    autocompleteAgency: async () => ({ results: {} }),
   }),
 }));
 
@@ -38,18 +38,29 @@ const contractCount = (n: number) => ({
 });
 
 /**
- * Unless a test answers the count, the count request fails as the service
- * classifies an unreachable upstream, so the total stays unknown and paging keeps
- * the page-fullness rule the #37, #44, and #76 cases pin.
+ * Count buckets with no matches in any award-type group. Frozen, and mocks answer with
+ * a copy, as the service answers each request with a fresh object: a handler that
+ * writes into a count response in place can neither pass against the object it
+ * mutated nor carry the write into a later test.
+ */
+const NO_MATCHES = Object.freeze(contractCount(0));
+
+/**
+ * Unless a test answers the counts, the total count (the one carrying
+ * award_type_codes) fails as the service classifies an unreachable upstream, so
+ * the total stays unknown and paging keeps the page-fullness rule the #37, #44,
+ * and #76 cases pin. The group count (#125) finds no match in any group, so it
+ * adds no notice sentence and no unavailable section.
  */
 beforeEach(() => {
   mockCountAwards.mockReset();
-  mockCountAwards.mockRejectedValue(
-    serviceUnavailable('USAspending API is unavailable.', {
+  mockCountAwards.mockImplementation(async (filters: Record<string, unknown>) => {
+    if (!('award_type_codes' in filters)) return { ...NO_MATCHES };
+    throw serviceUnavailable('USAspending API is unavailable.', {
       reason: 'api_unavailable',
       retryable: true,
-    }),
-  );
+    });
+  });
 });
 
 describe('searchAwardsTool', () => {
@@ -1443,6 +1454,209 @@ describe('searchAwardsTool nested location filters (#109)', () => {
   );
 });
 
+/**
+ * Wiring of the contract filters, whose grammar and normalization are tabled once
+ * in tests/utils/filters.test.ts and whose award-type rule is tabled in
+ * tests/tools/search-awards-award-types.test.ts: flat and nested keys merge per
+ * field, reach the search and the total count under the same keys, are echoed as
+ * applied_* and named in the empty-result notice, and "" fails before the handler.
+ */
+describe('searchAwardsTool contract filters (#119)', () => {
+  type Result = Awaited<ReturnType<typeof runToolContract>>;
+  const KEYS = [
+    'extent_competed_type_codes',
+    'set_aside_type_codes',
+    'contract_pricing_type_codes',
+  ] as const;
+  const run = (args: Record<string, unknown>) =>
+    runToolContract(searchAwardsTool, { limit: 2, ...args });
+  const searchFilters = () =>
+    mockSearchAwards.mock.calls.at(-1)?.[0].filters as Record<string, unknown>;
+  /** The total count: the count request carrying the award type codes the search sent. */
+  const totalCountFilters = () =>
+    mockCountAwards.mock.calls.find(([filters]) => 'award_type_codes' in filters)?.[0] as Record<
+      string,
+      unknown
+    >;
+  const textOf = (result: Result) =>
+    markdownText(result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+
+  beforeEach(() => {
+    mockSearchAwards.mockReset();
+    mockSearchAwards.mockResolvedValue({
+      results: [
+        {
+          'Award ID': '70Z03325PSEAT0087',
+          generated_internal_id: 'CONT_AWD_70Z03325PSEAT0087_7008_-NONE-_-NONE-',
+        },
+      ],
+      page_metadata: { hasNext: false, page: 1 },
+    });
+    mockCountAwards.mockResolvedValue(contractCount(1));
+  });
+
+  it('sends the request it sent before the contract filters existed, when none is given', async () => {
+    const result = await run({
+      keyword: 'firewall',
+      psc_codes: ['7030'],
+      filters: {
+        naics_codes: ['541512'],
+        def_codes: ['z'],
+        time_period_start: '2024-10-01',
+        time_period_end: '2025-09-30',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const filters = {
+      keywords: ['firewall'],
+      award_type_codes: ['A', 'B', 'C', 'D'],
+      naics_codes: { require: ['541512'] },
+      psc_codes: ['7030'],
+      def_codes: ['Z'],
+      time_period: [{ start_date: '2024-10-01', end_date: '2025-09-30' }],
+    };
+    expect(mockSearchAwards.mock.calls[0]![0]).toEqual({
+      filters,
+      fields: expect.any(Array),
+      sort: 'Award Amount',
+      order: 'desc',
+      limit: 2,
+      page: 1,
+    });
+    expect(totalCountFilters()).toEqual(filters);
+    for (const key of KEYS) {
+      expect(result.structuredContent).not.toHaveProperty(`applied_${key}`);
+    }
+  });
+
+  it('sends flat codes uppercased under the same keys to the search and the total count, echoed on both surfaces', async () => {
+    const result = await run({
+      extent_competed_type_codes: ['f'],
+      set_aside_type_codes: ['sba', 'Sbp'],
+      contract_pricing_type_codes: ['j'],
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(searchFilters()).toEqual({
+      award_type_codes: ['A', 'B', 'C', 'D'],
+      extent_competed_type_codes: ['F'],
+      set_aside_type_codes: ['SBA', 'SBP'],
+      contract_pricing_type_codes: ['J'],
+    });
+    expect(totalCountFilters()).toEqual(searchFilters());
+    expect(result.structuredContent).toMatchObject({
+      applied_extent_competed_type_codes: 'F',
+      applied_set_aside_type_codes: 'SBA, SBP',
+      applied_contract_pricing_type_codes: 'J',
+    });
+    const raw = result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+    expect(raw).toContain('**applied_extent_competed_type_codes:** `F`\n');
+    expect(raw).toContain('**applied_set_aside_type_codes:** `SBA, SBP`\n');
+    expect(raw).toContain('**applied_contract_pricing_type_codes:** `J`\n');
+  });
+
+  it.each([
+    {
+      key: 'extent_competed_type_codes',
+      flat: ['a'],
+      nested: ['c', 'g'],
+      flatSent: ['A'],
+      nestedSent: ['C', 'G'],
+      flatEcho: 'A',
+      nestedEcho: 'C, G',
+    },
+    {
+      key: 'set_aside_type_codes',
+      flat: ['none'],
+      nested: ['sba', 'sbp'],
+      flatSent: ['NONE'],
+      nestedSent: ['SBA', 'SBP'],
+      flatEcho: 'NONE',
+      nestedEcho: 'SBA, SBP',
+    },
+    {
+      key: 'contract_pricing_type_codes',
+      flat: ['j'],
+      nested: ['y'],
+      flatSent: ['J'],
+      nestedSent: ['Y'],
+      flatEcho: 'J',
+      nestedEcho: 'Y',
+    },
+  ])(
+    'lets a nested $key win over the flat one, and an empty nested list fall back to it',
+    async (c) => {
+      const nestedWins = await run({ [c.key]: c.flat, filters: { [c.key]: c.nested } });
+
+      expect(nestedWins.isError).toBeFalsy();
+      expect(searchFilters()[c.key]).toEqual(c.nestedSent);
+      expect(totalCountFilters()[c.key]).toEqual(c.nestedSent);
+      expect(nestedWins.structuredContent).toMatchObject({ [`applied_${c.key}`]: c.nestedEcho });
+
+      mockSearchAwards.mockClear();
+      mockCountAwards.mockClear();
+      const fallsBack = await run({ [c.key]: c.flat, filters: { [c.key]: [] } });
+
+      expect(fallsBack.isError).toBeFalsy();
+      expect(searchFilters()[c.key]).toEqual(c.flatSent);
+      expect(totalCountFilters()[c.key]).toEqual(c.flatSent);
+      expect(fallsBack.structuredContent).toMatchObject({ [`applied_${c.key}`]: c.flatEcho });
+    },
+  );
+
+  it('sends no key and echoes nothing for empty flat and nested lists', async () => {
+    const empty = Object.fromEntries(KEYS.map((key) => [key, []]));
+    const result = await run({ ...empty, filters: empty });
+
+    expect(result.isError).toBeFalsy();
+    expect(searchFilters()).toEqual({ award_type_codes: ['A', 'B', 'C', 'D'] });
+    expect(totalCountFilters()).toEqual({ award_type_codes: ['A', 'B', 'C', 'D'] });
+    for (const key of KEYS) {
+      expect(result.structuredContent).not.toHaveProperty(`applied_${key}`);
+    }
+  });
+
+  it.each([
+    ['flat', { set_aside_type_codes: [''] }, 'set_aside_type_codes.0'],
+    [
+      'nested',
+      { filters: { contract_pricing_type_codes: ['J', ''] } },
+      'filters.contract_pricing_type_codes.1',
+    ],
+  ])('rejects a %s "" at argument validation, before any request', async (_label, args, path) => {
+    const result = await run(args);
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: -32602, data: { reason: 'invalid_arguments' } },
+    });
+    const text = textOf(result);
+    expect(text).toContain(path);
+    expect(text).toContain('Expected an FPDS code of 1–8 letters or digits');
+    expect(mockSearchAwards).not.toHaveBeenCalled();
+    expect(mockCountAwards).not.toHaveBeenCalled();
+  });
+
+  it('names the codes sent, an unknown one included, in the empty-result notice', async () => {
+    mockSearchAwards.mockResolvedValue({ results: [], page_metadata: { hasNext: false, page: 1 } });
+    mockCountAwards.mockResolvedValue(contractCount(0));
+
+    const result = await run({
+      psc_codes: ['7030'],
+      extent_competed_type_codes: ['zzz'],
+      filters: { set_aside_type_codes: ['sba'], contract_pricing_type_codes: ['j', 'y'] },
+    });
+
+    const notice =
+      'No awards match psc_codes=7030, extent_competed_type_codes=ZZZ, set_aside_type_codes=SBA, contract_pricing_type_codes=J,Y, types=A,B,C,D.';
+    expect(result.structuredContent).toMatchObject({
+      notice: `Results use USAspending's available coverage without a date filter. ${notice}`,
+    });
+    expect(textOf(result)).toContain(notice);
+  });
+});
+
 // --- #114: recipient IDs on rows, and the total from the count request ---
 
 describe('searchAwardsTool total count and recipient IDs (#114)', () => {
@@ -1524,8 +1738,8 @@ describe('searchAwardsTool total count and recipient IDs (#114)', () => {
       searchAwardsTool.input.parse({ keyword: 'hydrographic', location_filter: { state: 'WA' } }),
       createMockContext({ errors: searchAwardsTool.errors }),
     );
-    // The count left while the search was still in flight.
-    expect(mockCountAwards).toHaveBeenCalledTimes(1);
+    // The count left while the search was still in flight, first, beside the group count (#125).
+    expect(mockCountAwards).toHaveBeenCalledTimes(2);
     const after = Date.now();
     releaseSearch({ results: rows(1), page_metadata: lastPageMeta(1) });
     await pending;
@@ -1770,6 +1984,554 @@ describe('searchAwardsTool total count and recipient IDs (#114)', () => {
     expect(text).toContain('**No further pages reachable:**');
     expect(text).toContain('10,000 matching awards lie past it');
     expect(text).toContain('**Total matches:** 60,000');
+  });
+});
+
+// --- #125: matches per award-type group, from a count sent without award_type_codes ---
+
+describe('searchAwardsTool matches_by_group (#125)', () => {
+  type Result = Awaited<ReturnType<typeof runToolContract>>;
+  type Content = Record<string, unknown> & { page_metadata: Record<string, unknown> };
+  type Buckets = ReturnType<typeof contractCount>;
+  const contentOf = (result: Result) => result.structuredContent as Content;
+  const raw = (result: Result) =>
+    result.content.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ generated_internal_id: `CONT_AWD_${i}` }));
+  /**
+   * `keyword: "quantum computing"` across every group, as USAspending counted it on
+   * 2026-11-25. Frozen and answered as a copy, like NO_MATCHES; assertions on the
+   * output compare against QUANTUM_BY_GROUP, a separate literal, not this object.
+   */
+  const QUANTUM: Buckets = Object.freeze({
+    contracts: 41,
+    idvs: 0,
+    grants: 1_130,
+    direct_payments: 3,
+    loans: 6,
+    other: 1,
+  });
+  const QUANTUM_BY_GROUP = {
+    contracts: 41,
+    idvs: 0,
+    grants: 1_130,
+    direct_payments: 3,
+    loans: 6,
+    other: 1,
+  };
+  const QUANTUM_OTHERS =
+    'Other award-type groups match these filters: grants 1,130 (award_type_codes 02, 03, 04, 05, F001, F002), direct_payments 3 (award_type_codes 06, 10, F006, F007), loans 6 (award_type_codes 07, 08, F003, F004), other 1 (award_type_codes 09, 11, -1, F005, F008, F009, F010). Search one by setting award_type_codes to its codes.';
+  /** The count calls the handler made: the total count carries award_type_codes, the group count does not. */
+  const countCall = (kind: 'total' | 'group') =>
+    mockCountAwards.mock.calls.find(
+      ([filters]) => 'award_type_codes' in filters === (kind === 'total'),
+    );
+  /** Answers the total count with `total` and the group count with `groups`, each a value or a failure. */
+  const answerCounts = (total: Buckets | Error, groups: Buckets | Error) =>
+    mockCountAwards.mockImplementation(async (filters: Record<string, unknown>) => {
+      const answer = 'award_type_codes' in filters ? total : groups;
+      if (answer instanceof Error) throw answer;
+      return { ...answer };
+    });
+  const answerSearch = (n: number, hasNext = false, page = 1) =>
+    mockSearchAwards.mockResolvedValueOnce({ results: rows(n), page_metadata: { page, hasNext } });
+  const unavailable = () =>
+    serviceUnavailable('USAspending API is unavailable.', {
+      reason: 'api_unavailable',
+      retryable: true,
+    });
+  const late = () =>
+    new McpError(
+      JsonRpcErrorCode.Timeout,
+      'USAspending did not answer POST search/spending_by_award_count/ within its 10000ms deadline (one attempt, not retried).',
+      { reason: 'api_timeout', retryable: true },
+    );
+
+  beforeEach(() => {
+    mockSearchAwards.mockReset();
+  });
+
+  it('sends the total count the search filters and the group count the same filters without award_type_codes, beside the search, under one deadline', async () => {
+    let releaseSearch: (value: unknown) => void = () => undefined;
+    mockSearchAwards.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseSearch = resolve;
+      }),
+    );
+    answerCounts(contractCount(10), QUANTUM);
+    const ctx = createMockContext({ errors: searchAwardsTool.errors });
+
+    const pending = searchAwardsTool.handler(
+      searchAwardsTool.input.parse({
+        keyword: 'quantum computing',
+        award_type_codes: ['A', 'B'],
+        recipient_name: 'Acme',
+        naics_codes: ['541512'],
+        psc_codes: ['d302'],
+        def_codes: ['z'],
+        set_aside_type_codes: ['sba'],
+        location_filter: { state: 'WA' },
+        time_period: { start_date: '2024-10-01', end_date: '2025-09-30' },
+        filters: { recipient_location: { state: 'VA' } },
+      }),
+      ctx,
+    );
+    // Both counts left while the search was still in flight.
+    expect(mockCountAwards).toHaveBeenCalledTimes(2);
+    releaseSearch({ results: rows(1), page_metadata: { page: 1, hasNext: false } });
+    await pending;
+
+    const searchFilters = mockSearchAwards.mock.calls[0]![0].filters as Record<string, unknown>;
+    const { award_type_codes: codes, ...withoutCodes } = searchFilters;
+    // The search still sends its codes: removing them for the group count leaves the shared object whole.
+    expect(codes).toEqual(['A', 'B']);
+    const [totalFilters, totalCtx, totalDeadline] = countCall('total')!;
+    const [groupFilters, groupCtx, groupDeadline] = countCall('group')!;
+    expect(totalFilters).toBe(searchFilters);
+    expect(groupFilters).toEqual(withoutCodes);
+    expect(groupFilters).toMatchObject({
+      keywords: ['quantum computing'],
+      recipient_search_text: ['Acme'],
+      naics_codes: { require: ['541512'] },
+      psc_codes: ['D302'],
+      def_codes: ['Z'],
+      set_aside_type_codes: ['SBA'],
+      place_of_performance_locations: [{ country: 'USA', state: 'WA' }],
+      recipient_locations: [{ country: 'USA', state: 'VA' }],
+      time_period: [{ start_date: '2024-10-01', end_date: '2025-09-30' }],
+    });
+    // One deadline and one caller context (its cancellation) for both counts.
+    expect(groupDeadline).toBe(totalDeadline);
+    expect(groupCtx).toBe(totalCtx);
+  });
+
+  it('sends no group count, and discloses nothing, when award_type_codes is the only filter', async () => {
+    answerCounts(contractCount(5), QUANTUM);
+    answerSearch(5);
+
+    const result = await runToolContract(searchAwardsTool, { limit: 5 });
+
+    expect(result.isError).toBeFalsy();
+    expect(mockCountAwards).toHaveBeenCalledTimes(1);
+    expect(countCall('total')![0]).toEqual({ award_type_codes: ['A', 'B', 'C', 'D'] });
+    const sc = contentOf(result);
+    expect(sc.page_metadata).toMatchObject({ total: 5 });
+    expect(sc).not.toHaveProperty('matches_by_group');
+    expect(sc).not.toHaveProperty('unavailable_sections');
+    expect(sc.notice).toBe("Results use USAspending's available coverage without a date filter.");
+    expect(raw(result)).not.toContain('Matches by award-type group');
+  });
+
+  it.each([
+    {
+      label: 'award_type_codes span groups',
+      args: { keyword: 'quantum computing', award_type_codes: ['A', '02'] },
+      reason: 'upstream_error',
+    },
+    {
+      label: 'a contract filter meets assistance codes (#119)',
+      args: {
+        keyword: 'quantum computing',
+        award_type_codes: ['02'],
+        set_aside_type_codes: ['SBA'],
+      },
+      reason: 'contract_filters_type_mismatch',
+    },
+  ])('sends neither count when $label', async ({ args, reason }) => {
+    mockSearchAwards.mockRejectedValueOnce(
+      new McpError(
+        JsonRpcErrorCode.ValidationError,
+        'USAspending rejected POST search/spending_by_award/ (HTTP 422): award_type_codes span groups.',
+        { reason: 'upstream_error', retryable: false },
+      ),
+    );
+
+    const result = await runToolContract(searchAwardsTool, args);
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ error: { data: { reason } } });
+    expect(mockCountAwards).not.toHaveBeenCalled();
+  });
+
+  it('reports every group on both surfaces and names the other groups with matches, their counts, and codes', async () => {
+    answerCounts(contractCount(41), QUANTUM);
+    answerSearch(1, true);
+
+    const result = await runToolContract(searchAwardsTool, {
+      keyword: 'quantum computing',
+      limit: 1,
+    });
+
+    expect(result.isError).toBeFalsy();
+    const sc = contentOf(result);
+    expect(sc.matches_by_group).toEqual(QUANTUM_BY_GROUP);
+    expect(sc.page_metadata).toMatchObject({ total: 41, has_next: true });
+    expect(sc).toMatchObject({ totalCount: 41, truncated: true });
+    expect(sc.notice).toBe(
+      `41 awards match; this page ends at result 1. Request page 2 for more. Results use USAspending's available coverage without a date filter. ${QUANTUM_OTHERS}`,
+    );
+    const text = raw(result);
+    expect(text).toContain(
+      '**Matches by award-type group:** contracts 41 | idvs 0 | grants 1,130 | direct_payments 3 | loans 6 | other 1',
+    );
+    expect(text).toContain('**Total matches:** 41');
+    expect(markdownText(text)).toContain(QUANTUM_OTHERS);
+  });
+
+  it('names an IDV match after the empty-result notice of a contract search', async () => {
+    answerCounts(NO_MATCHES, { ...NO_MATCHES, idvs: 1 });
+    answerSearch(0);
+
+    const result = await runToolContract(searchAwardsTool, { keyword: 'HR001122D0001' });
+
+    const sc = contentOf(result);
+    expect(sc.results).toEqual([]);
+    expect(sc.page_metadata).toMatchObject({ total: 0, has_next: false });
+    expect(sc.matches_by_group).toEqual({
+      contracts: 0,
+      idvs: 1,
+      grants: 0,
+      direct_payments: 0,
+      loans: 0,
+      other: 0,
+    });
+    const others =
+      'Other award-type groups match these filters: idvs 1 (award_type_codes IDV_A, IDV_B, IDV_B_A, IDV_B_B, IDV_B_C, IDV_C, IDV_D, IDV_E). Search one by setting award_type_codes to its codes.';
+    expect(sc.notice).toBe(
+      `Results use USAspending's available coverage without a date filter. No awards match keyword="HR001122D0001", types=A,B,C,D. ${others}`,
+    );
+    expect(markdownText(raw(result))).toContain(others);
+  });
+
+  it('counts the whole selected group beside a total for part of it, never naming the selected group as another', async () => {
+    answerCounts(contractCount(10), QUANTUM);
+    answerSearch(10);
+
+    const result = await runToolContract(searchAwardsTool, {
+      keyword: 'quantum computing',
+      award_type_codes: ['A', 'B'],
+    });
+
+    const sc = contentOf(result);
+    expect(sc.page_metadata).toMatchObject({ total: 10, has_next: false });
+    expect(sc.matches_by_group).toEqual(QUANTUM_BY_GROUP);
+    expect(sc.notice).toContain(QUANTUM_OTHERS);
+    expect(sc.notice).not.toContain('contracts 41');
+    const text = raw(result);
+    expect(text).toContain('**Total matches:** 10');
+    expect(text).toContain('**Matches by award-type group:** contracts 41 |');
+  });
+
+  it('names contracts, and never grants, as another group on a grant search', async () => {
+    answerCounts({ ...NO_MATCHES, grants: 1_130 }, QUANTUM);
+    answerSearch(10, true);
+
+    const result = await runToolContract(searchAwardsTool, {
+      keyword: 'quantum computing',
+      award_type_codes: ['02', '03', '04', '05'],
+    });
+
+    const notice = contentOf(result).notice as string;
+    expect(notice).toContain(
+      'Other award-type groups match these filters: contracts 41 (award_type_codes A, B, C, D), direct_payments 3 (award_type_codes 06, 10, F006, F007), loans 6',
+    );
+    expect(notice).not.toContain('grants 1,130 (');
+  });
+
+  it('adds no other-group sentence when no other group matches', async () => {
+    answerCounts(contractCount(3), contractCount(3));
+    answerSearch(3);
+
+    const result = await runToolContract(searchAwardsTool, {
+      keyword: 'quantum computing',
+      limit: 5,
+    });
+
+    const sc = contentOf(result);
+    expect(sc.matches_by_group).toEqual(contractCount(3));
+    expect(sc.notice).toBe("Results use USAspending's available coverage without a date filter.");
+    expect(raw(result)).toContain(
+      '**Matches by award-type group:** contracts 3 | idvs 0 | grants 0 | direct_payments 0 | loans 0 | other 0',
+    );
+  });
+
+  it('keeps naming other groups on an empty page past the total', async () => {
+    answerCounts(contractCount(41), QUANTUM);
+    answerSearch(0, false, 9);
+
+    const result = await runToolContract(searchAwardsTool, {
+      keyword: 'quantum computing',
+      page: 9,
+      limit: 10,
+    });
+
+    expect(contentOf(result).notice).toBe(
+      `Results use USAspending's available coverage without a date filter. Page 9 is past the end of the 41 matching results. Request an earlier page with the same filters. ${QUANTUM_OTHERS}`,
+    );
+  });
+
+  it.each([
+    {
+      label: 'a late group count',
+      total: contractCount(41),
+      groups: late(),
+      sections: [
+        {
+          section: 'matches_by_group',
+          reason: 'api_timeout',
+          retryable: true,
+          message: late().message,
+        },
+      ],
+      partial:
+        'Partial result: matches_by_group (api_timeout) could not be fetched, so its fields are omitted. Retry the call to load matches_by_group.',
+    },
+    {
+      label: 'a failed total count',
+      total: unavailable(),
+      groups: QUANTUM,
+      sections: [
+        {
+          section: 'total',
+          reason: 'api_unavailable',
+          retryable: true,
+          message: 'USAspending API is unavailable.',
+        },
+      ],
+      partial:
+        'Partial result: total (api_unavailable) could not be fetched, so its fields are omitted. Retry the call to load total.',
+    },
+    {
+      label: 'both counts failing',
+      total: unavailable(),
+      groups: late(),
+      sections: [
+        {
+          section: 'total',
+          reason: 'api_unavailable',
+          retryable: true,
+          message: 'USAspending API is unavailable.',
+        },
+        {
+          section: 'matches_by_group',
+          reason: 'api_timeout',
+          retryable: true,
+          message: late().message,
+        },
+      ],
+      partial:
+        'Partial result: total (api_unavailable) and matches_by_group (api_timeout) could not be fetched, so their fields are omitted. Retry the call to load total and matches_by_group.',
+    },
+  ])(
+    'names only the section that failed on $label, leaving rows and paging to the total',
+    async (c) => {
+      answerCounts(c.total, c.groups);
+      answerSearch(5, true);
+
+      const result = await runToolContract(searchAwardsTool, {
+        keyword: 'quantum computing',
+        limit: 5,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const sc = contentOf(result);
+      expect(sc.results).toHaveLength(5);
+      expect(sc.unavailable_sections).toEqual(c.sections);
+      expect(sc.notice).toContain(c.partial);
+      const text = markdownText(raw(result));
+      expect(text).toContain('Unavailable sections:');
+      for (const s of c.sections) {
+        expect(text).toContain(`${s.section}: ${s.reason} (retryable) — ${s.message}`);
+      }
+      if (c.groups instanceof Error) {
+        expect(sc).not.toHaveProperty('matches_by_group');
+        expect(text).not.toContain('Matches by award-type group');
+      } else {
+        // The one case with a loaded group count answers QUANTUM.
+        expect(sc.matches_by_group).toEqual(QUANTUM_BY_GROUP);
+        expect(sc.notice).toContain(QUANTUM_OTHERS);
+      }
+      if (c.total instanceof Error) {
+        // The page-fullness rule, as before the group count existed.
+        expect(sc.page_metadata).not.toHaveProperty('total');
+        expect(sc).toMatchObject({ has_next: true, page_metadata: { has_next: true } });
+        expect(sc.notice).toContain('More results may remain');
+      } else {
+        // The same total, has_next, truncation, and paging guidance a loaded group count gives.
+        expect(sc.page_metadata).toMatchObject({ total: 41, has_next: true });
+        expect(sc).toMatchObject({ totalCount: 41, truncated: true, shown: 5, cap: 5 });
+        expect(sc.notice).toContain(
+          '41 awards match; this page ends at result 5. Request page 2 for more.',
+        );
+        expect(raw(result)).toContain('**Total matches:** 41');
+      }
+    },
+  );
+
+  it.each([
+    { label: 'the total count', hanging: 'total' as const },
+    { label: 'the group count', hanging: 'group' as const },
+  ])('rethrows a caller abort that lands while only $label is in flight', async ({ hanging }) => {
+    const caller = new AbortController();
+    answerSearch(1);
+    mockCountAwards.mockImplementation(
+      (filters: Record<string, unknown>, ctx: { signal: AbortSignal }) =>
+        'award_type_codes' in filters === (hanging === 'total')
+          ? new Promise((_resolve, reject) => {
+              ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason));
+            })
+          : Promise.resolve({ ...QUANTUM }),
+    );
+
+    const pending = searchAwardsTool.handler(
+      searchAwardsTool.input.parse({ keyword: 'quantum computing' }),
+      createMockContext({ errors: searchAwardsTool.errors, signal: caller.signal }),
+    );
+    await Promise.resolve();
+    caller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  describe('group count grace after the search and the total count', () => {
+    const GRACE_CUT =
+      'The count across award-type groups was still running 2 s after the search and the total count finished, so it was cut.';
+    let countSignals: Partial<Record<'total' | 'group', AbortSignal>>;
+    /**
+     * Answers the total count after `totalMs` and the group count after `groupMs`
+     * (never, when undefined); either leg rejects with its signal's reason once aborted.
+     */
+    const timeCounts = (totalMs: number, groupMs?: number) => {
+      countSignals = {};
+      mockCountAwards.mockImplementation(
+        (
+          filters: Record<string, unknown>,
+          _ctx: unknown,
+          _deadlineAt: number,
+          signal?: AbortSignal,
+        ) => {
+          const kind = 'award_type_codes' in filters ? 'total' : 'group';
+          if (signal) countSignals[kind] = signal;
+          const ms = kind === 'total' ? totalMs : groupMs;
+          return new Promise((resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason));
+            if (ms !== undefined) {
+              setTimeout(() => resolve(kind === 'total' ? contractCount(41) : { ...QUANTUM }), ms);
+            }
+          });
+        },
+      );
+    };
+    const run = () => {
+      let settled = false;
+      const pending = runToolContract(searchAwardsTool, {
+        keyword: 'quantum computing',
+        limit: 5,
+      }).finally(() => {
+        settled = true;
+      });
+      return { pending, settled: () => settled };
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('cuts a group count still running 2 s after the search and the total count, aborting its request', async () => {
+      timeCounts(1_000);
+      answerSearch(5, true);
+      const call = run();
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(call.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(call.settled()).toBe(true);
+
+      const result = await call.pending;
+      expect(result.isError).toBeFalsy();
+      const sc = contentOf(result);
+      expect(sc.results).toHaveLength(5);
+      expect(sc.page_metadata).toMatchObject({ total: 41, has_next: true });
+      expect(sc).not.toHaveProperty('matches_by_group');
+      expect(sc.unavailable_sections).toEqual([
+        { section: 'matches_by_group', reason: 'api_timeout', retryable: true, message: GRACE_CUT },
+      ]);
+      expect(sc.notice).toContain(
+        'Partial result: matches_by_group (api_timeout) could not be fetched, so its fields are omitted. Retry the call to load matches_by_group.',
+      );
+      expect(markdownText(raw(result))).toContain(
+        `matches_by_group: api_timeout (retryable) — ${GRACE_CUT}`,
+      );
+      expect(countSignals.group?.aborted).toBe(true);
+    });
+
+    it('keeps a group count answering within 2 s of the later of the search and the total count', async () => {
+      timeCounts(5_000, 6_900);
+      answerSearch(5, true);
+      const call = run();
+
+      await vi.advanceTimersByTimeAsync(6_900);
+      expect(call.settled()).toBe(true);
+
+      const sc = contentOf(await call.pending);
+      expect(sc.matches_by_group).toEqual(QUANTUM_BY_GROUP);
+      expect(sc.page_metadata).toMatchObject({ total: 41 });
+      expect(sc).not.toHaveProperty('unavailable_sections');
+    });
+
+    it('aborts both counts when the search fails, leaving no request behind', async () => {
+      timeCounts(5_000);
+      mockSearchAwards.mockRejectedValueOnce(unavailable());
+
+      const result = await runToolContract(searchAwardsTool, { keyword: 'quantum computing' });
+
+      expect(result.isError).toBe(true);
+      expect(countSignals.total?.aborted).toBe(true);
+      expect(countSignals.group?.aborted).toBe(true);
+    });
+  });
+
+  it('renders the group counts in format, and nothing for them when absent', () => {
+    const page_metadata = { has_next: false, page: 1, limit: 10, total: 2 };
+    const render = (result: Parameters<NonNullable<typeof searchAwardsTool.format>>[0]) =>
+      (searchAwardsTool.format!(result)[0] as { text: string }).text;
+
+    expect(
+      render({ results: [], page_metadata, matches_by_group: { ...QUANTUM, grants: 2_000_000 } }),
+    ).toContain(
+      '**Matches by award-type group:** contracts 41 | idvs 0 | grants 2,000,000 | direct_payments 3 | loans 6 | other 1',
+    );
+    expect(render({ results: [], page_metadata })).not.toContain('Matches by award-type group');
+  });
+
+  it('describes total as the awards of the call’s award_type_codes, and each section by the count that fills it', () => {
+    const total = searchAwardsTool.output.shape.page_metadata.shape.total;
+    const output = z.toJSONSchema(
+      z.object({ ...searchAwardsTool.output.shape, ...searchAwardsTool.enrichment }),
+      { io: 'output' },
+    ) as {
+      properties: Record<
+        string,
+        { items?: { properties: Record<string, { description?: string }> } }
+      >;
+    };
+    const section = output.properties.unavailable_sections?.items?.properties.section?.description;
+
+    // A partial group (["A","B"]) totals below its group's matches_by_group entry, so neither
+    // description may call total "every match in the selected award-type group".
+    expect(searchAwardsTool.description).not.toContain(
+      'every match in the selected award-type group',
+    );
+    expect(total.description).toContain('award_type_codes');
+    expect(total.description).not.toContain('selected award-type group');
+    // Two counts run, so "the count request" names neither.
+    expect(section).not.toContain('the count request');
+    expect(total.description).not.toContain('the count request');
+    expect(searchAwardsTool.output.shape.matches_by_group.description).toContain('can exceed');
   });
 });
 

@@ -42,6 +42,9 @@ export const searchRecipientsTool = tool('usaspending_search_recipients', {
       ),
   }),
 
+  // Sibling tools' names for the same text: usaspending_search_awards `recipient_name`, usaspending_autocomplete_filters `search_text`.
+  inputAliases: { name: 'keyword', recipient_name: 'keyword', search_text: 'keyword' },
+
   output: z.object({
     period: z.literal('trailing 12 months').describe('Window the obligation snapshot covers'),
     results: z

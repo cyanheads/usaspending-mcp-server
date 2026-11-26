@@ -3,7 +3,10 @@
  * @module tests/tools/search-recipients.tool.test
  */
 
+import { tool } from '@cyanheads/mcp-ts-core';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import type { AnyToolDefinition } from '@cyanheads/mcp-ts-core/tools';
+import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { searchRecipientsTool } from '@/mcp-server/tools/definitions/search-recipients.tool.js';
 import { advertisedProperty, loadWithClampLimits } from '../helpers/clamp-mode.js';
@@ -14,6 +17,144 @@ const mockSearchRecipients = vi.fn();
 vi.mock('@/services/usaspending/usaspending-service.js', () => ({
   getUSASpendingService: () => ({ searchRecipients: mockSearchRecipients }),
 }));
+
+/**
+ * Sibling tools' spellings of the recipient name (#134): `recipient_name` is the
+ * usaspending_search_awards filter, `search_text` the usaspending_autocomplete_filters
+ * field. Each call runs through the framework's argument parse, where the rewrite and
+ * the alias-beside-target rejection happen.
+ */
+describe('keyword aliases (#134)', () => {
+  afterEach(() => {
+    mockSearchRecipients.mockReset();
+  });
+
+  const text = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    result.content.map((b) => ('text' in b ? b.text : '')).join('\n');
+  const page = {
+    results: [
+      { id: 'caci-1-P', name: 'CACI INTERNATIONAL INC', uei: 'CACIAAAAAAAA', amount: 12 },
+      { id: 'caci-2-C', name: 'CACI, INC. - FEDERAL', amount: 7 },
+    ],
+    page_metadata: { page: 1, total: 1311, hasNext: true },
+  };
+
+  it.each(['name', 'recipient_name', 'search_text'])(
+    '%s returns the rows and page_metadata keyword returns, sending keyword upstream',
+    async (alias) => {
+      mockSearchRecipients.mockResolvedValue(page);
+
+      const canonical = await runToolContract(searchRecipientsTool, { keyword: 'CACI' });
+      const aliased = await runToolContract(searchRecipientsTool, { [alias]: 'CACI' } as never);
+
+      expect(aliased.isError).toBeFalsy();
+      expect(mockSearchRecipients.mock.calls.map((call) => call[0])).toEqual([
+        { keyword: 'CACI', limit: 10, page: 1 },
+        { keyword: 'CACI', limit: 10, page: 1 },
+      ]);
+      expect(aliased.structuredContent).toEqual(canonical.structuredContent);
+      expect(aliased.structuredContent).toMatchObject({
+        results: [{ id: 'caci-1-P' }, { id: 'caci-2-C' }],
+        page_metadata: { page: 1, total: 1311, has_next: true, limit: 10 },
+      });
+      expect(text(aliased)).toBe(text(canonical));
+    },
+  );
+
+  it.each(['name', 'recipient_name', 'search_text'])(
+    'rejects %s sent beside keyword, naming it as an alias, before the handler',
+    async (alias) => {
+      const result = await runToolContract(searchRecipientsTool, {
+        keyword: 'CACI',
+        [alias]: 'CACI',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({ error: { code: -32602 } });
+      expect(text(result)).toContain(
+        `${alias} is an alias of keyword; send one of them, not both.`,
+      );
+      expect(mockSearchRecipients).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still rejects an undeclared key by name', async () => {
+    const result = await runToolContract(searchRecipientsTool, { recipient: 'CACI' } as never);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('recipient');
+    expect(text(result)).toMatch(/Unrecognized key/);
+    expect(mockSearchRecipients).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The `inputSchema` `tools/list` returns for one tool, from a server built on that
+   * definition alone: the framework's Worker handler registers it as `createApp()` does,
+   * and the SDK answers a stateless 2026-07-28 `tools/list` request.
+   */
+  const advertisedInputSchema = async (definition: AnyToolDefinition) => {
+    // The handler marks the process serverless and HTTP and copies LOG_LEVEL in.
+    for (const name of ['IS_SERVERLESS', 'MCP_TRANSPORT_TYPE', 'MCP_LOG_LEVEL']) {
+      vi.stubEnv(name, undefined);
+    }
+    try {
+      const worker = createWorkerHandler({ name: 'usaspending-mcp-server', tools: [definition] });
+      const response = await worker.fetch(
+        new Request('http://localhost/mcp', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            'MCP-Protocol-Version': '2026-07-28',
+            'Mcp-Method': 'tools/list',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/list',
+            params: {
+              _meta: {
+                'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+                'io.modelcontextprotocol/clientCapabilities': {},
+              },
+            },
+          }),
+        }),
+        { LOG_LEVEL: 'error' },
+        { waitUntil: () => undefined, passThroughOnException: () => undefined },
+      );
+      const { result } = (await response.json()) as {
+        result: { tools: { name: string; inputSchema: Record<string, unknown> }[] };
+      };
+      expect(result.tools.map((t) => t.name)).toEqual([definition.name]);
+      return result.tools[0]!.inputSchema;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  };
+
+  it('advertises in tools/list the inputSchema the same tool advertises without aliases, with no alias property', async () => {
+    const { inputAliases, ...rest } = searchRecipientsTool;
+    expect(inputAliases).toEqual({
+      name: 'keyword',
+      recipient_name: 'keyword',
+      search_text: 'keyword',
+    });
+
+    const schema = await advertisedInputSchema(searchRecipientsTool);
+
+    expect(schema).toEqual(await advertisedInputSchema(tool(searchRecipientsTool.name, rest)));
+    // The declared keys alone: no alias (name, recipient_name, search_text) is advertised.
+    expect(Object.keys(schema.properties as object)).toEqual([
+      'keyword',
+      'award_type',
+      'limit',
+      'page',
+    ]);
+    expect(schema.required).toEqual(['keyword']);
+    expect(schema.additionalProperties).toBe(false);
+  });
+});
 
 /**
  * Wiring of the shared count-limit mechanism (full table in

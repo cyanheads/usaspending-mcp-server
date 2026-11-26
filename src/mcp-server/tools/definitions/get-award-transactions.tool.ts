@@ -12,11 +12,8 @@ import { AWARD_TYPE_CODES } from './filters.js';
 import { formatCurrency } from './formatting.js';
 import { formatPaginationLine } from './pagination.js';
 
-/**
- * Below the upstream's 5,000-row page maximum: tiled from the heaviest award sampled,
- * 5,000 rows measure about 2.2 MB / 2.0 MB per surface and 2,000 rows about 875 KB / 786 KB.
- */
-const LIMIT = countLimit({ tool: 'usaspending_get_award_transactions', default: 10, cap: 2000 });
+/** The `transactions/` page maximum: upstream answers `limit` 5,001 with HTTP 422. */
+const LIMIT = countLimit({ tool: 'usaspending_get_award_transactions', default: 10, cap: 5000 });
 
 export const getAwardTransactionsTool = tool('usaspending_get_award_transactions', {
   title: 'Get Award Transactions',
@@ -34,7 +31,7 @@ export const getAwardTransactionsTool = tool('usaspending_get_award_transactions
       .default('action_date')
       .describe('Sort field for transactions'),
     order: z.enum(['asc', 'desc']).default('desc').describe('Sort direction'),
-    limit: LIMIT.schema.describe('Transactions per page. Default 10, at most 2,000 per call.'),
+    limit: LIMIT.schema.describe('Transactions per page. Default 10, at most 5,000 per call.'),
     page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
   }),
 

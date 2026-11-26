@@ -4,7 +4,7 @@ description: Use with usaspending_* tools to trace federal awards through recipi
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.3"
+  version: "1.4"
 ---
 
 ## Scope
@@ -21,11 +21,13 @@ Preserve identifiers returned at each hop rather than constructing them from dis
 
 ## Gates
 
-Before comparing amounts across tools, fix the award types, period, recipient hierarchy, geographic scope, and measure being compared. Search and time series default to contracts; an unfiltered geography query covers every award type. Do not compare their defaults as if they describe the same population.
+Before comparing amounts across tools, fix the award types, period, recipient hierarchy, geographic scope, and measure being compared. Search and time series default to contracts; an unfiltered geography query covers every award type. Do not compare their defaults as if they describe the same population. A contracts search says nothing about grants or loans: use the `matches_by_group` counts and the notice naming the other groups with matches and their `award_type_codes` as the cross-group check. A filter only some groups carry (NAICS, PSC, the contract filters, assistance listings) zeroes the others, and a partial `award_type_codes` selection can leave `page_metadata.total` below its group's `matches_by_group` entry.
 
 Before treating an empty ID-keyed listing as evidence of no activity, confirm the award or account with its detail tool. A nonexistent ID can also return an empty listing. Check pagination and response notices before describing any result as exhaustive.
 
-Before interpreting an agency-filtered zero, check whether the response verified the agency name. An unresolved-name notice means zero spending does not establish that the agency had no activity; use the agency lookup to confirm the intended name.
+Before interpreting an agency-filtered zero, check whether the response verified the agency name. An unresolved-name notice means zero spending does not establish that the agency had no activity; use the agency lookup to confirm the intended name. The awarding and funding roles resolve in separate directories: confirm `agency_name` with usaspending_autocomplete_filters `type=awarding_agency` and `funding_agency_name` with `type=funding_agency`, never one role's match in the other.
+
+Before reading a contract-filter zero (`extent_competed_type_codes`, `set_aside_type_codes`, `contract_pricing_type_codes` on usaspending_search_awards), remember the codes are free FPDS strings and an unknown or misspelled one matches nothing without an error. Take them from the `competition` and `contract_pricing` codes of usaspending_get_award, and check the echoed `applied_*` codes. Contracts and IDVs only; most recent contracts carry no set-aside code at all.
 
 Before attributing a matching award's amount to an Assistance Listing or DEF code, inspect the award's listing obligations or DEF funding breakdown. These filters select matching awards; the returned whole-award amount is not the requested listing's or code's share.
 

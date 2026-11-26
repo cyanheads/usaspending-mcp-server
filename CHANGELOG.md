@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.7.4](changelog/0.7.x/0.7.4.md) — 2026-11-25
+
+Award search filters by extent competed, set-aside, and contract pricing codes and reports matches in every award-type group. Award detail adds executive compensation, offices, and assistance cost share. Funding agency names resolve against the funding directory.
+
 ## [0.7.3](changelog/0.7.x/0.7.3.md) — 2026-11-13
 
 Filter awards and spending by funding agency, look up DEF codes by title or public law, and get all-year recipient totals. Agency detail aligns DEF codes with the budget year, and spending results explain their applied scope.

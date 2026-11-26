@@ -79,6 +79,8 @@ export interface RawAwardDetail {
     amount?: number | null;
   }> | null;
   awarding_agency?: {
+    /** The awarding office (e.g. "DENVER FED CENTER"); sent on contracts and assistance alike. */
+    office_agency_name?: string | null;
     toptier_agency?: {
       name?: string | null;
       abbreviation?: string | null;
@@ -102,6 +104,10 @@ export interface RawAwardDetail {
   }> | null;
   date_signed?: string | null;
   description?: string | null;
+  /**
+   * The recipient's five highest-compensated officers. Always five rows; an unreported
+   * officer arrives as `{ name: null, amount: null }`.
+   */
   executive_details?: {
     officers?: Array<{
       name?: string | null;
@@ -110,6 +116,8 @@ export interface RawAwardDetail {
   } | null;
   fain?: string | null;
   funding_agency?: {
+    /** The funding office; may differ from the awarding office. */
+    office_agency_name?: string | null;
     toptier_agency?: {
       name?: string | null;
       abbreviation?: string | null;
@@ -121,6 +129,15 @@ export interface RawAwardDetail {
       abbreviation?: string | null;
       code?: string | null;
     } | null;
+  } | null;
+  /**
+   * Assistance only; absent on contracts and IDVs. Loans and direct payments send both
+   * members null; grants may send "NOT APPLICABLE", or a fixed sentence as `goals` that
+   * says no goals text exists.
+   */
+  funding_opportunity?: {
+    number?: string | null;
+    goals?: string | null;
   } | null;
   generated_unique_award_id?: string | null;
   id?: number | null;
@@ -145,6 +162,10 @@ export interface RawAwardDetail {
     /** A digit string (e.g. "4") on most records. */
     number_of_offers_received?: string | null;
   } | null;
+  /**
+   * Assistance only; absent on contracts and IDVs, and a placeholder 0 on loans.
+   */
+  non_federal_funding?: number | null;
   parent_award?: {
     agency_name?: string | null;
     agency_slug?: string | null;
@@ -203,6 +224,11 @@ export interface RawAwardDetail {
   subaward_count?: number | null;
   total_account_obligation?: number | null;
   total_account_outlay?: number | null;
+  /**
+   * `total_obligation` plus `non_federal_funding` (assistance only; absent on contracts
+   * and IDVs, a placeholder 0 on loans).
+   */
+  total_funding?: number | null;
   total_loan_value?: number | null;
   total_obligation?: number | null;
   total_outlay?: number | null;

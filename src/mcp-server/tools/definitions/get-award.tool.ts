@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import type { RawAwardDetail } from '@/services/usaspending/types.js';
 import { getUSASpendingService } from '@/services/usaspending/usaspending-service.js';
 import { formatCurrency } from './formatting.js';
 
@@ -48,10 +49,53 @@ const codedValue = (what: string, meaning: string) =>
 const codeLine = (value: { code?: string | undefined; description?: string | undefined }) =>
   escapeMarkdownInline([value.code, value.description].filter(Boolean).join(' — '));
 
+/** The awarding or funding agency hierarchy upstream sends, with its office. */
+const agencyHierarchy = (agency: RawAwardDetail['awarding_agency']) =>
+  compact({
+    toptier_name: agency?.toptier_agency?.name,
+    toptier_code: agency?.toptier_agency?.code,
+    toptier_slug: agency?.toptier_agency?.slug,
+    subtier_name: agency?.subtier_agency?.name,
+    subtier_code: agency?.subtier_agency?.code,
+    subtier_abbreviation: agency?.subtier_agency?.abbreviation,
+    office_name: agency?.office_agency_name,
+  });
+
+/** Renders one agency hierarchy: `TOP / SUB (ABBR) (code: X) (sub-tier code: Y) (slug: Z)`. */
+const agencyLine = (agency: {
+  toptier_name?: string | undefined;
+  toptier_code?: string | undefined;
+  toptier_slug?: string | undefined;
+  subtier_name?: string | undefined;
+  subtier_code?: string | undefined;
+  subtier_abbreviation?: string | undefined;
+}) =>
+  `${escapeMarkdownInline(agency.toptier_name ?? 'N/A')}${agency.subtier_name ? ` / ${escapeMarkdownInline(agency.subtier_name)}` : ''}${agency.subtier_abbreviation ? ` (${escapeMarkdownInline(agency.subtier_abbreviation)})` : ''}${agency.toptier_code ? ` (code: ${escapeMarkdownInline(agency.toptier_code)})` : ''}${agency.subtier_code ? ` (sub-tier code: ${escapeMarkdownInline(agency.subtier_code)})` : ''}${agency.toptier_slug ? ` (slug: ${escapeMarkdownInline(agency.toptier_slug)})` : ''}`;
+
+/** Sent for a funding-opportunity member that does not apply to the award. */
+const NOT_APPLICABLE = 'NOT APPLICABLE';
+
+/** Sent as `goals` for an opportunity issued before the goals element existed: no goals text exists. */
+const NO_GOALS_TEXT =
+  'THE FUNDING OPPORTUNITY WAS ISSUED PRIOR TO THE AVAILABILITY OF THE FUNDING OPPORTUNITY GOALS TEXT DATA ELEMENT';
+
+/**
+ * The value as sent, or undefined when it is null, blank, or one of `placeholders`
+ * (compared trimmed and case-insensitively).
+ */
+function reported(
+  value: string | null | undefined,
+  placeholders: readonly string[],
+): string | undefined {
+  if (value == null) return;
+  const normalized = value.trim().toUpperCase();
+  return normalized && !placeholders.includes(normalized) ? value : undefined;
+}
+
 export const getAwardTool = tool('usaspending_get_award', {
   title: 'Get Award Details',
   description:
-    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient identity (UEI, parent organization, business categories), agency hierarchy, period of performance, place of performance with its county code, Assistance Listings with the obligation under each, loan face value and subsidy cost for loans, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count and total. For contracts and IDVs it also returns competition (extent competed, solicitation procedure, set-aside, the authority for not competing, the fair-opportunity status of an order under a multiple-award IDV, offers received) and contract_pricing. Use generated_internal_id values from usaspending_search_awards as input. Recipient and parent recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters, Assistance Listing numbers in its assistance_listings filter, and the place of performance county_code with state_code in its location_filter. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
+    'Fetch full details of a federal award by its generated unique award ID. Returns contract or assistance award data including recipient identity (UEI, parent organization, business categories, executive compensation), the awarding and funding agency hierarchy with each office, period of performance, place of performance with its county code, Assistance Listings with the obligation under each, loan face value and subsidy cost for loans, cost share (non_federal_funding, total_funding) and the funding opportunity for assistance awards that report them, funding account linkages (account_obligations_by_defc), parent IDV information, and subaward count and total. For contracts and IDVs it also returns competition (extent competed, solicitation procedure, set-aside, the authority for not competing, the fair-opportunity status of an order under a multiple-award IDV, offers received) and contract_pricing. Use generated_internal_id values from usaspending_search_awards as input. Recipient and parent recipient hashes can be passed to usaspending_get_recipient; NAICS codes can be used in usaspending_search_awards filters, Assistance Listing numbers in its assistance_listings filter, and the place of performance county_code with state_code in its location_filter. For IDV-category awards (category="idv"), use usaspending_get_idv_awards to list the child contracts and task/delivery orders placed under them.',
   annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
 
   input: z.object({
@@ -100,6 +144,18 @@ export const getAwardTool = tool('usaspending_get_award', {
       .optional()
       .describe(
         'Estimated cost to the government of the loan subsidy in USD (category "loans" only)',
+      ),
+    non_federal_funding: z
+      .number()
+      .optional()
+      .describe(
+        'Non-federal (recipient cost-share) funding in USD, zero kept; assistance awards only, and absent on loans, which report a placeholder 0',
+      ),
+    total_funding: z
+      .number()
+      .optional()
+      .describe(
+        'Federal plus non-federal funding in USD: total_obligation + non_federal_funding; assistance awards only, and absent on loans, which report a placeholder 0',
       ),
     subaward_count: z
       .number()
@@ -187,6 +243,19 @@ export const getAwardTool = tool('usaspending_get_award', {
           })
           .optional()
           .describe('Recipient address; absent when upstream reports no location fields'),
+        executive_compensation: z
+          .array(
+            z
+              .object({
+                name: z.string().optional().describe('Officer name as upstream sends it'),
+                amount: z.number().optional().describe('Total compensation in USD'),
+              })
+              .describe('One highly compensated officer'),
+          )
+          .optional()
+          .describe(
+            "The recipient's highest-compensated officers in upstream order. It describes the recipient, so every award to that recipient carries the same list; absent when upstream reports no officer.",
+          ),
       })
       .optional()
       .describe('Recipient details'),
@@ -196,6 +265,17 @@ export const getAwardTool = tool('usaspending_get_award', {
         toptier_code: z.string().optional().describe('Top-tier agency code'),
         toptier_slug: z.string().optional().describe('Top-tier agency slug'),
         subtier_name: z.string().optional().describe('Sub-tier agency name'),
+        subtier_code: z.string().optional().describe('Sub-tier agency code, e.g. 7529'),
+        subtier_abbreviation: z
+          .string()
+          .optional()
+          .describe('Sub-tier agency abbreviation, e.g. NIH'),
+        office_name: z
+          .string()
+          .optional()
+          .describe(
+            'Awarding office within the sub-tier, e.g. NIH National Institute of Allergy and Infectious Diseases',
+          ),
       })
       .optional()
       .describe('Awarding agency hierarchy'),
@@ -203,7 +283,23 @@ export const getAwardTool = tool('usaspending_get_award', {
       .object({
         toptier_name: z.string().optional().describe('Top-tier funding agency name'),
         toptier_code: z.string().optional().describe('Top-tier funding agency code'),
+        toptier_slug: z
+          .string()
+          .optional()
+          .describe('Same as awarding_agency.toptier_slug, for the funding agency.'),
         subtier_name: z.string().optional().describe('Sub-tier funding agency name'),
+        subtier_code: z
+          .string()
+          .optional()
+          .describe('Same as awarding_agency.subtier_code, for the funding sub-tier.'),
+        subtier_abbreviation: z
+          .string()
+          .optional()
+          .describe('Same as awarding_agency.subtier_abbreviation, for the funding sub-tier.'),
+        office_name: z
+          .string()
+          .optional()
+          .describe('Funding office; may differ from awarding_agency.office_name.'),
       })
       .optional()
       .describe('Funding agency hierarchy'),
@@ -296,6 +392,15 @@ export const getAwardTool = tool('usaspending_get_award', {
       .optional()
       .describe(
         'Every Assistance Listing (CFDA program) funding the award, in upstream order; absent for contracts and IDVs',
+      ),
+    funding_opportunity: z
+      .object({
+        number: z.string().optional().describe('Funding opportunity number, e.g. PA-24-254'),
+        goals: z.string().optional().describe('Funding opportunity goals text'),
+      })
+      .optional()
+      .describe(
+        'The funding opportunity the assistance award was made under. Upstream placeholders (NOT APPLICABLE, and the sentence saying no goals text exists) are dropped; absent when nothing remains.',
       ),
     account_outlays_by_defc: z
       .array(
@@ -428,24 +533,27 @@ export const getAwardTool = tool('usaspending_get_award', {
       parent_uei: rcp?.parent_recipient_uei,
       parent_recipient_id: rcp?.parent_recipient_hash,
     });
+    // Upstream always sends five rows; unreported officers are all-null rows.
+    const executiveCompensation = (r.executive_details?.officers ?? []).flatMap((officer) => {
+      const entry = compact({ name: officer.name, amount: officer.amount });
+      return entry ? [entry] : [];
+    });
     const recipient =
-      recipientIdentity || businessCategories || recipientLocation
+      recipientIdentity || businessCategories || recipientLocation || executiveCompensation.length
         ? {
             ...recipientIdentity,
             ...(businessCategories ? { business_categories: businessCategories } : {}),
             ...(recipientLocation ? { location: recipientLocation } : {}),
+            ...(executiveCompensation.length
+              ? { executive_compensation: executiveCompensation }
+              : {}),
           }
         : undefined;
-    const awardingAgency = compact({
-      toptier_name: r.awarding_agency?.toptier_agency?.name,
-      toptier_code: r.awarding_agency?.toptier_agency?.code,
-      toptier_slug: r.awarding_agency?.toptier_agency?.slug,
-      subtier_name: r.awarding_agency?.subtier_agency?.name,
-    });
-    const fundingAgency = compact({
-      toptier_name: r.funding_agency?.toptier_agency?.name,
-      toptier_code: r.funding_agency?.toptier_agency?.code,
-      subtier_name: r.funding_agency?.subtier_agency?.name,
+    const awardingAgency = agencyHierarchy(r.awarding_agency);
+    const fundingAgency = agencyHierarchy(r.funding_agency);
+    const fundingOpportunity = compact({
+      number: reported(r.funding_opportunity?.number, [NOT_APPLICABLE]),
+      goals: reported(r.funding_opportunity?.goals, [NOT_APPLICABLE, NO_GOALS_TEXT]),
     });
     const parentAward = compact({
       award_id: r.parent_award?.piid,
@@ -461,7 +569,7 @@ export const getAwardTool = tool('usaspending_get_award', {
       });
       return entry ? [entry] : [];
     });
-    // Non-loan awards carry placeholder zeros in these fields.
+    // Non-loans carry placeholder zeros in the loan fields; loans carry them in the cost-share fields.
     const isLoan = r.category === 'loans';
     const accountOutlays = (r.account_outlays_by_defc ?? []).flatMap((row) => {
       const entry = compact({ code: row.code, amount: row.amount });
@@ -499,6 +607,10 @@ export const getAwardTool = tool('usaspending_get_award', {
       ...(isLoan && typeof r.total_subsidy_cost === 'number'
         ? { total_subsidy_cost: r.total_subsidy_cost }
         : {}),
+      ...(!isLoan && typeof r.non_federal_funding === 'number'
+        ? { non_federal_funding: r.non_federal_funding }
+        : {}),
+      ...(!isLoan && typeof r.total_funding === 'number' ? { total_funding: r.total_funding } : {}),
       ...(typeof r.subaward_count === 'number' ? { subaward_count: r.subaward_count } : {}),
       ...(typeof r.total_subaward_amount === 'number'
         ? { total_subaward_amount: r.total_subaward_amount }
@@ -533,6 +645,7 @@ export const getAwardTool = tool('usaspending_get_award', {
       ...(contractPricing ? { contract_pricing: contractPricing } : {}),
       ...(competition ? { competition } : {}),
       ...(assistanceListings.length ? { assistance_listings: assistanceListings } : {}),
+      ...(fundingOpportunity ? { funding_opportunity: fundingOpportunity } : {}),
       ...(r.account_obligations_by_defc?.length
         ? {
             account_obligations_by_defc: r.account_obligations_by_defc
@@ -576,6 +689,10 @@ export const getAwardTool = tool('usaspending_get_award', {
       lines.push(`**Total Loan Value:** ${formatCurrency(result.total_loan_value)}`);
     if (typeof result.total_subsidy_cost === 'number')
       lines.push(`**Total Subsidy Cost:** ${formatCurrency(result.total_subsidy_cost)}`);
+    if (typeof result.non_federal_funding === 'number')
+      lines.push(`**Non-Federal Funding:** ${formatCurrency(result.non_federal_funding)}`);
+    if (typeof result.total_funding === 'number')
+      lines.push(`**Total Funding:** ${formatCurrency(result.total_funding)}`);
     if (result.date_signed)
       lines.push(`**Date Signed:** ${escapeMarkdownInline(result.date_signed)}`);
 
@@ -639,19 +756,30 @@ export const getAwardTool = tool('usaspending_get_award', {
         if (loc.county_code)
           lines.push(`**Recipient County Code:** ${escapeMarkdownInline(loc.county_code)}`);
       }
+      if (result.recipient.executive_compensation?.length) {
+        lines.push('**Executive Compensation:**');
+        for (const officer of result.recipient.executive_compensation)
+          lines.push(
+            `- ${escapeMarkdownInline(officer.name ?? 'N/A')}${typeof officer.amount === 'number' ? `: ${formatCurrency(officer.amount)}` : ''}`,
+          );
+      }
     }
 
+    // A blank line ends the recipient's officer list, so neither agency line continues it.
+    if (result.awarding_agency || result.funding_agency) lines.push('');
     if (result.awarding_agency) {
-      const a = result.awarding_agency;
-      lines.push(
-        `\n**Awarding Agency:** ${escapeMarkdownInline(a.toptier_name ?? 'N/A')}${a.subtier_name ? ` / ${escapeMarkdownInline(a.subtier_name)}` : ''}${a.toptier_code ? ` (code: ${escapeMarkdownInline(a.toptier_code)})` : ''}${a.toptier_slug ? ` (slug: ${escapeMarkdownInline(a.toptier_slug)})` : ''}`,
-      );
+      lines.push(`**Awarding Agency:** ${agencyLine(result.awarding_agency)}`);
+      if (result.awarding_agency.office_name)
+        lines.push(
+          `**Awarding Office:** ${escapeMarkdownInline(result.awarding_agency.office_name)}`,
+        );
     }
     if (result.funding_agency) {
-      const f = result.funding_agency;
-      lines.push(
-        `**Funding Agency:** ${escapeMarkdownInline(f.toptier_name ?? 'N/A')}${f.subtier_name ? ` / ${escapeMarkdownInline(f.subtier_name)}` : ''}${f.toptier_code ? ` (code: ${escapeMarkdownInline(f.toptier_code)})` : ''}`,
-      );
+      lines.push(`**Funding Agency:** ${agencyLine(result.funding_agency)}`);
+      if (result.funding_agency.office_name)
+        lines.push(
+          `**Funding Office:** ${escapeMarkdownInline(result.funding_agency.office_name)}`,
+        );
     }
 
     if (result.naics)
@@ -694,6 +822,13 @@ export const getAwardTool = tool('usaspending_get_award', {
           `- **${escapeMarkdownInline(l.number ?? 'N/A')}**${l.title ? ` — ${escapeMarkdownInline(l.title)}` : ''}${typeof l.obligation === 'number' ? `: ${formatCurrency(l.obligation)}` : ''}`,
         );
       }
+    }
+
+    if (result.funding_opportunity) {
+      const o = result.funding_opportunity;
+      lines.push('\n### Funding Opportunity');
+      if (o.number) lines.push(`**Number:** ${escapeMarkdownInline(o.number)}`);
+      if (o.goals) lines.push(`**Goals:** ${escapeMarkdownInline(o.goals)}`);
     }
 
     if (result.parent_award) {

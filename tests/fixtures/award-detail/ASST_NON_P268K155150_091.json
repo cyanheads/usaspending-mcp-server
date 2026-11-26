@@ -101,6 +101,30 @@
       "foreign_province": null
     }
   },
+  "executive_details": {
+    "officers": [
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      }
+    ]
+  },
   "place_of_performance": {
     "location_country_code": "USA",
     "country_name": "UNITED STATES",
@@ -118,5 +142,9 @@
     "foreign_province": null,
     "foreign_postal_code": null
   },
-  "total_outlay": null
+  "total_outlay": null,
+  "funding_opportunity": {
+    "number": null,
+    "goals": null
+  }
 }

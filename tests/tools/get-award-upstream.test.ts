@@ -3,7 +3,8 @@
  * the real USAspending service, with `globalThis.fetch` serving award-detail
  * records captured from the live API (`tests/fixtures/award-detail/`, long prose
  * fields trimmed). Covers the variable record shape across grant, multi-listing
- * grant, loan, contract, and IDV awards, plus records with null or absent blocks.
+ * grant, cost-share grant, loan, contract, and IDV awards, plus records with null or
+ * absent blocks.
  * @module tests/tools/get-award-upstream.test
  */
 
@@ -24,6 +25,7 @@ const BASE = 'https://api.usaspending.gov/api/v2/';
 
 const GRANT = 'ASST_NON_R24AP00702_014';
 const MULTI_LISTING_GRANT = 'ASST_NON_UM1AI068636_075';
+const COST_SHARE_GRANT = 'ASST_NON_WA-2024-060_069';
 const LOAN = 'ASST_NON_P268K155150_091';
 const CONTRACT = 'CONT_AWD_36C10B22F0089_3600_47QTCA22D003G_4732';
 const IDV = 'CONT_IDV_47QTCA22D003G_4732';
@@ -898,5 +900,314 @@ describe('usaspending_get_award — null and absent blocks (#68)', () => {
     expect(structured.assistance_listings).toEqual([{ number: '10.001', obligation: 12.5 }]);
     expect(text).toContain('- **10.001**: $12.5');
     expect(text).toContain('**Location:** CAN');
+  });
+});
+
+describe('usaspending_get_award — executive compensation (#130)', () => {
+  const OFFICERS = [
+    { name: 'MATT  SEDLACEK', amount: 3_205_954 },
+    { name: 'RAY  MCDUFFIE', amount: 1_049_477 },
+    { name: 'SURI  DURVASULA', amount: 1_022_027 },
+    { name: 'LEV  KATZ', amount: 942_687 },
+    { name: 'JOHN  GARRETT', amount: 844_489 },
+  ];
+  const LINES = [
+    '- MATT  SEDLACEK: $3,205,954',
+    '- RAY  MCDUFFIE: $1,049,477',
+    '- SURI  DURVASULA: $1,022,027',
+    '- LEV  KATZ: $942,687',
+    '- JOHN  GARRETT: $844,489',
+  ];
+
+  it.each([CONTRACT, IDV])(
+    'returns the five named officers of %s in upstream order on both surfaces',
+    async (id) => {
+      const { structured, text } = await run(fixture(id));
+
+      expect((structured.recipient as Record<string, unknown>).executive_compensation).toEqual(
+        OFFICERS,
+      );
+      expect(text).toContain('**Executive Compensation:**');
+      const positions = LINES.map((line) => text.indexOf(line));
+      expect(positions.every((p) => p > text.indexOf('### Recipient'))).toBe(true);
+      expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    },
+  );
+
+  it.each([GRANT, MULTI_LISTING_GRANT, COST_SHARE_GRANT, LOAN])(
+    'omits executive_compensation when every officer row of %s is null',
+    async (id) => {
+      const { structured, text } = await run(fixture(id));
+
+      expect(structured.recipient).toBeDefined();
+      expect(structured.recipient).not.toHaveProperty('executive_compensation');
+      expect(text).not.toContain('Executive Compensation');
+    },
+  );
+
+  it('keeps a row with one member, drops empty rows, and emits a recipient from officers alone', async () => {
+    const { structured, text } = await run({
+      generated_unique_award_id: CONTRACT,
+      executive_details: {
+        officers: [
+          { name: null, amount: null },
+          { name: 'ONLY NAME', amount: null },
+          { name: '', amount: 0 },
+          { name: '', amount: null },
+        ],
+      },
+    });
+
+    expect(structured.recipient).toEqual({
+      executive_compensation: [{ name: 'ONLY NAME' }, { amount: 0 }],
+    });
+    expect(text).toContain('### Recipient');
+    expect(text).toContain('\n- ONLY NAME\n');
+    expect(text).toContain('- N/A: $0');
+  });
+
+  it('ends the officer list before a funding agency line that follows it directly', async () => {
+    const { text } = await run({
+      generated_unique_award_id: CONTRACT,
+      executive_details: { officers: [{ name: 'ONLY NAME', amount: 1 }] },
+      funding_agency: { toptier_agency: { name: 'TOP' } },
+    });
+
+    expect(text).toContain('- ONLY NAME: $1\n\n**Funding Agency:** TOP');
+  });
+
+  it.each([null, { officers: null }, { officers: [] }])(
+    'emits no recipient for executive_details %j and nothing else',
+    async (details) => {
+      const { structured, text } = await run({
+        generated_unique_award_id: CONTRACT,
+        executive_details: details,
+      });
+
+      expect(structured).not.toHaveProperty('recipient');
+      expect(text).not.toContain('### Recipient');
+    },
+  );
+});
+
+describe('usaspending_get_award — awarding and funding offices (#130)', () => {
+  it('returns both offices, the sub-tier code and abbreviation, and the funding slug on both surfaces', async () => {
+    const { structured, text } = await run(fixture(MULTI_LISTING_GRANT));
+    const hierarchy = {
+      toptier_name: 'Department of Health and Human Services',
+      toptier_code: '075',
+      toptier_slug: 'department-of-health-and-human-services',
+      subtier_name: 'National Institutes of Health',
+      subtier_code: '7529',
+      subtier_abbreviation: 'NIH',
+    };
+
+    expect(structured.awarding_agency).toEqual({
+      ...hierarchy,
+      office_name: 'NIH National Institute of Allergy and Infectious Diseases',
+    });
+    expect(structured.funding_agency).toEqual({
+      ...hierarchy,
+      office_name: 'NIH National Institute of Neurological Disorders and Stroke',
+    });
+    const line =
+      'Department of Health and Human Services / National Institutes of Health (NIH) (code: 075) (sub-tier code: 7529) (slug: department-of-health-and-human-services)';
+    expect(text).toContain(`**Awarding Agency:** ${line}`);
+    expect(text).toContain(
+      '**Awarding Office:** NIH National Institute of Allergy and Infectious Diseases',
+    );
+    expect(text).toContain(`**Funding Agency:** ${line}`);
+    expect(text).toContain(
+      '**Funding Office:** NIH National Institute of Neurological Disorders and Stroke',
+    );
+  });
+
+  it('returns the offices of a contract', async () => {
+    const { structured, text } = await run(fixture(CONTRACT));
+
+    expect(structured.awarding_agency).toMatchObject({
+      subtier_code: '3600',
+      subtier_abbreviation: 'VA',
+      office_name: 'TECHNOLOGY ACQUISITION CENTER NJ (36C10B)',
+    });
+    expect(structured.funding_agency).toMatchObject({
+      toptier_slug: 'department-of-veterans-affairs',
+      office_name: 'TECHNOLOGY ACQUISITION CENTER NJ (36C10B)',
+    });
+    expect(text).toContain('**Awarding Office:** TECHNOLOGY ACQUISITION CENTER NJ (36C10B)');
+    expect(text).toContain('**Funding Office:** TECHNOLOGY ACQUISITION CENTER NJ (36C10B)');
+    expect(text).toContain('(slug: department-of-veterans-affairs)\n**Funding Office:**');
+  });
+
+  it('omits a null or blank office, sub-tier code, abbreviation, and slug', async () => {
+    const { structured, text } = await run({
+      generated_unique_award_id: CONTRACT,
+      awarding_agency: {
+        office_agency_name: '',
+        toptier_agency: { name: 'TOP', code: '001', slug: null },
+        subtier_agency: { name: 'SUB', code: null, abbreviation: '' },
+      },
+      funding_agency: {
+        office_agency_name: null,
+        toptier_agency: { name: 'TOP', slug: null },
+        subtier_agency: null,
+      },
+    });
+
+    expect(structured.awarding_agency).toEqual({
+      toptier_name: 'TOP',
+      toptier_code: '001',
+      subtier_name: 'SUB',
+    });
+    expect(structured.funding_agency).toEqual({ toptier_name: 'TOP' });
+    expect(text).toMatch(/^\*\*Awarding Agency:\*\* TOP \/ SUB \(code: 001\)$/m);
+    expect(text).toMatch(/^\*\*Funding Agency:\*\* TOP$/m);
+    expect(text).not.toContain('Office:');
+  });
+});
+
+describe('usaspending_get_award — cost share and funding opportunity (#130)', () => {
+  it('returns non-federal and total funding of a cost-share grant on both surfaces', async () => {
+    const { structured, text } = await run(fixture(COST_SHARE_GRANT));
+
+    expect(structured).toMatchObject({
+      total_obligation: 855_085,
+      non_federal_funding: 213_771,
+      total_funding: 1_068_856,
+    });
+    expect(text).toContain('**Non-Federal Funding:** $213,771');
+    expect(text).toContain('**Total Funding:** $1,068,856');
+  });
+
+  it('keeps a zero non_federal_funding on a grant', async () => {
+    const { structured, text } = await run(fixture(MULTI_LISTING_GRANT));
+
+    expect(structured).toMatchObject({ non_federal_funding: 0, total_funding: 976_983_003.37 });
+    expect(text).toContain('**Non-Federal Funding:** $0');
+    expect(text).toContain('**Total Funding:** $976,983,003.37');
+  });
+
+  it('keeps total_funding when non_federal_funding is null, as on direct payments', async () => {
+    const { structured, text } = await run({
+      ...fixture(GRANT),
+      category: 'direct payment',
+      non_federal_funding: null,
+      total_funding: 5_000_000,
+    });
+
+    expect(structured).not.toHaveProperty('non_federal_funding');
+    expect(structured.total_funding).toBe(5_000_000);
+    expect(text).not.toContain('Non-Federal Funding');
+  });
+
+  it('names the awards that carry cost share without reusing the "other assistance" group name', () => {
+    // "other assistance" is award search's group for 09/11/-1/F005/F008/F009/F010, not "the rest".
+    expect(getAwardTool.description).not.toContain('other assistance awards');
+    expect(getAwardTool.output.shape.non_federal_funding.description).toContain('loans');
+    expect(getAwardTool.output.shape.total_funding.description).toContain('loans');
+  });
+
+  /**
+   * Two routes to "none": the loan sends placeholder zeros and an all-null opportunity,
+   * which the handler drops; contracts and IDVs send none of the three keys. Each row
+   * states what its record sends, so a row whose record sent nothing is read as such.
+   */
+  it.each([
+    {
+      id: LOAN,
+      sends: {
+        non_federal_funding: 0,
+        total_funding: 0,
+        funding_opportunity: { number: null, goals: null },
+      },
+    },
+    { id: CONTRACT, sends: {} },
+    { id: IDV, sends: {} },
+  ])('returns no cost share or funding opportunity for $id', async ({ id, sends }) => {
+    const record = fixture(id);
+    const keys = ['non_federal_funding', 'total_funding', 'funding_opportunity'];
+    expect(Object.fromEntries(keys.filter((k) => k in record).map((k) => [k, record[k]]))).toEqual(
+      sends,
+    );
+
+    const { structured, text } = await run(record);
+
+    for (const key of keys) expect(structured, key).not.toHaveProperty(key);
+    for (const label of ['Non-Federal Funding', 'Total Funding', 'Funding Opportunity'])
+      expect(text, label).not.toContain(label);
+  });
+
+  it.each([CONTRACT, IDV])(
+    'returns cost share and a funding opportunity a %s record sends, as sent: the only category gate is the loan one',
+    async (id) => {
+      const { structured, text } = await run({
+        ...fixture(id),
+        non_federal_funding: 12_500,
+        total_funding: 50_000,
+        funding_opportunity: { number: 'PA-24-254', goals: null },
+      });
+
+      expect(structured).toMatchObject({
+        non_federal_funding: 12_500,
+        total_funding: 50_000,
+        funding_opportunity: { number: 'PA-24-254' },
+      });
+      expect(text).toContain('**Non-Federal Funding:** $12,500');
+      expect(text).toContain('**Total Funding:** $50,000');
+      expect(text).toContain('### Funding Opportunity');
+      expect(text).toContain('**Number:** PA-24-254');
+    },
+  );
+
+  it('returns the number and goals of a funding opportunity on both surfaces', async () => {
+    const { structured, text } = await run(fixture(GRANT));
+    const goals =
+      'FUNDING OPPORTUNITY GOALS THIS WATER AND ENERGY EFFICIENCY GRANTS NOFO PROVIDES FUNDING FOR PROJECTS THAT RESULT IN QUANTIFIABLE WATER SAVINGS';
+
+    expect(structured.funding_opportunity).toEqual({ number: 'R-R-DO-24-026', goals });
+    expect(text).toContain('### Funding Opportunity');
+    expect(text).toContain('**Number:** R-R-DO-24-026');
+    expect(text).toContain(`**Goals:** ${goals}`);
+  });
+
+  it('drops the no-goals-text sentence and keeps the number', async () => {
+    const { structured, text } = await run(fixture(MULTI_LISTING_GRANT));
+
+    expect(structured.funding_opportunity).toEqual({ number: 'PA-24-254' });
+    expect(text).toContain('**Number:** PA-24-254');
+    expect(text).not.toContain('**Goals:**');
+    expect(text).not.toContain('ISSUED PRIOR TO THE AVAILABILITY');
+  });
+
+  it('omits a funding opportunity whose members are both NOT APPLICABLE', async () => {
+    const { structured, text } = await run(fixture(COST_SHARE_GRANT));
+
+    expect(structured).not.toHaveProperty('funding_opportunity');
+    expect(text).not.toContain('Funding Opportunity');
+    expect(text).not.toContain('NOT APPLICABLE');
+  });
+
+  it.each([
+    [{ number: ' not applicable ', goals: 'Real goals' }, { goals: 'Real goals' }],
+    [{ number: 'PA-1', goals: ' Not Applicable' }, { number: 'PA-1' }],
+    [
+      {
+        number: 'PA-2',
+        goals:
+          ' the funding opportunity was issued prior to the availability of the funding opportunity goals text data element ',
+      },
+      { number: 'PA-2' },
+    ],
+    [{ number: '', goals: '   ' }, undefined],
+    [{ number: null, goals: null }, undefined],
+    [null, undefined],
+  ])('reads funding_opportunity %j as %j', async (sent, expected) => {
+    const { structured } = await run({
+      ...fixture(GRANT),
+      funding_opportunity: sent,
+    });
+
+    if (expected === undefined) expect(structured).not.toHaveProperty('funding_opportunity');
+    else expect(structured.funding_opportunity).toEqual(expected);
   });
 });

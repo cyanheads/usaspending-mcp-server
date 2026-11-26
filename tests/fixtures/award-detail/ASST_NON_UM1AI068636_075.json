@@ -198,6 +198,30 @@
       "foreign_province": null
     }
   },
+  "executive_details": {
+    "officers": [
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      }
+    ]
+  },
   "place_of_performance": {
     "location_country_code": "USA",
     "country_name": "UNITED STATES",
@@ -215,5 +239,9 @@
     "foreign_province": null,
     "foreign_postal_code": null
   },
-  "total_outlay": 519167275.23
+  "total_outlay": 519167275.23,
+  "funding_opportunity": {
+    "number": "PA-24-254",
+    "goals": "THE FUNDING OPPORTUNITY WAS ISSUED PRIOR TO THE AVAILABILITY OF THE FUNDING OPPORTUNITY GOALS TEXT DATA ELEMENT"
+  }
 }

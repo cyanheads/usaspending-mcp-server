@@ -171,6 +171,30 @@
       "foreign_province": null
     }
   },
+  "executive_details": {
+    "officers": [
+      {
+        "name": "MATT  SEDLACEK",
+        "amount": 3205954.0
+      },
+      {
+        "name": "RAY  MCDUFFIE",
+        "amount": 1049477.0
+      },
+      {
+        "name": "SURI  DURVASULA",
+        "amount": 1022027.0
+      },
+      {
+        "name": "LEV  KATZ",
+        "amount": 942687.0
+      },
+      {
+        "name": "JOHN  GARRETT",
+        "amount": 844489.0
+      }
+    ]
+  },
   "place_of_performance": {
     "location_country_code": null,
     "country_name": null,

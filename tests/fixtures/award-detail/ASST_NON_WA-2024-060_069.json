@@ -1,0 +1,176 @@
+{
+  "id": 271840808,
+  "generated_unique_award_id": "ASST_NON_WA-2024-060_069",
+  "fain": "WA-2024-060",
+  "uri": "WA-2024-060-01-20.205",
+  "category": "grant",
+  "type": "03",
+  "type_description": "FORMULA GRANT (A)",
+  "description": "APPLICATION PURPOSE: THE PURPOSE OF THIS AWARD IS TO SUPPORT THE REHABILITATION OF THE M/V SOLANO PASSENGER-ONLY FAST-FERRY VESSEL.",
+  "subaward_count": 0,
+  "total_subaward_amount": null,
+  "total_subsidy_cost": 0.0,
+  "total_loan_value": 0.0,
+  "total_obligation": 855085.0,
+  "date_signed": "2024-09-20",
+  "base_and_all_options": null,
+  "base_exercised_options": null,
+  "non_federal_funding": 213771.0,
+  "total_funding": 1068856.0,
+  "total_account_outlay": 855085.0,
+  "total_account_obligation": 855085.0,
+  "account_outlays_by_defc": [
+    {
+      "code": "1",
+      "amount": 499023.0
+    },
+    {
+      "code": "Z",
+      "amount": 332869.0
+    },
+    {
+      "code": "Q",
+      "amount": 23193.0
+    }
+  ],
+  "account_obligations_by_defc": [
+    {
+      "code": "1",
+      "amount": 499023.0
+    },
+    {
+      "code": "Z",
+      "amount": 332869.0
+    },
+    {
+      "code": "Q",
+      "amount": 23193.0
+    }
+  ],
+  "record_type": 2,
+  "cfda_info": [
+    {
+      "cfda_federal_agency": "FEDERAL HIGHWAY ADMINISTRATION, TRANSPORTATION, DEPARTMENT OF",
+      "cfda_number": "20.205",
+      "cfda_popular_name": "Federal-Aid Highway Program,  Federal Lands Highway Program",
+      "cfda_title": "Highway Planning and Construction",
+      "cfda_website": "https://highways.dot.gov/",
+      "federal_action_obligation_amount": 855085.0,
+      "non_federal_funding_amount": 213771.0,
+      "sam_website": "https://sam.gov/fal/a9e2bda06c8e46cc8117852ef403dbc0/view",
+      "total_funding_amount": 1068856.0
+    }
+  ],
+  "transaction_obligated_amount": 855085.0,
+  "funding_agency": {
+    "id": 760,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Transportation",
+      "code": "069",
+      "abbreviation": "DOT",
+      "slug": "department-of-transportation"
+    },
+    "subtier_agency": {
+      "name": "Federal Transit Administration",
+      "code": "6955",
+      "abbreviation": "FTA"
+    },
+    "office_agency_name": "OFFICE OF BUDGET AND POLICY(TBP)"
+  },
+  "awarding_agency": {
+    "id": 760,
+    "has_agency_page": true,
+    "toptier_agency": {
+      "name": "Department of Transportation",
+      "code": "069",
+      "abbreviation": "DOT",
+      "slug": "department-of-transportation"
+    },
+    "subtier_agency": {
+      "name": "Federal Transit Administration",
+      "code": "6955",
+      "abbreviation": "FTA"
+    },
+    "office_agency_name": "REGION 10 DOT FTA"
+  },
+  "period_of_performance": {
+    "start_date": "2024-09-20",
+    "end_date": "2026-06-18",
+    "last_modified_date": "2026-08-17"
+  },
+  "recipient": {
+    "recipient_hash": "52112140-029e-888d-eb8e-4504773e11d8-C",
+    "recipient_name": "KITSAP TRANSIT",
+    "recipient_uei": "XF87DZ25NQT4",
+    "recipient_unique_id": null,
+    "parent_recipient_hash": "52112140-029e-888d-eb8e-4504773e11d8-P",
+    "parent_recipient_name": "KITSAP TRANSIT",
+    "parent_recipient_uei": "XF87DZ25NQT4",
+    "parent_recipient_unique_id": null,
+    "business_categories": [],
+    "location": {
+      "location_country_code": "USA",
+      "country_name": "UNITED STATES",
+      "state_code": "WA",
+      "state_name": "WASHINGTON",
+      "city_name": "BREMERTON",
+      "county_code": "035",
+      "county_name": "KITSAP",
+      "address_line1": "60 WASHINGTON AVE",
+      "address_line2": "N/A",
+      "address_line3": null,
+      "congressional_code": "06",
+      "zip4": "1888",
+      "zip5": "98337",
+      "foreign_postal_code": null,
+      "foreign_province": null
+    }
+  },
+  "executive_details": {
+    "officers": [
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      },
+      {
+        "name": null,
+        "amount": null
+      }
+    ]
+  },
+  "place_of_performance": {
+    "location_country_code": "USA",
+    "country_name": "UNITED STATES",
+    "county_code": null,
+    "county_name": null,
+    "city_name": null,
+    "state_code": "WA",
+    "state_name": "WASHINGTON",
+    "congressional_code": null,
+    "zip4": null,
+    "zip5": null,
+    "address_line1": null,
+    "address_line2": null,
+    "address_line3": null,
+    "foreign_province": null,
+    "foreign_postal_code": null
+  },
+  "total_outlay": 855085.0,
+  "funding_opportunity": {
+    "number": "NOT APPLICABLE",
+    "goals": "NOT APPLICABLE"
+  }
+}
